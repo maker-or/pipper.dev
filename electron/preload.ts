@@ -130,7 +130,8 @@ const api = {
   github: {
     getStatus: () => ipcRenderer.invoke("github:getStatus"),
     listRepositories: (page = 1) => ipcRenderer.invoke("github:listRepositories", page),
-    cloneRepository: (fullName: string) => ipcRenderer.invoke("github:cloneRepository", fullName),
+    cloneRepository: (fullName: string, options?: { setupScript?: string | null }) =>
+      ipcRenderer.invoke("github:cloneRepository", fullName, options),
   } satisfies GitHubApi,
   window: {
     /** Report document.visibilityState so main can gate hidden-window traffic. */

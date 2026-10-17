@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Copy, LockSimple, MagnifyingGlass } from "@phosphor-icons/react";
+import {
+  CaretDown,
+  Check,
+  Copy,
+  LockSimple,
+  MagnifyingGlass,
+  TerminalWindow,
+} from "@phosphor-icons/react";
 import {
   GITHUB_CLI_INSTALL_URL,
   GITHUB_CLI_LOGIN_COMMAND,
@@ -9,6 +16,8 @@ import {
 import type { Project } from "../../contracts/projects.ts";
 import { Button } from "@/components/ui/button";
 import { InputField, InputGroup } from "@/components/ui/input-group";
+import { SetupScriptEditor } from "@/components/setup-script-editor";
+import { cn } from "@/lib/utils";
 
 function SetupCommand({ command, label }: { command: string; label: string }) {
   const [copied, setCopied] = useState(false);
@@ -64,6 +73,9 @@ export function GitHubProjectPicker({
   const [isLoading, setIsLoading] = useState(true);
   const [cloning, setCloning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Optional and tucked away, as in the local project form.
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const [setupScript, setSetupScript] = useState("");
   const requestId = useRef(0);
   const checking = useRef(false);
   const cloningRef = useRef(false);
@@ -126,7 +138,9 @@ export function GitHubProjectPicker({
     setError(null);
     onBusyChange(true);
     try {
-      const project = await window.omni.github.cloneRepository(repo.fullName);
+      const project = await window.omni.github.cloneRepository(repo.fullName, {
+        setupScript: setupScript.trim() ? setupScript : null,
+      });
       onCreated(project);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not open the repository.");
@@ -272,6 +286,46 @@ export function GitHubProjectPicker({
                   ? "No repositories match your search."
                   : "No repositories found for this account."}
               </p>
+            )}
+          </div>
+          <div className="flex flex-col gap-2">
+            <button
+              type="button"
+              onClick={() => setScriptOpen((open) => !open)}
+              disabled={cloning !== null || disabled}
+              aria-expanded={scriptOpen}
+              data-pipper-id="github-project-setup-script-toggle"
+              className={cn(
+                "inline-flex items-center gap-1.5 self-start rounded-md px-3 py-1",
+                "text-[12px] text-muted-foreground hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                "disabled:pointer-events-none disabled:opacity-50 transition-colors",
+              )}
+            >
+              <TerminalWindow size={14} aria-hidden />
+              {setupScript.trim() ? "Setup script" : "Add setup script"}
+              <span className="text-muted-foreground/60">· optional</span>
+              <CaretDown
+                size={12}
+                weight="bold"
+                className={cn("transition-transform", scriptOpen && "rotate-180")}
+                aria-hidden
+              />
+            </button>
+            {scriptOpen && (
+              <div className="flex flex-col gap-1.5 px-0.5">
+                <SetupScriptEditor
+                  value={setupScript}
+                  onChange={setSetupScript}
+                  disabled={cloning !== null || disabled}
+                  autoFocus
+                  data-pipper-id="github-project-setup-script"
+                />
+                <p className="px-1 text-[11px] leading-4 text-muted-foreground">
+                  Runs in each new workspace of the repository you pick, one command per line. You
+                  can change it later in Settings → Projects.
+                </p>
+              </div>
             )}
           </div>
         </>

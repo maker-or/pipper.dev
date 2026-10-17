@@ -1768,11 +1768,20 @@ function registerIpc(): void {
     const { listGitHubRepositories } = await import("./github-onboarding.ts");
     return listGitHubRepositories(page);
   });
-  ipcMain.handle("github:cloneRepository", async (_event, fullName: string) => {
-    requireAuthenticatedUserForLaunch();
-    const { cloneGitHubRepository } = await import("./github-onboarding.ts");
-    return cloneGitHubRepository(fullName);
-  });
+  ipcMain.handle(
+    "github:cloneRepository",
+    async (_event, fullName: string, options?: { setupScript?: unknown }) => {
+      requireAuthenticatedUserForLaunch();
+      // Validate before cloning so a rejected script never leaves a project behind.
+      const setupScript = normalizeSetupScript(
+        typeof options?.setupScript === "string" ? options.setupScript : null,
+      );
+      const { cloneGitHubRepository } = await import("./github-onboarding.ts");
+      const project = await cloneGitHubRepository(fullName);
+      if (setupScript) setProjectSetupScript(project.id, setupScript);
+      return project;
+    },
+  );
 
   ipcMain.handle("siri:getCatalog", async () => {
     const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");

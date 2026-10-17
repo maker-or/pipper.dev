@@ -478,8 +478,9 @@ export default function App() {
     void useWorktreeStore.getState().syncSelections();
   }, [snapshotThreadId, snapshotCwd]);
 
-  // Surface the background dependency install that follows a worktree create,
-  // so the user knows when the workspace is actually ready to run.
+  // Surface the background setup that follows a worktree create, so the user
+  // knows when the workspace is actually ready to run. The advanced shell
+  // shows the same progress on its workspace cards (workspace-setup-store).
   useEffect(() => {
     if (!window.omni?.worktrees?.onSetupProgress) return;
     return window.omni.worktrees.onSetupProgress((progress) => {
