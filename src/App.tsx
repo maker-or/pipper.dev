@@ -487,23 +487,28 @@ export default function App() {
       // Remote/phone workspaces set up in the background; only a failure is
       // worth interrupting the desktop user for.
       if (progress.activation === "background" && progress.status !== "failed") return;
+      const isScript = progress.source === "script";
       if (progress.status === "installing") {
         toast({
           icon: <GitBranch weight="duotone" className="size-5 text-foreground" />,
-          title: "Installing dependencies",
-          description: `Running ${progress.manager} install in ${progress.workspaceName}…`,
+          title: isScript ? "Setting up workspace" : "Installing dependencies",
+          description: isScript
+            ? `Running the project's setup script in ${progress.workspaceName}…`
+            : `Running ${progress.manager} install in ${progress.workspaceName}…`,
         });
       } else if (progress.status === "installed") {
         toast({
           icon: <GitBranch weight="duotone" className="size-5 text-foreground" />,
           title: "Workspace ready",
-          description: `${progress.workspaceName}: dependencies installed.`,
+          description: isScript
+            ? `${progress.workspaceName}: setup script finished.`
+            : `${progress.workspaceName}: dependencies installed.`,
         });
       } else if (progress.status === "failed") {
         toast({
           icon: <Bell weight="duotone" className="size-5 text-red-500" />,
-          title: "Dependency install failed",
-          description: `${progress.workspaceName}: ${progress.message ?? "Install did not complete."}`,
+          title: isScript ? "Setup script failed" : "Dependency install failed",
+          description: `${progress.workspaceName}: ${progress.message ?? "Setup did not complete."}`,
         });
       } else if (progress.status === "skipped" && progress.message) {
         toast({

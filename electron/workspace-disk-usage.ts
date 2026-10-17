@@ -18,8 +18,44 @@ import { listWorktrees } from "./worktree-manager.ts";
 
 type Category = "source" | "dependency" | "build";
 
-const DEPENDENCY_DIRS = new Set(["node_modules"]);
-const BUILD_DIRS = new Set(["dist", "build", "out", ".next", ".turbo", "coverage", ".cache"]);
+/**
+ * Folders a package manager recreates, across ecosystems: JavaScript, Python
+ * virtualenvs, CocoaPods, Bundler, Elixir and Dart. Display-only: nothing is
+ * deleted based on these names.
+ */
+const DEPENDENCY_DIRS = new Set([
+  "node_modules",
+  ".venv",
+  "venv",
+  "Pods",
+  ".bundle",
+  "deps",
+  ".dart_tool",
+  "elm-stuff",
+]);
+/** Build and tool caches: JS bundlers, Rust/Maven `target`, Swift, Gradle, Python, Elixir. */
+const BUILD_DIRS = new Set([
+  "dist",
+  "build",
+  "out",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".output",
+  ".turbo",
+  ".parcel-cache",
+  "coverage",
+  ".cache",
+  "target",
+  ".build",
+  "DerivedData",
+  ".gradle",
+  "_build",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".ruff_cache",
+]);
 /** Git metadata is shared across a project's worktrees; never counted. */
 const SKIPPED = new Set([".git"]);
 const DEFAULT_ENTRY_BUDGET = 400_000;

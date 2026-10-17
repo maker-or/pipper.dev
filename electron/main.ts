@@ -26,6 +26,12 @@ import {
 } from "./launch-state";
 import { pickWorkspaceThread } from "../contracts/workspace-scope.ts";
 import { createProject, getProject, listProjects } from "./projects";
+import {
+  getProjectSetupScript,
+  normalizeSetupScript,
+  setProjectSetupScript,
+  suggestSetupScript,
+} from "./project-setup-script.ts";
 import { logMain } from "./main-log";
 import {
   continueWorktreeOnNewBranch,
@@ -1832,9 +1838,14 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "projects:create",
-    async (_event, input: { name: string; path: string; icon: string }) => {
+    async (_event, input: { name: string; path: string; icon: string; setupScript?: unknown }) => {
       requireAuthenticatedUserForLaunch();
+      // Validate before creating so a rejected script never leaves a project behind.
+      const setupScript = normalizeSetupScript(
+        typeof input.setupScript === "string" ? input.setupScript : null,
+      );
       const project = createProject(input);
+      if (setupScript) setProjectSetupScript(project.id, setupScript);
       try {
         const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
         refreshSiriCatalog();
@@ -1851,6 +1862,30 @@ function registerIpc(): void {
       return project;
     },
   );
+
+  ipcMain.handle("projects:getSetupScript", (_event, projectId: unknown) => {
+    if (typeof projectId !== "string") throw new Error("Invalid project id");
+    const project = getProject(projectId);
+    if (!project) throw new Error(`Project not found: ${projectId}`);
+    return {
+      script: getProjectSetupScript(project.id),
+      suggested: suggestSetupScript(project.path),
+    };
+  });
+
+  ipcMain.handle("projects:setSetupScript", (_event, projectId: unknown, script: unknown) => {
+    if (typeof projectId !== "string") throw new Error("Invalid project id");
+    if (script !== null && typeof script !== "string") throw new Error("Invalid setup script");
+    if (!getProject(projectId)) throw new Error(`Project not found: ${projectId}`);
+    return setProjectSetupScript(projectId, script);
+  });
+
+  // Onboarding suggests a command for the folder before the project exists.
+  // Only checks which manifest/lock files exist; reads no file contents.
+  ipcMain.handle("projects:suggestSetupScript", (_event, path: unknown) => {
+    if (typeof path !== "string" || !isAbsolute(path)) return null;
+    return suggestSetupScript(path);
+  });
 
   ipcMain.handle("dialog:pickDirectory", async () => {
     const win = launchWindow ?? mainWindow ?? BrowserWindow.getFocusedWindow();

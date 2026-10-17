@@ -72,6 +72,15 @@ export interface CreateProjectInput {
   name: string;
   path: string;
   icon: string;
+  /** Optional per-project setup script (one shell command per line). */
+  setupScript?: string | null;
+}
+
+export interface ProjectSetupScriptState {
+  /** The saved script, or null when the project has none. */
+  script: string | null;
+  /** A detected starting point (e.g. `bun install`); never run unless saved. */
+  suggested: string | null;
 }
 
 declare global {
@@ -143,6 +152,10 @@ declare global {
         list: () => Promise<Project[]>;
         create: (input: CreateProjectInput) => Promise<Project>;
         getActive: () => Promise<Project | null>;
+        getSetupScript: (projectId: string) => Promise<ProjectSetupScriptState>;
+        setSetupScript: (projectId: string, script: string | null) => Promise<string | null>;
+        /** Detected setup command for a folder not yet added as a project. */
+        suggestSetupScript: (path: string) => Promise<string | null>;
         /** `requestId` lets the caller abandon the scan via `cancelListFiles`. */
         listFiles: (
           projectId?: string,

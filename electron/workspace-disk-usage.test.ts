@@ -69,3 +69,19 @@ test("measuring never modifies the workspace", async () => {
   await measureDirectoryUsage(root);
   expect(readdirSync(root, { recursive: true }).sort()).toEqual(before);
 });
+
+test("recognizes dependency and build folders beyond JavaScript", async () => {
+  const root = mkdtempSync(join(tmpdir(), "pipper-usage-"));
+  dirs.push(root);
+  file(root, "src/main.rs", 50);
+  file(root, "target/debug/app", 2_000);
+  file(root, ".venv/lib/site.py", 300);
+  file(root, "app/__pycache__/mod.pyc", 40);
+  file(root, "ios/Pods/Lib/lib.a", 600);
+  file(root, ".build/release/tool", 1_000);
+  expect(await measureDirectoryUsage(root)).toMatchObject({
+    sourceBytes: 50,
+    dependencyBytes: 900,
+    buildBytes: 3_040,
+  });
+});

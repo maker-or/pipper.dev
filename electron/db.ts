@@ -182,6 +182,16 @@ export function getDb(): DatabaseSync {
     );
   `);
 
+  // Per-project preferences kept out of the repository (see
+  // project-setup-script.ts). Removed with their project.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS project_settings (
+      project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+      setup_script TEXT,
+      updated_at INTEGER
+    );
+  `);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,

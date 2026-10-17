@@ -1,9 +1,10 @@
 import { useCallback, useState } from "react";
-import { ArrowLeft, FolderOpen } from "lucide-react";
+import { ArrowLeft, ChevronDown, FolderOpen, SquareTerminal } from "lucide-react";
 import type { Project } from "../../contracts/projects.ts";
 import { Button } from "@/components/ui/button";
 import { IconPicker } from "@/components/ui/icon-picker";
 import { InputGroup, InputField } from "@/components/ui/input-group";
+import { SetupScriptEditor } from "@/components/setup-script-editor";
 import { cn } from "@/lib/utils";
 
 interface AddProjectFormProps {
@@ -27,6 +28,10 @@ export function AddProjectForm({
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isBrowsing, setIsBrowsing] = useState(false);
+  // Optional and tucked away: most projects can be added without one.
+  const [scriptOpen, setScriptOpen] = useState(false);
+  const [setupScript, setSetupScript] = useState("");
+  const [suggestedScript, setSuggestedScript] = useState<string | null>(null);
 
   const handleBrowse = useCallback(async () => {
     if (disabled) return;
@@ -37,6 +42,11 @@ export function AddProjectForm({
       const selected = await window.omni.dialog.pickDirectory();
       if (selected) {
         setPath(selected);
+        setSuggestedScript(null);
+        void window.omni.projects
+          ?.suggestSetupScript?.(selected)
+          .then(setSuggestedScript)
+          .catch(() => setSuggestedScript(null));
         const parts = selected.split(/[/\\]/);
         const folderName = parts.pop() || parts.pop() || "";
         if (folderName) {
@@ -80,6 +90,7 @@ export function AddProjectForm({
         name: trimmedName,
         path,
         icon,
+        setupScript: setupScript.trim() ? setupScript : null,
       });
       onCreated(project);
     } catch (err) {
@@ -89,7 +100,7 @@ export function AddProjectForm({
       setIsSubmitting(false);
       onBusyChange?.(false);
     }
-  }, [disabled, disabledReason, icon, name, onBusyChange, onCreated, path]);
+  }, [disabled, disabledReason, icon, name, onBusyChange, onCreated, path, setupScript]);
 
   const canSubmit = !disabled && name.trim().length > 0 && icon != null && path.length > 0;
 
@@ -154,6 +165,46 @@ export function AddProjectForm({
           index={1}
         />
       </InputGroup>
+
+      <div className="-mt-3 flex flex-col gap-2">
+        <button
+          type="button"
+          onClick={() => setScriptOpen((open) => !open)}
+          disabled={disabled || isSubmitting}
+          aria-expanded={scriptOpen}
+          data-pipper-id="add-project-setup-script-toggle"
+          className={cn(
+            "inline-flex items-center gap-1.5 self-start rounded-md px-3 py-1",
+            "text-[12px] text-muted-foreground hover:text-foreground",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            "disabled:pointer-events-none disabled:opacity-50 transition-colors",
+          )}
+        >
+          <SquareTerminal className="size-3.5" strokeWidth={1.75} />
+          {setupScript.trim() ? "Setup script" : "Add setup script"}
+          <span className="text-muted-foreground/60">· optional</span>
+          <ChevronDown
+            className={cn("size-3 transition-transform", scriptOpen && "rotate-180")}
+            strokeWidth={1.75}
+          />
+        </button>
+        {scriptOpen && (
+          <div className="flex flex-col gap-1.5 px-0.5">
+            <SetupScriptEditor
+              value={setupScript}
+              onChange={setSetupScript}
+              suggested={suggestedScript}
+              disabled={disabled || isSubmitting}
+              autoFocus
+              data-pipper-id="add-project-setup-script"
+            />
+            <p className="px-1 text-[11px] leading-4 text-muted-foreground">
+              Runs in each new workspace, one command per line. You can change it later in Settings
+              → Projects.
+            </p>
+          </div>
+        )}
+      </div>
 
       {error != null && (
         <p className="text-sm text-destructive px-0.5" role="alert">

@@ -84,10 +84,11 @@ export type WorkspaceSetupPolicy = "source-only" | "prepared";
 export type WorkspaceActivation = "foreground" | "background";
 
 /**
- * Progress of the background dependency install that follows a worktree
- * create, broadcast to the renderer for toasts. `skipped` means the project
- * has no Node dependency manifest, the policy is source-only, or the
- * workspace went away first.
+ * Progress of the background setup that follows a worktree create (the
+ * project's setup script, or else the automatic dependency install),
+ * broadcast to the renderer for toasts. `skipped` means there was nothing to
+ * run (no script and no Node dependency manifest, or the policy is
+ * source-only) or the workspace went away first.
  */
 export interface WorktreeSetupProgress {
   projectId: string;
@@ -96,6 +97,8 @@ export interface WorktreeSetupProgress {
   policy?: WorkspaceSetupPolicy;
   activation?: WorkspaceActivation;
   status: "installing" | "installed" | "failed" | "skipped";
+  /** `script`: the project's setup script; `install`: automatic install. */
+  source?: "script" | "install";
   /** Package manager used (bun/pnpm/yarn/npm) when installing. */
   manager?: string;
   /** Failure detail (last lines of install output). */
