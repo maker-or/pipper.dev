@@ -23,6 +23,7 @@ import type {
   AcpAgentInstanceInput,
   AgentAccountSchema,
   AgentProbeResult,
+  BrowserConfig,
   SubagentConfig,
   SubagentRunSnapshot,
 } from "../contracts/acp.ts";
@@ -519,6 +520,11 @@ const api = {
     setConfig: (partial: Partial<SubagentConfig>): Promise<SubagentConfig> =>
       ipcRenderer.invoke("subagents:setConfig", partial),
     listRuns: (): Promise<SubagentRunSnapshot[]> => ipcRenderer.invoke("subagents:listRuns"),
+  },
+  browser: {
+    getConfig: (): Promise<BrowserConfig> => ipcRenderer.invoke("browser:getConfig"),
+    setConfig: (partial: Partial<BrowserConfig>): Promise<BrowserConfig> =>
+      ipcRenderer.invoke("browser:setConfig", partial),
   },
   mcp: {
     list: () => ipcRenderer.invoke("mcp:list"),

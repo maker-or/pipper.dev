@@ -16,7 +16,7 @@ import { Elevated } from "@/lib/elevated";
 import type { IconComponent } from "@/lib/icon-context";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useTabGestureStore } from "@/store/tab-gesture-store";
-import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
+import type { AcpAgentDescriptor, BrowserConfig } from "../../contracts/acp.ts";
 import type { WorkspaceDiskUsageReport } from "../../contracts/storage.ts";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -33,6 +33,7 @@ import {
   SidebarMenuItem,
   SidebarProvider,
 } from "@/components/ui/sidebar";
+import { SliderComfortable } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import {
   Accordion,
@@ -52,6 +53,7 @@ type SectionId =
   | "design"
   | "appearance"
   | "agents"
+  | "browser"
   | "accounts"
   | "keyboard"
   | "power"
@@ -62,6 +64,7 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "design", label: "Design system" },
   { id: "agents", label: "Agents" },
+  { id: "browser", label: "Browser" },
   { id: "accounts", label: "Account" },
   { id: "keyboard", label: "Keyboard & trackpad" },
   { id: "power", label: "Power" },
@@ -353,6 +356,10 @@ const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
   agents: {
     title: "Agents",
     blurb: "Choose which coding agents Pipper can use.",
+  },
+  browser: {
+    title: "Agent browser",
+    blurb: "Headless pages your agents can open to read docs and test web apps.",
   },
   accounts: {
     title: "Account",
@@ -683,6 +690,140 @@ function StorageView() {
   );
 }
 
+const IDLE_MINUTE_CHOICES = [1, 2, 5, 10, 15, 30, 60];
+const SAVE_DEBOUNCE_MS = 300;
+
+function closestIndex(choices: number[], value: number): number {
+  let best = 0;
+  for (let i = 1; i < choices.length; i++) {
+    if (Math.abs(choices[i] - value) < Math.abs(choices[best] - value)) best = i;
+  }
+  return best;
+}
+
+function BrowserView() {
+  const [config, setConfig] = useState<BrowserConfig | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const pending = useRef<Partial<BrowserConfig>>({});
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    window.omni.browser
+      .getConfig()
+      .then((value) => {
+        if (!disposed) setConfig(value);
+      })
+      .catch(() => {
+        if (!disposed) setError("Could not load browser settings.");
+      });
+    return () => {
+      disposed = true;
+      if (timer.current) clearTimeout(timer.current);
+    };
+  }, []);
+
+  // Sliders report every step while dragging; save once they settle.
+  const update = (partial: Partial<BrowserConfig>, immediate = false) => {
+    setConfig((current) => (current ? { ...current, ...partial } : current));
+    pending.current = { ...pending.current, ...partial };
+    if (timer.current) clearTimeout(timer.current);
+    const save = () => {
+      const changes = pending.current;
+      pending.current = {};
+      setError(null);
+      window.omni.browser
+        .setConfig(changes)
+        .then(setConfig)
+        .catch(() => setError("Could not save browser settings."));
+    };
+    if (immediate) save();
+    else timer.current = setTimeout(save, SAVE_DEBOUNCE_MS);
+  };
+
+  const disabled = config === null;
+  return (
+    <>
+      <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70">
+        <div className="divide-y divide-border/70">
+          <SettingRow
+            title="Let agents use a browser"
+            description="New agent sessions get tools to open pages, read them, click, type and take screenshots. Turning this off closes open pages."
+          >
+            <Switch
+              label="Let agents use a browser"
+              checked={config?.enabled ?? false}
+              disabled={disabled}
+              onToggle={() => config && update({ enabled: !config.enabled }, true)}
+              className="gap-0 px-0 py-0 [&>span:last-of-type]:sr-only"
+              data-pipper-id="settings-browser-enabled"
+            />
+          </SettingRow>
+          <SettingRow
+            title="Ask before downloading"
+            description="Show a prompt in the thread before a page saves a file. When off, downloads are blocked."
+          >
+            <Switch
+              label="Ask before downloading"
+              checked={config?.downloads === "ask"}
+              disabled={disabled || !config?.enabled}
+              onToggle={() =>
+                config && update({ downloads: config.downloads === "ask" ? "block" : "ask" }, true)
+              }
+              className="gap-0 px-0 py-0 [&>span:last-of-type]:sr-only"
+              data-pipper-id="settings-browser-downloads"
+            />
+          </SettingRow>
+          <div className="px-4 py-3">
+            <SliderComfortable
+              value={config?.pagesPerSession ?? 4}
+              onChange={(value) => update({ pagesPerSession: value })}
+              min={1}
+              max={8}
+              step={1}
+              variant="pips"
+              label="Pages per session"
+              formatValue={(value) => String(value)}
+              disabled={disabled || !config?.enabled}
+              data-pipper-id="settings-browser-pages"
+            />
+          </div>
+          <div className="px-4 py-3">
+            <SliderComfortable
+              value={closestIndex(IDLE_MINUTE_CHOICES, config?.idleMinutes ?? 5)}
+              onChange={(index) => update({ idleMinutes: IDLE_MINUTE_CHOICES[index] ?? 5 })}
+              min={0}
+              max={IDLE_MINUTE_CHOICES.length - 1}
+              step={1}
+              variant="pips"
+              label="Close idle pages after"
+              formatValue={(index) => `${IDLE_MINUTE_CHOICES[index] ?? 5} min`}
+              disabled={disabled || !config?.enabled}
+              data-pipper-id="settings-browser-idle"
+            />
+          </div>
+        </div>
+      </Elevated>
+      {error && (
+        <p className="mt-2 text-[11px] text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <Accordion type="single" collapsible className="mt-2 w-full">
+        <AccordionItem value="browser-safety">
+          <AccordionTrigger>What agents can and can't open</AccordionTrigger>
+          <AccordionContent>
+            Each session browses in its own private storage, so agents never share cookies with each
+            other or with you. Websites and local dev servers work. Local files, browser settings
+            pages and Pipper itself are blocked, and camera, microphone and location requests are
+            denied.
+          </AccordionContent>
+        </AccordionItem>
+      </Accordion>
+    </>
+  );
+}
+
 function RemoteView() {
   return (
     <>
@@ -760,6 +901,7 @@ export function SettingsApp() {
                 {section === "design" && <WorkspaceStateGallery />}
                 {section === "appearance" && <AppearanceView />}
                 {section === "agents" && <AgentsSettingsSection />}
+                {section === "browser" && <BrowserView />}
                 {section === "accounts" && <AccountsView />}
                 {section === "keyboard" && <KeyboardView />}
                 {section === "power" && <PowerView />}

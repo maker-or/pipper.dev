@@ -5,7 +5,8 @@ over MCP. It backs `preview_widget` and also gives any ACP agent a general
 browser: open a page, read it, click, type, screenshot, inspect console and
 network.
 
-Status: design draft. Nothing here is implemented yet.
+Status: implemented in `electron/browser/` and `electron/widgets/`. See
+"Implementation notes" at the end for where the code differs from this design.
 
 ## Goals
 
@@ -206,3 +207,46 @@ Behaviour-level, in line with `AGENT.md`:
    screenshots?
 3. Should sessions be allowed to keep sign-in state across turns (a persistent
    partition per project), and if so, how does the user clear it?
+
+## Implementation notes
+
+Where the code differs from the design above:
+
+- **Built:** every `browser_*` tool in the table, plus `browser_pages`;
+  `widget_guide` and `preview_widget` on the same endpoint; per-session
+  endpoints with the stdio fallback; limits; idle and memory sweeps; blocked
+  schemes, Pipper's dev renderer origin, permissions and popups; crash handling;
+  per-session call serialization; stale-ref errors.
+- **Not built yet:** `show_widget` / `update_widget` and the thread's widget
+  timeline item, and a browser pane.
+- **Settings:** Settings → Browser (`browser.json` in userData): on/off, pages per
+  session (1–8), idle timeout (1–60 min), downloads ask/block. Turning it off
+  closes open pages and makes further calls return an error. The total page
+  cap, timeouts and screenshot sizes stay as code defaults.
+- **Downloads:** a download is saved into a per-session temp folder, paused,
+  and resumed only after the user answers a permission prompt in the thread
+  (through `PermissionCoordinator`). With downloads set to block, nothing is
+  asked. The agent learns the outcome and saved path on its next call. The
+  folder is deleted when the session closes.
+- **Timeouts:** a timed-out call returns an error, but the session's next call
+  waits until that call's work settles. If it is still running 15 s after the
+  timeout, its page is closed as wedged and the agent is told.
+- **Widget preview:** previews share one hidden page in its own partition,
+  recycled every 50 renders, outside the per-session page limits. Each render
+  loads the frame fresh (a data: URL), renders light then dark, and takes about
+  250–450 ms. The frame inlines `src/index.css` tokens and the Phosphor icon
+  font, so it needs no network. Fonts use Inter / JetBrains Mono when
+  installed, otherwise system fonts.
+- **Storage clearing:** releasing a session clears cookies and cache only.
+  Clearing DOM storage on an in-memory partition blocks Electron's main thread
+  (Electron 42), so it's skipped. Partition names are unique per token and
+  never reused, so leftover DOM storage is unreachable until Pipper quits.
+- **CDP needs a document:** a window that has never loaded ignores CDP
+  commands, so each page loads `about:blank` before attaching the debugger and
+  clears that entry from history after its first real navigation.
+- **Quitting on Windows/Linux:** hidden agent windows count as open windows, so
+  `main.ts` now quits when the last non-agent window closes
+  (`isAgentBrowserWindow`), not only on `window-all-closed`.
+- **Shared MCP server:** `electron/subagents/{mcp-http-server,stdio-proxy}.ts`
+  moved to `electron/mcp/`. Each server instance has its own `serverInfo`, and
+  results can carry image content.

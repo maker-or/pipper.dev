@@ -36,6 +36,9 @@ export default defineConfig({
       "scripts/**/*.test.ts",
       ...(expoInstalled ? ["native/pipper-remote-expo/src/**/*.test.ts"] : []),
     ],
+    // Vitest blanks CSS by default, which would make `?raw` stylesheet
+    // imports empty; the widget frame reads its tokens and icon styles that way.
+    css: { include: [/src\/index\.css/, /@phosphor-icons\/web/] },
     clearMocks: true,
     restoreMocks: true,
     unstubGlobals: true,

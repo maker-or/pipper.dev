@@ -2,9 +2,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 /**
  * Minimal MCP server over streamable HTTP (JSON response mode only, no SSE).
- * Pipper hosts one instance and registers a distinct endpoint per ACP session
- * at `/mcp/<token>`, so tool calls are attributable to the session that made
- * them — that's what depth limits and cancel cascades key off.
+ * Each client-hosted tool family (subagents, browser) runs one instance and
+ * registers a distinct endpoint per ACP session at `/mcp/<token>`, so tool
+ * calls are attributable to the session that made them — that's what depth
+ * limits, cancel cascades and per-session browser pages key off.
  *
  * Only the message types agents need to use tools are implemented:
  * initialize, ping, tools/list, tools/call. Notifications get 202.
@@ -16,9 +17,18 @@ export interface McpToolDefinition {
   inputSchema: Record<string, unknown>;
 }
 
+export type McpContent =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export interface McpToolResult {
-  content: Array<{ type: "text"; text: string }>;
+  content: McpContent[];
   isError?: boolean;
+}
+
+export interface McpServerInfo {
+  name: string;
+  version: string;
 }
 
 export interface McpEndpoint {
@@ -33,7 +43,7 @@ interface JsonRpcMessage {
   params?: Record<string, unknown>;
 }
 
-const SERVER_INFO = { name: "pipper-subagents", version: "1.0.0" };
+const DEFAULT_SERVER_INFO: McpServerInfo = { name: "pipper-subagents", version: "1.0.0" };
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_IN_FLIGHT_PER_ENDPOINT = 16;
 
@@ -91,6 +101,12 @@ export class McpHttpServer {
   private readonly endpoints = new Map<string, McpEndpoint>();
   private readonly inFlight = new Map<string, number>();
 
+  private readonly serverInfo: McpServerInfo;
+
+  constructor(serverInfo: McpServerInfo = DEFAULT_SERVER_INFO) {
+    this.serverInfo = serverInfo;
+  }
+
   async start(): Promise<number> {
     if (this.port != null) return this.port;
     const server = createServer((req, res) => {
@@ -104,14 +120,14 @@ export class McpHttpServer {
       server.listen(0, "127.0.0.1", () => {
         const address = server.address();
         if (address && typeof address === "object") resolve(address.port);
-        else reject(new Error("failed to bind subagent MCP server"));
+        else reject(new Error(`failed to bind ${this.serverInfo.name} MCP server`));
       });
     });
     return this.port;
   }
 
   urlFor(token: string): string {
-    if (this.port == null) throw new Error("subagent MCP server not started");
+    if (this.port == null) throw new Error(`${this.serverInfo.name} MCP server not started`);
     return `http://127.0.0.1:${this.port}/mcp/${token}`;
   }
 
@@ -208,7 +224,7 @@ export class McpHttpServer {
           result: {
             protocolVersion: typeof requested === "string" ? requested : "2025-03-26",
             capabilities: { tools: { listChanged: false } },
-            serverInfo: SERVER_INFO,
+            serverInfo: this.serverInfo,
           },
         };
       }

@@ -30,6 +30,7 @@ import type {
   McpServerInput,
   McpServerRecord,
   SessionConfigOption,
+  BrowserConfig,
   SubagentConfig,
   SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
@@ -324,6 +325,10 @@ declare global {
         getConfig: () => Promise<SubagentConfig>;
         setConfig: (partial: Partial<SubagentConfig>) => Promise<SubagentConfig>;
         listRuns: () => Promise<SubagentRunSnapshot[]>;
+      };
+      browser: {
+        getConfig: () => Promise<BrowserConfig>;
+        setConfig: (partial: Partial<BrowserConfig>) => Promise<BrowserConfig>;
       };
       mcp: {
         list: () => Promise<McpServerRecord[]>;

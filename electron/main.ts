@@ -78,6 +78,7 @@ import {
 } from "./db";
 import { getThread, listThreads, listThreadsByIds, listProjectThreads } from "./threads";
 import type { OpenTabsState } from "../contracts/threads.ts";
+import type { BrowserConfig } from "../contracts/acp.ts";
 import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer } from "./mcp-servers";
 import {
   installAgentInstanceProvider,
@@ -93,6 +94,8 @@ import {
   deleteAgentInstance,
 } from "./agent-instances";
 import { AgentManager } from "./agent";
+import { BrowserService } from "./browser/browser-service.ts";
+import { electronPageHost, isAgentBrowserWindow } from "./browser/electron-page.ts";
 import { RemoteTaskError, getRemoteRequests } from "./remote-requests.ts";
 import { prepareIsolatedAgentTask } from "./isolated-agent-task.ts";
 import { createElectronOsNotifier } from "./os-notifications";
@@ -373,6 +376,7 @@ let launchWindow: BrowserWindow | null = null;
 let monitorWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let agentManager: AgentManager | null = null;
+let browserService: BrowserService | null = null;
 /**
  * Single source of truth for "can the user currently see the main window".
  * Consumed by the agent bridge (hidden-window delta coalescing) and the OS
@@ -2745,6 +2749,15 @@ function registerIpc(): void {
   );
   ipcMain.handle("subagents:listRuns", () => requireAgentManager().getSubagentRuns());
 
+  ipcMain.handle("browser:getConfig", () => {
+    if (!browserService) throw new Error("Browser service is not ready");
+    return browserService.getConfig();
+  });
+  ipcMain.handle("browser:setConfig", (_event, partial: Partial<BrowserConfig>) => {
+    if (!browserService) throw new Error("Browser service is not ready");
+    return browserService.setConfig(partial);
+  });
+
   ipcMain.handle("mcp:list", () => listMcpServers());
   ipcMain.handle("mcp:create", (_event, input) => createMcpServer(input));
   ipcMain.handle("mcp:update", (_event, id: string, input) => updateMcpServer(id, input));
@@ -3141,6 +3154,15 @@ app.whenReady().then(async () => {
     });
     notifyAnalyticsIdentity();
   }
+  browserService = new BrowserService({
+    host: electronPageHost,
+    // Agents may browse localhost dev servers, but not Pipper's own renderer.
+    appOrigins: () => {
+      const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
+      return rendererUrl ? [rendererUrl] : [];
+    },
+  });
+  void browserService.init();
   agentManager = new AgentManager({
     // Electron resolves this from package.json's `version` field.
     clientVersion: app.getVersion(),
@@ -3160,6 +3182,7 @@ app.whenReady().then(async () => {
     visibility: windowVisibilityGate,
     attention: { isFocused: () => mainWindowFocused },
     notify: osNotifier,
+    browser: browserService,
   });
   // Database maintenance waits for agent turns to finish (see R15).
   applicationStorage.setBusyProbe(() => (agentManager?.getRunningThreadIds().length ?? 0) > 0);
@@ -3367,6 +3390,18 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// Hidden agent browser pages are windows too, so window-all-closed never fires
+// while an agent has a page open. Quit when the last *app* window closes.
+app.on("browser-window-created", (_event, window) => {
+  window.once("closed", () => {
+    if (process.platform === "darwin" || isAgentBrowserWindow(window)) return;
+    const appWindows = BrowserWindow.getAllWindows().filter(
+      (candidate) => !candidate.isDestroyed() && !isAgentBrowserWindow(candidate),
+    );
+    if (appWindows.length === 0) app.quit();
+  });
 });
 
 /**

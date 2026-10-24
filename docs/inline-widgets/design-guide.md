@@ -14,8 +14,8 @@ The guide is split into modules so the agent loads only what it needs:
 The frame must provide, before any widget code runs:
 
 1. **Tokens.** The `:root` / `[data-workspace-theme]` blocks from `src/index.css`,
-   generated at build time into `widget-frame.css`. Same variable names as the
-   app, so a token change ships to widgets automatically.
+   read at build time (`electron/widgets/widget-tokens.ts`). Same variable names
+   as the app, so a token change ships to widgets automatically.
 2. **Theme scope.** `data-workspace-theme="light|dark"` on the frame root, updated
    via `postMessage` when the app theme changes. Widgets never read
    `prefers-color-scheme` themselves.
@@ -24,10 +24,12 @@ The frame must provide, before any widget code runs:
 4. **Motion.** `--ff-ease-fast|moderate|slow` and `--ff-dur-fast|moderate|slow`,
    approximating `src/lib/springs.ts` (0.08s / 0.16s / 0.24s). Durations collapse
    to `0s` under `prefers-reduced-motion`.
-5. **Fonts.** Inter Variable and JetBrains Mono Variable, self-hosted.
-6. **Icons.** Phosphor regular icon font, exposed as `<i class="ph ph-NAME">`.
+5. **Fonts.** Inter Variable and JetBrains Mono Variable when installed, falling
+   back to system fonts. (Not yet bundled into the frame.)
+6. **Icons.** Phosphor regular icon font, inlined into the frame and exposed as
+   `<i class="ph ph-NAME">`.
 7. **Component kit.** The `.ff-*` classes listed below, implemented in
-   `widget-frame.css` on top of the tokens.
+   `electron/widgets/widget-frame.ts` on top of the tokens.
 8. **Runtime API.** `pipper.sendPrompt(text)`, `pipper.openLink(url)`. Height is
    measured by the host with a `ResizeObserver`; widgets never set it.
 9. **CSP.** Scripts only from the frame origin and the CDN allowlist below.
@@ -88,6 +90,8 @@ decoration or to tell series apart.
 | `stale`   | outdated, informational | `--workspace-fill-stale` / `--workspace-ink-stale`     | `…-badge-surface-stale` / `…-badge-ink-stale`                         |
 
 Always use a fill with its own ink. Never put `--foreground` on a state fill.
+In dark mode, prefer the fill/ink pair for small text: the dark badge pair is
+below 4.5:1. `.ff-badge` already does this.
 For a plain text accent, use `--workspace-tone-{state}`.
 
 **Elevation**

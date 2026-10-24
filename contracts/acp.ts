@@ -391,6 +391,21 @@ export type AcpBridgeEvent =
     };
 
 /**
+ * User preferences for the agent browser (headless pages agents drive over
+ * MCP). Persisted as `browser.json` in the app's userData directory.
+ */
+export interface BrowserConfig {
+  /** Offer browser tools to new agent sessions. Off also closes open pages. */
+  enabled: boolean;
+  /** Pages one session may have open at once. */
+  pagesPerSession: number;
+  /** Close a page after this many minutes without a tool call. */
+  idleMinutes: number;
+  /** "ask" prompts in the thread before a page may download a file. */
+  downloads: "ask" | "block";
+}
+
+/**
  * User preferences for the client-hosted subagent tool. Persisted as
  * `subagents.json` in the app's userData directory so each user can pick
  * which of their installed ACP agents may be spawned as subagents.

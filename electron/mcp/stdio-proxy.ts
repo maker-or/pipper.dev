@@ -4,8 +4,9 @@ import { dirname } from "node:path";
 /**
  * MCP stdio↔HTTP bridge for agents whose ACP handshake doesn't advertise
  * http MCP support. The agent spawns this script as a stdio MCP server; each
- * newline-delimited JSON-RPC message is forwarded as an HTTP POST to Pipper's
- * in-process subagent MCP server (endpoint URL in argv[2]).
+ * newline-delimited JSON-RPC message is forwarded as an HTTP POST to one of
+ * Pipper's in-process MCP servers (endpoint URL in argv[2]). The script is
+ * endpoint-agnostic, so the subagent and browser tools share it.
  *
  * Kept as an embedded string and materialized to userData at runtime so the
  * packaged build needs no extra bundling step for a loose script asset.

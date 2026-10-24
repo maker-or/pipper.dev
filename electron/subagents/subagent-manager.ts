@@ -29,8 +29,8 @@ import {
   type McpEndpoint,
   type McpToolDefinition,
   type McpToolResult,
-} from "./mcp-http-server.ts";
-import { ensureStdioProxyScript } from "./stdio-proxy.ts";
+} from "../mcp/mcp-http-server.ts";
+import { ensureStdioProxyScript } from "../mcp/stdio-proxy.ts";
 
 /** The slice of a live ACP connection a subagent run needs. */
 export interface SubagentConnection {
