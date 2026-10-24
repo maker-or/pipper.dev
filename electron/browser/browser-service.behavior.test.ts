@@ -601,4 +601,32 @@ describe("agent browser service", () => {
     expect(result.isError).toBe(true);
     expect(result.text).toContain("can't be shown");
   });
+
+  test("agents are told to answer reports and analysis with a widget", async () => {
+    const { service } = await setup();
+    const { url } = await openSession(service, "s1");
+    const rpc = async (method: string) =>
+      (
+        (await (
+          await fetch(url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: {} }),
+          })
+        ).json()) as { result: Record<string, any> }
+      ).result;
+
+    const instructions: string = (await rpc("initialize")).instructions;
+    const tools: Array<{ name: string; description: string }> = (await rpc("tools/list")).tools;
+    const show = tools.find((tool) => tool.name === "show_widget")!.description;
+    for (const text of [instructions, show]) {
+      for (const word of ["report", "analysis", "breakdown", "comparison", "dashboard"]) {
+        expect(text).toContain(word);
+      }
+      expect(text).toContain("HTML");
+      expect(text).toContain("Markdown");
+    }
+    expect(instructions).toContain("widget_guide");
+    expect(instructions).toContain("preview_widget");
+  });
 });

@@ -33,6 +33,29 @@ function tool(
 }
 
 /**
+ * Requests that should be answered with a widget. Listed by the words users
+ * actually type, because models match on wording; shared by the server
+ * instructions and the show_widget description so the two never disagree.
+ */
+export const WIDGET_TRIGGERS = [
+  "report",
+  "analysis or analyze",
+  "audit",
+  "review of results",
+  "breakdown",
+  "overview",
+  "summary of data, files, tests or metrics",
+  "comparison or compare",
+  "stats, metrics or KPIs",
+  "dashboard",
+  "chart, graph or plot",
+  "diagram, flow or architecture",
+  "timeline or roadmap",
+  "scorecard or evaluation",
+  "anything the user calls visual",
+];
+
+/**
  * What the model reads about this server as a whole: when to use widgets
  * versus files, the order of the widget tools, and what the browser is for.
  * Written as rules, not suggestions, so every model reads them the same way.
@@ -40,13 +63,14 @@ function tool(
 export const BROWSER_SERVER_INSTRUCTIONS = [
   "This client (Pipper) shows inline visual widgets in the user's thread and gives you a headless browser.",
   "",
-  "Widgets:",
-  "- When the user asks for anything visual (a chart, graph, diagram, dashboard, visual report, comparison table or interactive explainer), answer with a widget. Also use one when numbers, structure or a process are clearer as a picture.",
+  "Widgets (default for reports and analysis):",
+  `- If the user asks for any of these, your answer must include a widget: ${WIDGET_TRIGGERS.join("; ")}. This applies whether or not they say "visual", "inline" or "widget".`,
+  "- Also use a widget whenever your answer has numbers, scores, counts, rankings, steps or structure that read better as cards, tables, bars or a diagram.",
   "- Steps: call widget_guide once per conversation, draft the widget, call preview_widget until it reports clean, then call show_widget. The widget appears in the thread at the point in your reply where you call show_widget.",
-  "- show_widget is the only way to put a visual in front of the user. Do not write an HTML file, Markdown report or other artifact for the same content, and do not link one instead of showing the widget, unless the user explicitly asks for a file.",
+  "- show_widget is the only way to put a visual in front of the user. Do not write an HTML file, Markdown report or other artifact for the same content, and do not link one instead of showing the widget, unless the user explicitly asks for a file. If they do ask for a file, write it and also show the widget.",
   "- Keep explanations in your reply text, not inside the widget. After show_widget, don't describe what the widget shows; add only what the visual can't say.",
   "- To change a widget you showed, call update_widget with its id instead of showing a new one.",
-  "- Most replies need no widget: answer short questions, plain lists and code in text.",
+  "- Skip widgets only for short factual answers, conversation, code the user will copy, and edits to files.",
   "",
   "Browser:",
   "- Use browser_open, browser_snapshot, browser_click, browser_type and browser_screenshot to read web pages, check a local dev server (localhost works) or test a web app. Each session has its own private pages.",
@@ -158,7 +182,8 @@ export const BROWSER_TOOLS: McpToolDefinition[] = [
 export const WIDGET_TOOLS: McpToolDefinition[] = [
   tool(
     "widget_guide",
-    "Returns Pipper's design rules for inline widgets: colour and surface tokens, type, " +
+    "Step 1 for any report, analysis, breakdown, comparison, dashboard or chart: returns " +
+      "Pipper's design rules for inline widgets: colour and surface tokens, type, " +
       "spacing, icons, motion, the .ff-* component classes, the runtime API and what is not " +
       "allowed. Call it before your first preview_widget in a conversation, and again for a " +
       'module you have not loaded. Pass only the modules this visual needs; "core" is always ' +
@@ -195,11 +220,12 @@ export const WIDGET_TOOLS: McpToolDefinition[] = [
 WIDGET_TOOLS.push(
   tool(
     "show_widget",
-    "Shows a visual widget inline in the user's thread: charts, diagrams, dashboards, visual " +
-      "reports, data tables, comparisons, stat summaries and small interactive explainers. This " +
-      "is the only way to show the user a visual; use it instead of writing an HTML or Markdown " +
-      "report file unless the user asks for a file. Use it when a picture is clearer than text; " +
-      "don't use it for short answers, plain lists, prose, or code the user will copy. " +
+    "Shows a visual widget inline in the user's thread. Use it to answer any request for: " +
+      `${WIDGET_TRIGGERS.join("; ")}. Also use it whenever your answer has numbers, scores or ` +
+      "structure that read better as cards, tables, bars or a diagram. This is the only way to " +
+      "show the user a visual; use it instead of writing an HTML or Markdown report file unless " +
+      "the user asks for a file. Skip it only for short factual answers, conversation, code the " +
+      "user will copy, and file edits. " +
       "Pass an HTML fragment or a single <svg> written to widget_guide's rules, and preview it " +
       "with preview_widget first. Don't set a height or width; the frame sizes itself. Put " +
       "explanations in your reply text, never inside the widget. Returns a widget id; the user " +
