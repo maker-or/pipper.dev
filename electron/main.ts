@@ -78,7 +78,7 @@ import {
 } from "./db";
 import { getThread, listThreads, listThreadsByIds, listProjectThreads } from "./threads";
 import type { OpenTabsState } from "../contracts/threads.ts";
-import type { BrowserConfig } from "../contracts/acp.ts";
+import type { BrowserConfig, InlineWidgetDocument } from "../contracts/acp.ts";
 import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer } from "./mcp-servers";
 import {
   installAgentInstanceProvider,
@@ -96,6 +96,8 @@ import {
 import { AgentManager } from "./agent";
 import { BrowserService } from "./browser/browser-service.ts";
 import { electronPageHost, isAgentBrowserWindow } from "./browser/electron-page.ts";
+import { buildWidgetDocument } from "./widgets/widget-frame.ts";
+import { sqliteWidgetStore } from "./widgets/widget-store.ts";
 import { RemoteTaskError, getRemoteRequests } from "./remote-requests.ts";
 import { prepareIsolatedAgentTask } from "./isolated-agent-task.ts";
 import { createElectronOsNotifier } from "./os-notifications";
@@ -2749,6 +2751,22 @@ function registerIpc(): void {
   );
   ipcMain.handle("subagents:listRuns", () => requireAgentManager().getSubagentRuns());
 
+  ipcMain.handle(
+    "widgets:getDocument",
+    (_event, id: unknown, theme: unknown): InlineWidgetDocument | null => {
+      if (typeof id !== "string" || !/^wdg_[a-f0-9]{32}$/.test(id)) return null;
+      const widget = sqliteWidgetStore.get(id);
+      if (!widget) return null;
+      return {
+        id: widget.id,
+        title: widget.title,
+        summary: widget.summary,
+        updatedAt: widget.updatedAt,
+        document: buildWidgetDocument(widget.code, theme === "dark" ? "dark" : "light"),
+      };
+    },
+  );
+
   ipcMain.handle("browser:getConfig", () => {
     if (!browserService) throw new Error("Browser service is not ready");
     return browserService.getConfig();
@@ -3156,6 +3174,7 @@ app.whenReady().then(async () => {
   }
   browserService = new BrowserService({
     host: electronPageHost,
+    widgetStore: sqliteWidgetStore,
     // Agents may browse localhost dev servers, but not Pipper's own renderer.
     appOrigins: () => {
       const rendererUrl = process.env["ELECTRON_RENDERER_URL"];

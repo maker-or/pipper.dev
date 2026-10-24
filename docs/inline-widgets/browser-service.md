@@ -217,8 +217,20 @@ Where the code differs from the design above:
   endpoints with the stdio fallback; limits; idle and memory sweeps; blocked
   schemes, Pipper's dev renderer origin, permissions and popups; crash handling;
   per-session call serialization; stale-ref errors.
-- **Not built yet:** `show_widget` / `update_widget` and the thread's widget
-  timeline item, and a browser pane.
+- **Shown widgets:** `show_widget` stores the code in the `inline_widgets` table
+  and returns `pipper-widget:<id>` as the first line of its result. That line
+  survives into the tool call's output preview for any agent, so the renderer
+  finds widgets there (`src/lib/inline-widgets.ts`) and shows them between the
+  turn's text, in order. `update_widget` replaces the code and emits a
+  `widget-updated` event so the frame reloads in place.
+- **Thread frame:** `src/components/inline-widget.tsx` loads the document from
+  `widgets:getDocument` into an `<iframe sandbox="allow-scripts">` (opaque
+  origin, no navigation or popups). It accepts only resize, ready, openLink
+  (https, after a confirm dialog) and sendPrompt. The frame runtime sends
+  `sendPrompt` only during a click or keypress. Theme and shape changes are
+  posted to the frame without reloading it.
+- **Not built yet:** a browser pane; deleting a thread doesn't yet delete its
+  widget rows.
 - **Settings:** Settings → Browser (`browser.json` in userData): on/off, pages per
   session (1–8), idle timeout (1–60 min), downloads ask/block. Turning it off
   closes open pages and makes further calls return an error. The total page

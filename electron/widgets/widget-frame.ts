@@ -60,7 +60,7 @@ body {
   font-family: var(--font-sans); font-size: 13px; line-height: 1.6;
   color: var(--foreground); -webkit-font-smoothing: antialiased;
 }
-#widget-root { width: var(--frame-width, 680px); overflow: hidden; }
+#widget-root { width: var(--frame-width, 100%); overflow: hidden; }
 h1, h2, h3 { font-weight: 500; margin: 0 0 8px; color: var(--foreground); }
 h1 { font-size: 15px; } h2 { font-size: 14px; } h3 { font-size: 13px; }
 a { color: var(--workspace-tone-stale); }
@@ -116,6 +116,7 @@ ${["neutral", "action", "ready", "merged", "stale"]
   transition: transform var(--ff-dur-fast) var(--ff-ease-fast), opacity var(--ff-dur-fast) var(--ff-ease-fast);
 }
 .ff-btn:active { transform: scale(0.97); }
+.ff-stack > .ff-btn, .ff-stat > .ff-btn { align-self: flex-start; }
 .ff-btn[data-variant="secondary"] { background: var(--accent); color: var(--accent-foreground); }
 .ff-btn:focus-visible, .ff-input:focus-visible, .ff-select:focus-visible {
   outline: 2px solid var(--ring); outline-offset: 2px;
@@ -164,12 +165,24 @@ const RUNTIME = String.raw`
     originalError(...args);
   };
 
-  const post = (message) => {
-    actions.push(message);
+  const toHost = (message) => {
     if (window.parent !== window) window.parent.postMessage({ source: "pipper-widget", ...message }, "*");
   };
+  const post = (message) => {
+    actions.push(message);
+    toHost(message);
+  };
+  // Only a click or keypress inside the widget may send a prompt, so a
+  // widget can't post messages to the agent on its own.
+  const userActive = () => !navigator.userActivation || navigator.userActivation.isActive;
   window.pipper = {
-    sendPrompt: (text) => post({ type: "sendPrompt", text: String(text) }),
+    sendPrompt: (text) => {
+      if (!userActive()) {
+        console.warn("pipper.sendPrompt ignored: call it from a click or keypress handler.");
+        return;
+      }
+      post({ type: "sendPrompt", text: String(text) });
+    },
     openLink: (url) => post({ type: "openLink", url: String(url) }),
   };
   document.addEventListener("click", (event) => {
@@ -195,7 +208,7 @@ const RUNTIME = String.raw`
   });
 
   window.__pipperRender = async (code, options) => {
-    document.documentElement.style.setProperty("--frame-width", options.width + "px");
+    if (options.width) document.documentElement.style.setProperty("--frame-width", options.width + "px");
     document.documentElement.dataset.workspaceTheme = options.theme;
     const template = document.createElement("template");
     template.innerHTML = code;
@@ -309,6 +322,35 @@ const RUNTIME = String.raw`
       lint,
     };
   };
+
+  // Display mode: the thread embeds the widget code; report height to the
+  // host and follow its theme.
+  const embedded = document.getElementById("pipper-widget-code");
+  if (embedded) {
+    let lastHeight = -1;
+    const reportSize = () => {
+      const height = Math.ceil(root.getBoundingClientRect().height);
+      if (height === lastHeight) return;
+      lastHeight = height;
+      toHost({ type: "resize", height });
+    };
+    new ResizeObserver(reportSize).observe(root);
+    window.addEventListener("message", (event) => {
+      if (event.source !== window.parent) return;
+      const data = event.data || {};
+      if (data.type === "theme" && (data.theme === "light" || data.theme === "dark")) {
+        document.documentElement.dataset.workspaceTheme = data.theme;
+      }
+      if (data.type === "shape" && (data.shape === "pill" || data.shape === "rounded")) {
+        document.documentElement.dataset.shape = data.shape;
+      }
+    });
+    const theme = document.documentElement.dataset.workspaceTheme || "light";
+    window.__pipperRender(JSON.parse(embedded.textContent || '""'), { theme }).then(() => {
+      reportSize();
+      toHost({ type: "ready" });
+    });
+  }
 })();
 `;
 
@@ -332,4 +374,25 @@ ${KIT_CSS}
 <body><div id="widget-root"></div><script>${RUNTIME}</script></body>
 </html>`;
   return cachedHtml;
+}
+
+/**
+ * A complete document for showing one widget in the thread: the frame plus
+ * the widget's code, rendered on load in the given theme.
+ */
+export function buildWidgetDocument(code: string, theme: "light" | "dark" = "light"): string {
+  // JSON inside <script> must not be able to close the element.
+  const embedded = JSON.stringify(code)
+    .replace(/</g, "\\u003c")
+    .replace(/>/g, "\\u003e")
+    .replace(/\u2028/g, "\\u2028")
+    .replace(/\u2029/g, "\\u2029");
+  return buildWidgetFrameHtml()
+    .replace('data-workspace-theme="light"', `data-workspace-theme="${theme}"`)
+    .replace(
+      '<div id="widget-root"></div>',
+      // A function replacer, so "$&" and friends in widget code stay literal.
+      () =>
+        `<div id="widget-root"></div><script type="application/json" id="pipper-widget-code">${embedded}</script>`,
+    );
 }

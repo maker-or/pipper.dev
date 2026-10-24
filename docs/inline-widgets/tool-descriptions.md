@@ -1,8 +1,14 @@
 # Inline widget tools
 
-Draft descriptions and schemas for the MCP tools that let an agent render inline
-widgets in a Pipper thread. The descriptions are written for the model: they are
-what it reads when deciding whether and how to call each tool.
+The original design for the MCP tools that let an agent render inline widgets
+in a Pipper thread. The descriptions are written for the model: they are what
+it reads when deciding whether and how to call each tool.
+
+The shipped definitions live in `electron/browser/browser-tools.ts` and are the
+source of truth. Differences from this draft: the tools are served by the
+`pipper-browser` MCP server; `show_widget` has no `loading_messages`; and
+`show_widget` / `update_widget` return text starting with
+`pipper-widget:<id>` / `pipper-widget-updated:<id>` instead of JSON.
 
 Flow: `widget_guide` → draft → `preview_widget` (repeat until clean) →
 `show_widget` → optionally `update_widget`.

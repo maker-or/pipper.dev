@@ -25,6 +25,8 @@ import {
 } from "./browser-tools.ts";
 import { buildSnapshot } from "./snapshot.ts";
 import { widgetGuide } from "../widgets/widget-guide.ts";
+import { lintWidgetSource } from "../widgets/widget-lint.ts";
+import type { WidgetStore } from "../widgets/widget-store.ts";
 import { WidgetPreviewer } from "../widgets/widget-preview.ts";
 import { withTimeout } from "./timing.ts";
 import { checkUrl, normalizeUserUrl, type UrlDecision } from "./url-policy.ts";
@@ -86,10 +88,23 @@ export interface BrowserServiceOptions {
   baseDir?: string;
   /** Parent folder for per-session download folders; defaults to temp. */
   downloadsDir?: string;
+  /** Where show_widget saves widgets; without one, widgets can't be shown. */
+  widgetStore?: WidgetStore;
   now?: () => number;
 }
 
 /** Asks the user in the session's thread; resolves true only on approval. */
+/** Lets the service attribute widgets to threads and tell the renderer. */
+export interface WidgetHooks {
+  resolveThread(sessionId: string): string | null;
+  onWidgetUpdated(widget: { widgetId: string; threadId: string | null }): void;
+}
+
+/** Hard limit on widget source; a widget this large is a page, not a reply. */
+export const MAX_WIDGET_CODE_CHARS = 512 * 1024;
+/** Lint rules that make a widget unshowable, not just imperfect. */
+const BLOCKING_WIDGET_RULES = new Set(["document-wrapper", "script-origin"]);
+
 export type BrowserPermissionRequester = (request: {
   sessionId: string;
   title: string;
@@ -125,12 +140,18 @@ const CONSOLE_RANK: Record<ConsoleEntry["level"], number> = {
   error: 3,
 };
 
+/** Prefix of show_widget results; `src/lib/inline-widgets.ts` matches it. */
+export const WIDGET_MARKER = "pipper-widget:";
+export const WIDGET_UPDATED_MARKER = "pipper-widget-updated:";
+
 export class BrowserService {
   private readonly host: PageHost;
   private readonly limits: BrowserLimits;
   private config: BrowserConfig = { ...DEFAULT_BROWSER_CONFIG };
   private requestPermission: BrowserPermissionRequester | null = null;
   private readonly downloadsDir: string | undefined;
+  private readonly widgetStore: WidgetStore | null;
+  private widgetHooks: WidgetHooks | null = null;
   private readonly appOrigins: () => string[];
   private readonly isEnabled: () => boolean;
   private readonly baseDir: string | undefined;
@@ -149,6 +170,7 @@ export class BrowserService {
     this.isEnabled = options.isEnabled ?? (() => this.config.enabled);
     this.baseDir = options.baseDir;
     this.downloadsDir = options.downloadsDir;
+    this.widgetStore = options.widgetStore ?? null;
     this.now = options.now ?? Date.now;
   }
 
@@ -164,6 +186,10 @@ export class BrowserService {
   async setConfig(partial: Partial<BrowserConfig>): Promise<BrowserConfig> {
     this.applyConfig(await writeBrowserConfig(partial, this.baseDir));
     return this.getConfig();
+  }
+
+  setWidgetHooks(hooks: WidgetHooks | null): void {
+    this.widgetHooks = hooks;
   }
 
   /** Wire download approvals to the thread's permission prompt. */
@@ -278,6 +304,82 @@ export class BrowserService {
         }
       }
     }
+  }
+
+  private requireWidgetStore(): WidgetStore {
+    if (!this.widgetStore) throw new Error("Widgets can't be shown in this client.");
+    return this.widgetStore;
+  }
+
+  private widgetCode(args: Record<string, unknown>): string {
+    const code = stringArg(args, "widget_code");
+    if (code.length > MAX_WIDGET_CODE_CHARS) {
+      throw new ToolArgumentError(
+        `widget_code is ${Math.round(code.length / 1024)} KB; keep widgets under ${MAX_WIDGET_CODE_CHARS / 1024} KB.`,
+      );
+    }
+    const blocking = lintWidgetSource(code).filter((finding) =>
+      BLOCKING_WIDGET_RULES.has(finding.rule),
+    );
+    if (blocking.length > 0) {
+      throw new ToolArgumentError(
+        `This widget can't be shown:\n${blocking.map((finding) => `- ${finding.message}`).join("\n")}\nFix it and check with preview_widget.`,
+      );
+    }
+    return code;
+  }
+
+  private showWidget(record: SessionRecord, args: Record<string, unknown>): McpToolResult {
+    const store = this.requireWidgetStore();
+    const title = stringArg(args, "title");
+    if (!/^[a-z0-9_]{3,60}$/.test(title)) {
+      throw new ToolArgumentError('"title" must be 3–60 characters of a-z, 0-9 and _.');
+    }
+    const summary = stringArg(args, "summary").trim().slice(0, 280);
+    const code = this.widgetCode(args);
+    const now = this.now();
+    const id = `wdg_${randomUUID().replace(/-/g, "")}`;
+    store.insert({
+      id,
+      threadId: record.sessionId
+        ? (this.widgetHooks?.resolveThread(record.sessionId) ?? null)
+        : null,
+      sessionId: record.sessionId,
+      title,
+      summary,
+      code,
+      createdAt: now,
+      updatedAt: now,
+    });
+    // The marker leads the result so it survives into the tool call's
+    // output preview, which is how the thread finds the widget to render.
+    return textResult(
+      `${WIDGET_MARKER}${id}\nThe widget is now visible in the thread. Don't describe or repeat ` +
+        `its contents in text. To change it, call update_widget with widget_id "${id}".`,
+    );
+  }
+
+  private updateWidget(record: SessionRecord, args: Record<string, unknown>): McpToolResult {
+    const store = this.requireWidgetStore();
+    const id = stringArg(args, "widget_id").trim();
+    const existing = store.get(id);
+    const threadId = record.sessionId
+      ? (this.widgetHooks?.resolveThread(record.sessionId) ?? null)
+      : null;
+    const sameOwner =
+      existing &&
+      ((existing.sessionId !== null && existing.sessionId === record.sessionId) ||
+        (existing.threadId !== null && existing.threadId === threadId));
+    if (!existing || !sameOwner) {
+      throw new ToolArgumentError(`No widget ${id} in this thread. Use show_widget to create one.`);
+    }
+    const code = this.widgetCode(args);
+    const summary = optionalString(args, "summary")?.trim().slice(0, 280) || undefined;
+    store.update(id, { code, summary, updatedAt: this.now() });
+    this.widgetHooks?.onWidgetUpdated({ widgetId: id, threadId: existing.threadId });
+    return textResult(
+      `${WIDGET_UPDATED_MARKER}${id}\nUpdated in place; the user sees the new version.`,
+    );
   }
 
   private widgetPreviewer(): WidgetPreviewer {
@@ -594,6 +696,10 @@ export class BrowserService {
         const code = stringArg(args, "widget_code");
         return this.widgetPreviewer().preview(code, optionalNumber(args, "width"));
       }
+      case "show_widget":
+        return this.showWidget(record, args);
+      case "update_widget":
+        return this.updateWidget(record, args);
       default:
         throw new ToolArgumentError(`Unknown browser tool: ${name}`);
     }

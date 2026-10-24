@@ -31,6 +31,7 @@ import type {
   McpServerRecord,
   SessionConfigOption,
   BrowserConfig,
+  InlineWidgetDocument,
   SubagentConfig,
   SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
@@ -325,6 +326,9 @@ declare global {
         getConfig: () => Promise<SubagentConfig>;
         setConfig: (partial: Partial<SubagentConfig>) => Promise<SubagentConfig>;
         listRuns: () => Promise<SubagentRunSnapshot[]>;
+      };
+      widgets: {
+        getDocument: (id: string, theme: "light" | "dark") => Promise<InlineWidgetDocument | null>;
       };
       browser: {
         getConfig: () => Promise<BrowserConfig>;

@@ -419,6 +419,11 @@ export class AgentConnectionManager {
       );
       return response.outcome.outcome === "selected" && response.outcome.optionId === "allow";
     });
+    this.browser?.setWidgetHooks({
+      resolveThread: (sessionId) => this.findThreadBySessionId(sessionId),
+      onWidgetUpdated: ({ widgetId, threadId }) =>
+        this.emit({ type: "widget-updated", widgetId, threadId }),
+    });
     this.catalogs = new ProviderCatalogStore({ path: options.catalogPath });
     this.sendToRenderer =
       options.sendToRenderer.length <= 1

@@ -116,7 +116,7 @@ export class WidgetPreviewer {
     const clean = errors.length === 0 && blocked.length === 0 && findings.length === 0;
     lines.push(
       clean
-        ? "Clean. Show it with the same code."
+        ? "Clean. Show it with show_widget using the same code."
         : "Fix these and preview again before showing the widget.",
     );
 

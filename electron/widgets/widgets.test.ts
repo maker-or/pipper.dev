@@ -3,7 +3,7 @@ import phosphorFont from "@phosphor-icons/web/regular/Phosphor.woff2?inline";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { BrowserPage, PageEvents, PageHost } from "../browser/browser-page.ts";
-import { buildWidgetFrameHtml } from "./widget-frame.ts";
+import { buildWidgetDocument, buildWidgetFrameHtml } from "./widget-frame.ts";
 import { parseGuideModules, widgetGuide } from "./widget-guide.ts";
 import { lintWidgetSource } from "./widget-lint.ts";
 import { WidgetPreviewer } from "./widget-preview.ts";
@@ -175,5 +175,19 @@ describe("widget preview", () => {
     await previewer.preview("<p>b</p>");
     expect(fake.created()).toBe(1);
     previewer.dispose();
+  });
+});
+
+describe("widget document for the thread", () => {
+  test("embeds the code so it can't break out of its script tag", () => {
+    const code = '<p>a</p><script>if (1 < 2) document.title = "$& </script><b>x</b>";</script>';
+    const doc = buildWidgetDocument(code, "dark");
+    const match = /<script type="application\/json" id="pipper-widget-code">([^<]*)<\/script>/.exec(
+      doc,
+    );
+    expect(match).not.toBeNull();
+    expect(JSON.parse(match![1])).toBe(code);
+    expect(doc).toContain('data-workspace-theme="dark"');
+    expect(doc.match(/<\/script>/g)?.length).toBe(2);
   });
 });

@@ -172,6 +172,51 @@ export const WIDGET_TOOLS: McpToolDefinition[] = [
   ),
 ];
 
+WIDGET_TOOLS.push(
+  tool(
+    "show_widget",
+    "Shows a visual widget inline in the thread: charts, diagrams, data tables, comparisons, " +
+      "stat summaries, and small interactive explainers. Use it when a picture is clearer than " +
+      "text. Don't use it for short answers, plain lists, prose, or code the user will copy. " +
+      "Pass an HTML fragment or a single <svg> written to widget_guide's rules, and preview it " +
+      "with preview_widget first. Don't set a height or width; the frame sizes itself. Put " +
+      "explanations in your reply text, never inside the widget. Returns a widget id; the user " +
+      "already sees the widget, so don't describe its contents in text. To change it later, " +
+      "call update_widget instead of showing a new one.",
+    {
+      title: {
+        type: "string",
+        pattern: "^[a-z0-9_]{3,60}$",
+        description: "Specific snake_case name, e.g. q3_latency_by_region.",
+      },
+      widget_code: {
+        type: "string",
+        description: "HTML fragment or a single <svg>. No doctype, html, head or body.",
+      },
+      summary: {
+        type: "string",
+        maxLength: 280,
+        description:
+          "One or two plain sentences saying what the widget shows, for screen readers and " +
+          "places that can't render it.",
+      },
+    },
+    ["title", "widget_code", "summary"],
+  ),
+  tool(
+    "update_widget",
+    "Replaces the code of a widget you already showed in this thread, keeping its place in " +
+      "the conversation. Use it to fix or extend a widget instead of showing a near-duplicate. " +
+      "Preview the new code first.",
+    {
+      widget_id: { type: "string", description: "Id returned by show_widget." },
+      widget_code: { type: "string" },
+      summary: { type: "string", maxLength: 280 },
+    },
+    ["widget_id", "widget_code"],
+  ),
+);
+
 export class ToolArgumentError extends Error {}
 
 export function stringArg(args: Record<string, unknown>, key: string): string {

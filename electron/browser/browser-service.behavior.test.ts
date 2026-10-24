@@ -15,6 +15,7 @@ import type {
   PageHost,
 } from "./browser-page.ts";
 import { BrowserService, type BrowserLimits } from "./browser-service.ts";
+import { memoryWidgetStore } from "../widgets/widget-store.ts";
 import type { UrlDecision } from "./url-policy.ts";
 
 /**
@@ -503,5 +504,101 @@ describe("agent browser service", () => {
     expect(guide.text).toContain("# chart");
     expect(guide.text).not.toContain("# diagram");
     expect(guide.text).toContain(".ff-card");
+  });
+
+  test("show_widget saves the widget for the thread and returns the marker the timeline matches", async () => {
+    const widgetStore = memoryWidgetStore();
+    const service = new BrowserService({
+      host: new FakeHost(),
+      widgetStore,
+      baseDir: await mkdtemp(join(tmpdir(), "pipper-browser-test-")),
+    });
+    services.push(service);
+    service.setWidgetHooks({ resolveThread: () => "thread-1", onWidgetUpdated: () => undefined });
+    const { call } = await openSession(service, "s1");
+
+    const shown = await call("show_widget", {
+      title: "test_results",
+      widget_code: '<div class="ff-card">412 passed</div>',
+      summary: "412 tests passed and 3 failed.",
+    });
+    expect(shown.isError).toBe(false);
+    const id = /^pipper-widget:(wdg_[a-f0-9]{32})\n/.exec(shown.text)?.[1];
+    expect(id).toBeDefined();
+    expect(widgetStore.get(id!)).toMatchObject({
+      threadId: "thread-1",
+      sessionId: "s1",
+      title: "test_results",
+      code: '<div class="ff-card">412 passed</div>',
+    });
+  });
+
+  test("update_widget replaces code in place and tells the renderer", async () => {
+    const widgetStore = memoryWidgetStore();
+    const updates: Array<{ widgetId: string; threadId: string | null }> = [];
+    const service = new BrowserService({
+      host: new FakeHost(),
+      widgetStore,
+      baseDir: await mkdtemp(join(tmpdir(), "pipper-browser-test-")),
+    });
+    services.push(service);
+    service.setWidgetHooks({
+      resolveThread: (sessionId) => `thread-of-${sessionId}`,
+      onWidgetUpdated: (update) => updates.push(update),
+    });
+    const mine = await openSession(service, "s1");
+    const other = await openSession(service, "s2");
+    const shown = await mine.call("show_widget", {
+      title: "chart",
+      widget_code: "<p>v1</p>",
+      summary: "First version.",
+    });
+    const id = /pipper-widget:(wdg_[a-f0-9]{32})/.exec(shown.text)![1];
+
+    const updated = await mine.call("update_widget", { widget_id: id, widget_code: "<p>v2</p>" });
+    expect(updated.isError).toBe(false);
+    expect(updated.text.startsWith(`pipper-widget-updated:${id}`)).toBe(true);
+    expect(widgetStore.get(id)?.code).toBe("<p>v2</p>");
+    expect(widgetStore.get(id)?.summary).toBe("First version.");
+    expect(updates).toEqual([{ widgetId: id, threadId: "thread-of-s1" }]);
+
+    const foreign = await other.call("update_widget", { widget_id: id, widget_code: "<p>x</p>" });
+    expect(foreign.isError).toBe(true);
+    expect(widgetStore.get(id)?.code).toBe("<p>v2</p>");
+  });
+
+  test("widgets that can't run are refused with what to fix", async () => {
+    const service = new BrowserService({
+      host: new FakeHost(),
+      widgetStore: memoryWidgetStore(),
+      baseDir: await mkdtemp(join(tmpdir(), "pipper-browser-test-")),
+    });
+    services.push(service);
+    const { call } = await openSession(service, "s1");
+    const bad = await call("show_widget", {
+      title: "bad",
+      widget_code: '<html><body><script src="https://evil.example/x.js"></script></body></html>',
+      summary: "Broken.",
+    });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain("preview_widget");
+    const badTitle = await call("show_widget", {
+      title: "Not Snake",
+      widget_code: "<p>x</p>",
+      summary: "x",
+    });
+    expect(badTitle.isError).toBe(true);
+  });
+
+  test("without a widget store, show_widget says widgets aren't supported", async () => {
+    const { service } = await setup();
+    const { call } = await openSession(service, "s1");
+    const result = await call("show_widget", {
+      title: "abc",
+      widget_code: "<p>x</p>",
+      summary: "x",
+    });
+    expect(result.isError).toBe(true);
+    expect(result.text).toContain("can't be shown");
   });
 });
