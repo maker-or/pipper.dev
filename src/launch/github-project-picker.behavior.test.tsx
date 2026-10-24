@@ -136,6 +136,33 @@ test("keeps clone failures reviewable and allows retry", async () => {
   expect(onCreated).toHaveBeenCalledWith(project);
 });
 
+test("sets an optional setup script on the project it creates", async () => {
+  await render();
+  const toggle = host.querySelector<HTMLButtonElement>(
+    '[data-pipper-id="github-project-setup-script-toggle"]',
+  )!;
+  expect(toggle.getAttribute("aria-expanded")).toBe("false");
+  expect(host.querySelector('textarea[aria-label="Setup script"]')).toBeNull();
+
+  await act(async () => button("team/app").click());
+  expect(cloneRepository).toHaveBeenLastCalledWith("team/app", { setupScript: null });
+
+  await act(async () => toggle.click());
+  const editor = host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Setup script"]')!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+      editor,
+      'uv sync\ncp "$ROOT_PATH/.env" .env',
+    );
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await act(async () => button("team/app").click());
+  expect(cloneRepository).toHaveBeenLastCalledWith("team/app", {
+    setupScript: 'uv sync\ncp "$ROOT_PATH/.env" .env',
+  });
+  expect(onCreated).toHaveBeenCalledWith(project);
+});
+
 test.each(["status", "repositories"])(
   "retries a failed %s request without a window focus change",
   async (request) => {

@@ -21,7 +21,14 @@ export interface GitHubRepositoryPage {
 export interface GitHubApi {
   getStatus: () => Promise<GitHubCliStatus>;
   listRepositories: (page?: number) => Promise<GitHubRepositoryPage>;
-  cloneRepository: (fullName: string) => Promise<Project>;
+  /**
+   * Clone (or reopen) a repository as a project. A non-blank `setupScript`
+   * becomes the project's setup script; blank leaves any existing one alone.
+   */
+  cloneRepository: (
+    fullName: string,
+    options?: { setupScript?: string | null },
+  ) => Promise<Project>;
 }
 
 export const GITHUB_CLI_INSTALL_URL = "https://cli.github.com/";

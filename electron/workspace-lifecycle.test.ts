@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +20,14 @@ import { prepareIsolatedAgentTask } from "./isolated-agent-task.ts";
 import { createProject } from "./projects.ts";
 import { createThread } from "./threads.ts";
 import {
+  getProjectSetupScript,
+  MAX_SETUP_SCRIPT_LENGTH,
+  setProjectSetupScript,
+  suggestSetupScript,
+} from "./project-setup-script.ts";
+import {
   createWorkspace,
+  setupScriptInvocation,
   setWorkspaceInstallRunnerForTests,
   setWorkspaceSetupProgressSink,
   type WorkspaceSetupJob,
@@ -172,5 +179,100 @@ describe("shared workspace lifecycle", () => {
     expect(remoteJob).toBeDefined();
     expect(existsSync(remoteJob!.worktreePath)).toBe(false);
     expect(existsSync(kept.worktree.path)).toBe(true);
+  });
+});
+
+describe("project setup script", () => {
+  test("a project's script replaces the automatic install, even with it turned off", async () => {
+    setWorktreeAutoInstall(false);
+    const project = nodeProject();
+    setProjectSetupScript(
+      project.id,
+      [
+        "# comments and blank lines are fine",
+        "",
+        'echo "$WORKSPACE_NAME" > name.txt',
+        "pwd -P > cwd.txt",
+        'test "$ROOT_PATH" = "' + project.path + '" && echo ok > root.txt',
+      ].join("\n"),
+    );
+    const created = await createWorkspace({
+      projectId: project.id,
+      name: "scripted",
+      activation: "foreground",
+    });
+    const outcome = await created.setup;
+
+    expect(outcome).toMatchObject({ status: "installed", source: "script" });
+    expect(installs).toEqual([]);
+    const path = created.worktree.path;
+    expect(readFileSync(join(path, "name.txt"), "utf8").trim()).toBe("scripted");
+    expect(readFileSync(join(path, "cwd.txt"), "utf8").trim()).toBe(path);
+    expect(readFileSync(join(path, "root.txt"), "utf8").trim()).toBe("ok");
+    expect(
+      progress
+        .filter((e) => e.worktreePath === path)
+        .map(({ status, source }) => ({ status, source })),
+    ).toEqual([
+      { status: "installing", source: "script" },
+      { status: "installed", source: "script" },
+    ]);
+  }, 30_000);
+
+  test("the script stops at the first failing command and reports it", async () => {
+    const project = nodeProject();
+    setProjectSetupScript(project.id, "echo first > first.txt\nfalse\necho after > after.txt");
+    const created = await createWorkspace({
+      projectId: project.id,
+      name: "failing-script",
+      activation: "foreground",
+    });
+    const outcome = await created.setup;
+
+    expect(outcome).toMatchObject({ status: "failed", source: "script" });
+    expect(outcome.message).toMatch(/Setup script exited with code 1/);
+    expect(existsSync(join(created.worktree.path, "first.txt"))).toBe(true);
+    expect(existsSync(join(created.worktree.path, "after.txt"))).toBe(false);
+    // A failed setup keeps the workspace; it only reports.
+    expect(existsSync(created.worktree.path)).toBe(true);
+  }, 30_000);
+
+  test("saving normalizes, blank clears, and oversized scripts are rejected", () => {
+    const project = nodeProject();
+    expect(setProjectSetupScript(project.id, "  bun install\r\nbun run build \n")).toBe(
+      "bun install\nbun run build",
+    );
+    expect(getProjectSetupScript(project.id)).toBe("bun install\nbun run build");
+    expect(setProjectSetupScript(project.id, "   \n ")).toBeNull();
+    expect(getProjectSetupScript(project.id)).toBeNull();
+    expect(() =>
+      setProjectSetupScript(project.id, "x".repeat(MAX_SETUP_SCRIPT_LENGTH + 1)),
+    ).toThrow(/too long/);
+  });
+
+  test("suggestions cover more than JavaScript", () => {
+    const dir = (files: string[]) => {
+      const path = mkdtempSync(join(root, "suggest-"));
+      for (const file of files) writeFileSync(join(path, file), "");
+      return path;
+    };
+    expect(suggestSetupScript(dir(["package.json", "bun.lock"]))).toBe("bun install");
+    expect(suggestSetupScript(dir(["Cargo.toml"]))).toBe("cargo fetch");
+    expect(suggestSetupScript(dir(["pyproject.toml", "uv.lock"]))).toBe("uv sync");
+    expect(suggestSetupScript(dir(["go.mod"]))).toBe("go mod download");
+    expect(suggestSetupScript(dir(["README.md"]))).toBeNull();
+  });
+
+  test("scripts run in a login POSIX shell, or cmd on Windows", () => {
+    expect(setupScriptInvocation("a\nb", "darwin", "/bin/zsh")).toEqual({
+      command: "/bin/zsh",
+      args: ["-l", "-c", "set -e\na\nb"],
+    });
+    // Shells with other syntax (fish, nu) fall back to sh.
+    expect(setupScriptInvocation("a", "darwin", "/opt/homebrew/bin/fish").command).toBe("/bin/sh");
+    expect(setupScriptInvocation("rem note\n# note\nnpm ci\n\nnpm run build", "win32")).toEqual({
+      command: "cmd.exe",
+      args: ["/d", "/s", "/c", "npm ci && npm run build"],
+    });
   });
 });

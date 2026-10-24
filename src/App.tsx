@@ -478,8 +478,9 @@ export default function App() {
     void useWorktreeStore.getState().syncSelections();
   }, [snapshotThreadId, snapshotCwd]);
 
-  // Surface the background dependency install that follows a worktree create,
-  // so the user knows when the workspace is actually ready to run.
+  // Surface the background setup that follows a worktree create, so the user
+  // knows when the workspace is actually ready to run. The advanced shell
+  // shows the same progress on its workspace cards (workspace-setup-store).
   useEffect(() => {
     if (!window.omni?.worktrees?.onSetupProgress) return;
     return window.omni.worktrees.onSetupProgress((progress) => {
@@ -487,23 +488,28 @@ export default function App() {
       // Remote/phone workspaces set up in the background; only a failure is
       // worth interrupting the desktop user for.
       if (progress.activation === "background" && progress.status !== "failed") return;
+      const isScript = progress.source === "script";
       if (progress.status === "installing") {
         toast({
           icon: <GitBranch weight="duotone" className="size-5 text-foreground" />,
-          title: "Installing dependencies",
-          description: `Running ${progress.manager} install in ${progress.workspaceName}…`,
+          title: isScript ? "Setting up workspace" : "Installing dependencies",
+          description: isScript
+            ? `Running the project's setup script in ${progress.workspaceName}…`
+            : `Running ${progress.manager} install in ${progress.workspaceName}…`,
         });
       } else if (progress.status === "installed") {
         toast({
           icon: <GitBranch weight="duotone" className="size-5 text-foreground" />,
           title: "Workspace ready",
-          description: `${progress.workspaceName}: dependencies installed.`,
+          description: isScript
+            ? `${progress.workspaceName}: setup script finished.`
+            : `${progress.workspaceName}: dependencies installed.`,
         });
       } else if (progress.status === "failed") {
         toast({
           icon: <Bell weight="duotone" className="size-5 text-red-500" />,
-          title: "Dependency install failed",
-          description: `${progress.workspaceName}: ${progress.message ?? "Install did not complete."}`,
+          title: isScript ? "Setup script failed" : "Dependency install failed",
+          description: `${progress.workspaceName}: ${progress.message ?? "Setup did not complete."}`,
         });
       } else if (progress.status === "skipped" && progress.message) {
         toast({

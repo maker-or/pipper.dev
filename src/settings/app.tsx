@@ -17,7 +17,9 @@ import type { IconComponent } from "@/lib/icon-context";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useTabGestureStore } from "@/store/tab-gesture-store";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
-import type { WorkspaceDiskUsageReport } from "../../contracts/storage.ts";
+import type { WorkspaceDiskUsage, WorkspaceDiskUsageReport } from "../../contracts/storage.ts";
+import type { Project } from "../../contracts/projects.ts";
+import { SETUP_SCRIPT_HELP, SetupScriptEditor } from "@/components/setup-script-editor";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -56,6 +58,7 @@ type SectionId =
   | "keyboard"
   | "power"
   | "remote"
+  | "projects"
   | "storage";
 
 const NAV_ITEMS: Array<{ id: SectionId; label: string }> = [
@@ -65,6 +68,7 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string }> = [
   { id: "accounts", label: "Account" },
   { id: "keyboard", label: "Keyboard & trackpad" },
   { id: "power", label: "Power" },
+  { id: "projects", label: "Projects" },
   { id: "storage", label: "Storage" },
   { id: "remote", label: "Remote" },
 ];
@@ -338,6 +342,10 @@ function AgentsSettingsSection() {
 }
 
 const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
+  projects: {
+    title: "Projects",
+    blurb: "Commands Pipper runs to prepare each new workspace of a project.",
+  },
   storage: {
     title: "Storage",
     blurb: "Control dependency installs and see what each workspace uses on disk.",
@@ -497,9 +505,72 @@ function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 10 ? 0 : 1)} ${units[unit]}`;
 }
 
+const workspaceTotal = (workspace: WorkspaceDiskUsage) =>
+  workspace.sourceBytes + workspace.dependencyBytes + workspace.buildBytes;
+
+interface ProjectUsageGroup {
+  projectId: string;
+  projectName: string;
+  totalBytes: number;
+  regenerableBytes: number;
+  workspaces: WorkspaceDiskUsage[];
+}
+
+function groupUsageByProject(workspaces: WorkspaceDiskUsage[]): ProjectUsageGroup[] {
+  const groups = new Map<string, ProjectUsageGroup>();
+  for (const workspace of workspaces) {
+    let group = groups.get(workspace.projectId);
+    if (!group) {
+      group = {
+        projectId: workspace.projectId,
+        projectName: workspace.projectName,
+        totalBytes: 0,
+        regenerableBytes: 0,
+        workspaces: [],
+      };
+      groups.set(workspace.projectId, group);
+    }
+    group.totalBytes += workspaceTotal(workspace);
+    group.regenerableBytes += workspace.dependencyBytes + workspace.buildBytes;
+    group.workspaces.push(workspace);
+  }
+  for (const group of groups.values()) {
+    group.workspaces.sort((a, b) => workspaceTotal(b) - workspaceTotal(a));
+  }
+  return [...groups.values()].sort((a, b) => b.totalBytes - a.totalBytes);
+}
+
+/** Share of one workspace's size: your files, then what an install or build recreates. */
+function UsageBar({
+  workspace,
+  scaleBytes,
+}: {
+  workspace: WorkspaceDiskUsage;
+  scaleBytes: number;
+}) {
+  const pct = (bytes: number) => (scaleBytes > 0 ? (bytes / scaleBytes) * 100 : 0);
+  return (
+    <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-surface-3" aria-hidden>
+      <div
+        className="h-full bg-foreground/70"
+        style={{ width: `${pct(workspace.sourceBytes)}%` }}
+      />
+      <div
+        className="h-full bg-muted-foreground/45"
+        style={{ width: `${pct(workspace.dependencyBytes)}%` }}
+      />
+      <div
+        className="h-full bg-muted-foreground/20"
+        style={{ width: `${pct(workspace.buildBytes)}%` }}
+      />
+    </div>
+  );
+}
+
 /**
- * Per-workspace disk usage, split into source and regenerable output. The
- * scan reads every file's size, so it only runs when the user asks.
+ * Per-workspace disk usage, grouped by project. Each workspace shows one total
+ * and a bar splitting it into its own files and what an install or build can
+ * recreate. The scan reads every file's size, so it only runs when asked.
  */
 function WorkspaceUsagePanel() {
   const [report, setReport] = useState<WorkspaceDiskUsageReport | null>(null);
@@ -517,11 +588,9 @@ function WorkspaceUsagePanel() {
       setScanning(false);
     }
   };
-  const workspaces = useMemo(
-    () =>
-      [...(report?.workspaces ?? [])].sort(
-        (a, b) => b.dependencyBytes + b.buildBytes - (a.dependencyBytes + a.buildBytes),
-      ),
+  const groups = useMemo(() => groupUsageByProject(report?.workspaces ?? []), [report]);
+  const largest = useMemo(
+    () => Math.max(0, ...(report?.workspaces ?? []).map(workspaceTotal)),
     [report],
   );
   return (
@@ -529,7 +598,7 @@ function WorkspaceUsagePanel() {
       <Elevated offset={1} className="mt-3 overflow-hidden rounded-xl border border-border/70">
         <SettingRow
           title="Workspace disk usage"
-          description="Shows each workspace’s own files separately from dependencies and build output, which an install or build can recreate. Git history is shared between workspaces and not counted. Nothing is deleted."
+          description="How much space each workspace takes, and how much of it an install or build could recreate. Nothing is deleted."
         >
           <Button
             disabled={scanning}
@@ -539,38 +608,58 @@ function WorkspaceUsagePanel() {
             {scanning ? "Measuring…" : report ? "Measure again" : "Measure"}
           </Button>
         </SettingRow>
-        {report && workspaces.length > 0 && (
-          <Table data-pipper-id="settings-workspace-usage-table">
-            <TableBody>
-              {workspaces.map((workspace, index) => (
-                <TableRow key={workspace.path} index={index}>
-                  <TableCell>
-                    <span className="font-medium text-foreground">{workspace.name}</span>
-                    <span
-                      className="mt-0.5 block truncate text-[11px] leading-4"
-                      title={workspace.path}
+        {report && groups.length > 0 && (
+          <div data-pipper-id="settings-workspace-usage-table">
+            <div className="flex items-center gap-4 border-t border-border/70 px-4 py-2 text-[11px] text-muted-foreground">
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-foreground/70" /> Your files
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-muted-foreground/45" /> Dependencies
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <span className="size-2 rounded-full bg-muted-foreground/20" /> Build output
+              </span>
+            </div>
+            {groups.map((group) => (
+              <div key={group.projectId} className="border-t border-border/70">
+                <div className="flex items-baseline justify-between gap-3 px-4 pt-3 pb-1">
+                  <span className="text-[12px] font-medium text-foreground">
+                    {group.projectName}
+                  </span>
+                  <span className="text-[11px] text-muted-foreground tabular-nums">
+                    {formatBytes(group.totalBytes)} · {formatBytes(group.regenerableBytes)} can be
+                    recreated
+                  </span>
+                </div>
+                <ul className="pb-2">
+                  {group.workspaces.map((workspace) => (
+                    <li
+                      key={workspace.path}
+                      className="flex items-center gap-3 px-4 py-1.5"
+                      title={`${workspace.path}\nYour files ${formatBytes(workspace.sourceBytes)} · dependencies ${formatBytes(workspace.dependencyBytes)} · build output ${formatBytes(workspace.buildBytes)}`}
                     >
-                      {workspace.projectName}
-                      {workspace.isProjectRoot ? " · main checkout" : ""}
-                      {workspace.truncated ? " · partial scan" : ""}
-                    </span>
-                  </TableCell>
-                  <TableCell className="w-[1%] text-right text-[11px] whitespace-nowrap">
-                    <span className="block text-foreground">
-                      {formatBytes(workspace.sourceBytes)} source
-                    </span>
-                    <span className="block">
-                      {formatBytes(workspace.dependencyBytes)} dependencies ·{" "}
-                      {formatBytes(workspace.buildBytes)} build
-                    </span>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                      <span className="w-[38%] min-w-0 truncate text-[12px] text-foreground">
+                        {workspace.isProjectRoot ? "Main checkout" : workspace.name}
+                        {workspace.truncated && (
+                          <span className="text-muted-foreground"> · partial</span>
+                        )}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <UsageBar workspace={workspace} scaleBytes={largest} />
+                      </div>
+                      <span className="w-16 shrink-0 text-right text-[12px] text-muted-foreground tabular-nums">
+                        {formatBytes(workspaceTotal(workspace))}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
         )}
       </Elevated>
-      {report && workspaces.length === 0 && (
+      {report && groups.length === 0 && (
         <p className="mt-2 text-[11px] text-muted-foreground" role="status">
           No Git workspaces found.
         </p>
@@ -643,8 +732,8 @@ function StorageView() {
     <>
       <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70">
         <SettingRow
-          title="Install dependencies automatically"
-          description="Each new workspace gets its own dependencies. Turn this off to save disk space, then run your package manager’s install command in a workspace when needed. Existing workspaces are kept."
+          title="Install JavaScript dependencies automatically"
+          description="For projects without a setup script: runs bun, pnpm, yarn or npm install in each new workspace. Turn this off to save disk space. Projects with a setup script (Settings → Projects) run that instead."
         >
           <Switch
             label="Install dependencies automatically"
@@ -680,6 +769,145 @@ function StorageView() {
       )}
       <WorkspaceUsagePanel />
     </>
+  );
+}
+
+function ProjectSetupScriptCard({ project }: { project: Project }) {
+  const [saved, setSaved] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const [suggested, setSuggested] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    window.omni.projects
+      .getSetupScript(project.id)
+      .then((state) => {
+        if (disposed) return;
+        setSaved(state.script);
+        setDraft(state.script ?? "");
+        setSuggested(state.suggested);
+      })
+      .catch(() => {
+        if (!disposed) setError("Could not load this project's setup script.");
+      })
+      .finally(() => {
+        if (!disposed) setLoading(false);
+      });
+    return () => {
+      disposed = true;
+    };
+  }, [project.id]);
+  const dirty = draft.trim() !== (saved ?? "");
+  const save = async (next: string | null) => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    setStatus(null);
+    try {
+      const stored = await window.omni.projects.setSetupScript(project.id, next);
+      setSaved(stored);
+      setDraft(stored ?? "");
+      setStatus(stored ? "Saved. New workspaces will run this script." : "Removed.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the setup script.");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <Elevated
+      offset={1}
+      className="overflow-hidden rounded-xl border border-border/70"
+      data-pipper-id="settings-project-setup-script"
+    >
+      <div className="flex flex-col gap-3 px-4 py-4">
+        <div className="min-w-0">
+          <div className="text-[13px] font-medium text-foreground">{project.name}</div>
+          <div
+            className="mt-0.5 truncate text-[11px] leading-4 text-muted-foreground"
+            title={project.path}
+          >
+            {project.path}
+          </div>
+        </div>
+        <SetupScriptEditor
+          value={draft}
+          onChange={(value) => {
+            setDraft(value);
+            setStatus(null);
+          }}
+          suggested={suggested}
+          disabled={loading || saving}
+        />
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] leading-4 text-muted-foreground" role="status">
+            {error ? (
+              <span className="text-destructive">{error}</span>
+            ) : (
+              (status ??
+              (saved
+                ? "Runs instead of the automatic dependency install."
+                : "No script: JavaScript projects get an automatic install."))
+            )}
+          </p>
+          <div className="flex shrink-0 items-center gap-2">
+            {saved && (
+              <Button variant="ghost" size="sm" disabled={saving} onClick={() => void save(null)}>
+                Remove
+              </Button>
+            )}
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={!dirty || loading || saving}
+              onClick={() => void save(draft.trim() ? draft : null)}
+            >
+              {saving ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Elevated>
+  );
+}
+
+function ProjectsView() {
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let disposed = false;
+    window.omni.projects
+      .list()
+      .then((list) => {
+        if (!disposed) setProjects(list);
+      })
+      .catch(() => {
+        if (!disposed) setError("Could not load projects.");
+      });
+    return () => {
+      disposed = true;
+    };
+  }, []);
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="px-1 text-[12px] leading-5 text-muted-foreground">{SETUP_SCRIPT_HELP}</p>
+      {projects?.map((project) => (
+        <ProjectSetupScriptCard key={project.id} project={project} />
+      ))}
+      {projects?.length === 0 && (
+        <p className="px-1 text-[11px] text-muted-foreground" role="status">
+          No projects yet. Add one from the launcher.
+        </p>
+      )}
+      {error && (
+        <p className="px-1 text-[11px] text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -763,6 +991,7 @@ export function SettingsApp() {
                 {section === "accounts" && <AccountsView />}
                 {section === "keyboard" && <KeyboardView />}
                 {section === "power" && <PowerView />}
+                {section === "projects" && <ProjectsView />}
                 {section === "storage" && <StorageView />}
                 {section === "remote" && <RemoteView />}
               </main>

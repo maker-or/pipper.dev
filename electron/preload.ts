@@ -73,6 +73,15 @@ export interface CreateProjectInput {
   name: string;
   path: string;
   icon: string;
+  /** Optional per-project setup script (one shell command per line). */
+  setupScript?: string | null;
+}
+
+export interface ProjectSetupScriptState {
+  /** The saved script, or null when the project has none. */
+  script: string | null;
+  /** A detected starting point (e.g. `bun install`); never run unless saved. */
+  suggested: string | null;
 }
 
 export type ThinkingLevel = "low" | "medium" | "high";
@@ -121,7 +130,8 @@ const api = {
   github: {
     getStatus: () => ipcRenderer.invoke("github:getStatus"),
     listRepositories: (page = 1) => ipcRenderer.invoke("github:listRepositories", page),
-    cloneRepository: (fullName: string) => ipcRenderer.invoke("github:cloneRepository", fullName),
+    cloneRepository: (fullName: string, options?: { setupScript?: string | null }) =>
+      ipcRenderer.invoke("github:cloneRepository", fullName, options),
   } satisfies GitHubApi,
   window: {
     /** Report document.visibilityState so main can gate hidden-window traffic. */
@@ -226,6 +236,12 @@ const api = {
     create: (input: CreateProjectInput): Promise<Project> =>
       ipcRenderer.invoke("projects:create", input),
     getActive: (): Promise<Project | null> => ipcRenderer.invoke("projects:getActive"),
+    getSetupScript: (projectId: string): Promise<ProjectSetupScriptState> =>
+      ipcRenderer.invoke("projects:getSetupScript", projectId),
+    setSetupScript: (projectId: string, script: string | null): Promise<string | null> =>
+      ipcRenderer.invoke("projects:setSetupScript", projectId, script),
+    suggestSetupScript: (path: string): Promise<string | null> =>
+      ipcRenderer.invoke("projects:suggestSetupScript", path),
     listFiles: (
       projectId?: string,
       worktreePath?: string | null,

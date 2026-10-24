@@ -34,6 +34,12 @@ import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import { ProviderLogo } from "@/components/provider-logos";
 import { useRunningAgentsByWorkspace } from "@/lib/running-agents";
 import { WorkspaceToneProvider } from "@/lib/workspace-tone-context";
+import { WorkspaceSetupBadge, WorkspaceSetupFailures } from "@/components/workspace-setup-feedback";
+import {
+  startWorkspaceSetupWatcher,
+  useWorkspaceSetupStore,
+  type WorkspaceSetupEntry,
+} from "@/store/workspace-setup-store";
 
 // Loaded on first terminal so xterm/WASM stay out of the startup chunk; App.tsx
 // lazy-loads the same module, and a static import here defeated that split.
@@ -268,6 +274,7 @@ function WorkspaceCard({
   selected,
   tone = "neutral",
   runningAgentIds = EMPTY_AGENT_IDS,
+  setup,
   onSelect,
   onDelete,
 }: {
@@ -277,6 +284,8 @@ function WorkspaceCard({
   tone?: HeaderTone;
   /** Agents mid-turn in this workspace right now. */
   runningAgentIds?: string[];
+  /** Background setup still running, or failed and not yet dismissed. */
+  setup?: WorkspaceSetupEntry;
   onSelect: () => void;
   onDelete?: () => void;
 }) {
@@ -339,6 +348,7 @@ function WorkspaceCard({
           {name}
           {selected && <span className="sr-only"> (active workspace)</span>}
         </span>
+        <WorkspaceSetupBadge entry={setup} />
         <RunningAgents agentIds={runningAgentIds} />
       </button>
       <button
@@ -396,6 +406,7 @@ export function AdvancedShell() {
     clearError: clearWorktreeError,
   } = useWorktreeStore();
   const loadProjectThreads = useThreadStore((state) => state.loadProjectThreads);
+  const setupByPath = useWorkspaceSetupStore((state) => state.entries);
   const [projects, setProjects] = useState<Project[]>([]);
   const [worktreesByProject, setWorktreesByProject] = useState<Record<string, Worktree[]>>({});
   const [dialogProject, setDialogProject] = useState<Project | null>(null);
@@ -480,6 +491,11 @@ export function AdvancedShell() {
       cancelled = true;
     };
   }, [projects]);
+
+  // Setup that follows a worktree create (script or dependency install) shows
+  // on the workspace's card while it runs and under the conversation if it
+  // fails. App.tsx keeps the toasts for the basic shell only.
+  useEffect(() => startWorkspaceSetupWatcher(), []);
 
   useEffect(() => {
     if (!activeProject) return;
@@ -798,6 +814,7 @@ export function AdvancedShell() {
                                     normalizeWorkspacePath(worktree.path, activeProject.path),
                                   ) ?? EMPTY_AGENT_IDS
                                 }
+                                setup={setupByPath[worktree.path]}
                                 onSelect={() => void selectWorkspace(activeProject, worktree.path)}
                                 onDelete={() => void deleteWorkspace(activeProject, worktree)}
                               />
@@ -884,6 +901,7 @@ export function AdvancedShell() {
                       );
                     })}
                   </div>
+                  <WorkspaceSetupFailures projects={projects} />
                   <ThreadCompletionDock projects={projects} />
                 </section>
                 <Sidebar side="right" collapsible="offcanvas" rail={false}>
