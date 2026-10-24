@@ -15,6 +15,7 @@ import type {
   PageHost,
 } from "./browser-page.ts";
 import {
+  BROWSER_SERVER_INSTRUCTIONS,
   BROWSER_TOOLS,
   ToolArgumentError,
   WIDGET_TOOLS,
@@ -156,7 +157,11 @@ export class BrowserService {
   private readonly isEnabled: () => boolean;
   private readonly baseDir: string | undefined;
   private readonly now: () => number;
-  private readonly server = new McpHttpServer({ name: "pipper-browser", version: "1.0.0" });
+  private readonly server = new McpHttpServer({
+    name: "pipper-browser",
+    version: "1.0.0",
+    instructions: BROWSER_SERVER_INSTRUCTIONS,
+  });
   private readonly sessions = new Map<string, SessionRecord>();
   private started: Promise<string> | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;

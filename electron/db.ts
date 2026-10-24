@@ -291,6 +291,14 @@ export function getDb(): DatabaseSync {
     CREATE INDEX IF NOT EXISTS idx_inline_widgets_thread
       ON inline_widgets(thread_id);
   `);
+  // Hash of the title and code show_widget was first called with. Some agents
+  // never forward MCP results, so the thread finds the widget from the call's
+  // input instead (see electron/widgets/widget-store.ts).
+  ensureColumn(
+    "inline_widgets",
+    "input_hash",
+    "ALTER TABLE inline_widgets ADD COLUMN input_hash TEXT;",
+  );
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS auth_users (

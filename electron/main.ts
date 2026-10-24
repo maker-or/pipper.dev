@@ -96,7 +96,7 @@ import {
 import { AgentManager } from "./agent";
 import { BrowserService } from "./browser/browser-service.ts";
 import { electronPageHost, isAgentBrowserWindow } from "./browser/electron-page.ts";
-import { buildWidgetDocument } from "./widgets/widget-frame.ts";
+import { resolveWidgetDocument } from "./widgets/widget-documents.ts";
 import { sqliteWidgetStore } from "./widgets/widget-store.ts";
 import { RemoteTaskError, getRemoteRequests } from "./remote-requests.ts";
 import { prepareIsolatedAgentTask } from "./isolated-agent-task.ts";
@@ -2753,18 +2753,8 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "widgets:getDocument",
-    (_event, id: unknown, theme: unknown): InlineWidgetDocument | null => {
-      if (typeof id !== "string" || !/^wdg_[a-f0-9]{32}$/.test(id)) return null;
-      const widget = sqliteWidgetStore.get(id);
-      if (!widget) return null;
-      return {
-        id: widget.id,
-        title: widget.title,
-        summary: widget.summary,
-        updatedAt: widget.updatedAt,
-        document: buildWidgetDocument(widget.code, theme === "dark" ? "dark" : "light"),
-      };
-    },
+    (_event, ref: unknown, theme: unknown): InlineWidgetDocument | null =>
+      resolveWidgetDocument(sqliteWidgetStore, ref, theme),
   );
 
   ipcMain.handle("browser:getConfig", () => {

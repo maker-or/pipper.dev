@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import { shapeMap, useShape } from "@/lib/shape-context";
 import { useAgentStore } from "@/store/agent-store";
-import type { InlineWidgetDocument } from "../../contracts/acp.ts";
+import type { InlineWidgetDocument, InlineWidgetRef } from "../../contracts/acp.ts";
 
 /**
  * A widget an agent showed with `show_widget`, rendered in a sandboxed frame.
@@ -36,10 +36,10 @@ function useDocumentTheme(): "light" | "dark" {
 }
 
 export function InlineWidget({
-  widgetId,
+  widgetRef,
   threadId,
 }: {
-  widgetId: string;
+  widgetRef: InlineWidgetRef;
   threadId: string | null;
 }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
@@ -53,12 +53,17 @@ export function InlineWidget({
   // changes are posted to the frame instead of reloading it.
   const loadTheme = useRef(theme);
   loadTheme.current = theme;
+  // The ref object is rebuilt on every render; load once per widget.
+  const latestRef = useRef(widgetRef);
+  latestRef.current = widgetRef;
+  const refKey = "id" in widgetRef ? widgetRef.id : `${widgetRef.title}\0${widgetRef.code}`;
+  const widgetId = widget?.id ?? null;
 
   useEffect(() => {
     let disposed = false;
     setStatus((current) => (current === "ready" ? current : "loading"));
     window.omni.widgets
-      .getDocument(widgetId, loadTheme.current)
+      .getDocument(latestRef.current, loadTheme.current)
       .then((doc) => {
         if (disposed) return;
         setWidget(doc);
@@ -70,18 +75,17 @@ export function InlineWidget({
     return () => {
       disposed = true;
     };
-  }, [widgetId, revision]);
+  }, [refKey, revision]);
 
   // update_widget replaces the code; reload the frame when it does.
-  useEffect(
-    () =>
-      window.omni.agent.onEvent((event) => {
-        if (event.type === "widget-updated" && event.widgetId === widgetId) {
-          setRevision((value) => value + 1);
-        }
-      }),
-    [widgetId],
-  );
+  useEffect(() => {
+    if (!widgetId) return;
+    return window.omni.agent.onEvent((event) => {
+      if (event.type === "widget-updated" && event.widgetId === widgetId) {
+        setRevision((value) => value + 1);
+      }
+    });
+  }, [widgetId]);
 
   useEffect(() => {
     const frame = frameRef.current?.contentWindow;
@@ -134,7 +138,11 @@ export function InlineWidget({
   }
 
   return (
-    <figure data-pipper-id="inline-widget" data-widget-id={widgetId} className="m-0 w-full">
+    <figure
+      data-pipper-id="inline-widget"
+      data-widget-id={widgetId ?? undefined}
+      className="m-0 w-full"
+    >
       {widget && (
         <iframe
           ref={frameRef}

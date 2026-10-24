@@ -553,9 +553,9 @@ function MessageBody({
 
     return {
       allTraceParts,
-      bodyBlocks: buildMessageBodyBlocks(bodyParts),
+      bodyBlocks: buildMessageBodyBlocks(bodyParts, threadId),
     };
-  }, [messages, role]);
+  }, [messages, role, threadId]);
 
   if (role === "assistant") {
     const { allTraceParts, bodyBlocks } = assistantContent;
@@ -575,7 +575,7 @@ function MessageBody({
 
         {bodyBlocks.map((block, index) =>
           block.kind === "widget" ? (
-            <InlineWidget key={block.widgetId} widgetId={block.widgetId} threadId={threadId} />
+            <InlineWidget key={block.key} widgetRef={block.ref} threadId={threadId} />
           ) : (
             <div
               key={`text-${index}`}

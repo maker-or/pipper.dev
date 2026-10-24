@@ -32,6 +32,26 @@ function tool(
   };
 }
 
+/**
+ * What the model reads about this server as a whole: when to use widgets
+ * versus files, the order of the widget tools, and what the browser is for.
+ * Written as rules, not suggestions, so every model reads them the same way.
+ */
+export const BROWSER_SERVER_INSTRUCTIONS = [
+  "This client (Pipper) shows inline visual widgets in the user's thread and gives you a headless browser.",
+  "",
+  "Widgets:",
+  "- When the user asks for anything visual (a chart, graph, diagram, dashboard, visual report, comparison table or interactive explainer), answer with a widget. Also use one when numbers, structure or a process are clearer as a picture.",
+  "- Steps: call widget_guide once per conversation, draft the widget, call preview_widget until it reports clean, then call show_widget. The widget appears in the thread at the point in your reply where you call show_widget.",
+  "- show_widget is the only way to put a visual in front of the user. Do not write an HTML file, Markdown report or other artifact for the same content, and do not link one instead of showing the widget, unless the user explicitly asks for a file.",
+  "- Keep explanations in your reply text, not inside the widget. After show_widget, don't describe what the widget shows; add only what the visual can't say.",
+  "- To change a widget you showed, call update_widget with its id instead of showing a new one.",
+  "- Most replies need no widget: answer short questions, plain lists and code in text.",
+  "",
+  "Browser:",
+  "- Use browser_open, browser_snapshot, browser_click, browser_type and browser_screenshot to read web pages, check a local dev server (localhost works) or test a web app. Each session has its own private pages.",
+].join("\n");
+
 export const BROWSER_TOOLS: McpToolDefinition[] = [
   tool(
     "browser_open",
@@ -175,9 +195,11 @@ export const WIDGET_TOOLS: McpToolDefinition[] = [
 WIDGET_TOOLS.push(
   tool(
     "show_widget",
-    "Shows a visual widget inline in the thread: charts, diagrams, data tables, comparisons, " +
-      "stat summaries, and small interactive explainers. Use it when a picture is clearer than " +
-      "text. Don't use it for short answers, plain lists, prose, or code the user will copy. " +
+    "Shows a visual widget inline in the user's thread: charts, diagrams, dashboards, visual " +
+      "reports, data tables, comparisons, stat summaries and small interactive explainers. This " +
+      "is the only way to show the user a visual; use it instead of writing an HTML or Markdown " +
+      "report file unless the user asks for a file. Use it when a picture is clearer than text; " +
+      "don't use it for short answers, plain lists, prose, or code the user will copy. " +
       "Pass an HTML fragment or a single <svg> written to widget_guide's rules, and preview it " +
       "with preview_widget first. Don't set a height or width; the frame sizes itself. Put " +
       "explanations in your reply text, never inside the widget. Returns a widget id; the user " +

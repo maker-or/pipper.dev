@@ -408,6 +408,14 @@ export interface InlineWidgetRecord {
   updatedAt: number;
 }
 
+/**
+ * How the thread asks for a widget: by id when the agent forwarded the
+ * show_widget result, otherwise by the call's input.
+ */
+export type InlineWidgetRef =
+  | { id: string }
+  | { threadId: string | null; title: string; code: string };
+
 /** What the renderer loads to display a widget: its sandboxed document. */
 export interface InlineWidgetDocument {
   id: string;

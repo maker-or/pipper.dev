@@ -29,6 +29,11 @@ export interface McpToolResult {
 export interface McpServerInfo {
   name: string;
   version: string;
+  /**
+   * Sent as `instructions` in the initialize result. Clients that support it
+   * add it to the model's context, so it can say when to reach for the tools.
+   */
+  instructions?: string;
 }
 
 export interface McpEndpoint {
@@ -224,7 +229,8 @@ export class McpHttpServer {
           result: {
             protocolVersion: typeof requested === "string" ? requested : "2025-03-26",
             capabilities: { tools: { listChanged: false } },
-            serverInfo: this.serverInfo,
+            serverInfo: { name: this.serverInfo.name, version: this.serverInfo.version },
+            ...(this.serverInfo.instructions ? { instructions: this.serverInfo.instructions } : {}),
           },
         };
       }

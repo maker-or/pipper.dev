@@ -25,6 +25,7 @@ import type {
   AgentProbeResult,
   BrowserConfig,
   InlineWidgetDocument,
+  InlineWidgetRef,
   SubagentConfig,
   SubagentRunSnapshot,
 } from "../contracts/acp.ts";
@@ -523,8 +524,11 @@ const api = {
     listRuns: (): Promise<SubagentRunSnapshot[]> => ipcRenderer.invoke("subagents:listRuns"),
   },
   widgets: {
-    getDocument: (id: string, theme: "light" | "dark"): Promise<InlineWidgetDocument | null> =>
-      ipcRenderer.invoke("widgets:getDocument", id, theme),
+    getDocument: (
+      ref: InlineWidgetRef,
+      theme: "light" | "dark",
+    ): Promise<InlineWidgetDocument | null> =>
+      ipcRenderer.invoke("widgets:getDocument", ref, theme),
   },
   browser: {
     getConfig: (): Promise<BrowserConfig> => ipcRenderer.invoke("browser:getConfig"),

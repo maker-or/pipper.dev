@@ -1,50 +1,102 @@
 import { describe, expect, test } from "vitest";
-import { buildMessageBodyBlocks, widgetIdFromToolPart } from "./inline-widgets.ts";
+import { buildMessageBodyBlocks, widgetRefFromToolPart, widgetRefKey } from "./inline-widgets.ts";
 
 const ID = `wdg_${"a".repeat(32)}`;
 const OTHER = `wdg_${"b".repeat(32)}`;
 
-function shown(id: string, title = "mcp__pipper-browser__show_widget") {
+function forwarded(id: string, name = "mcp__pipper-browser__show_widget") {
   return {
     type: "toolCall",
-    id: `call-${id}`,
-    name: title,
+    name,
+    status: "completed",
+    args: { title: "x", widget_code: "<p>x</p>", summary: "x" },
     outputPreview: `pipper-widget:${id} The widget is now visible in the thread.`,
   };
 }
 
+/** Shape recorded from Gemini via the Antigravity adapter: no MCP result, nested input. */
+function geminiCall(code: string, status = "completed") {
+  return {
+    type: "toolCall",
+    name: "pipper-browser_show_widget",
+    status,
+    outputPreview: "Display inline visual report",
+    hasPayload: true,
+    args: {
+      arguments: { summary: "Dashboard.", title: "landing_page_skill_analysis", widget_code: code },
+    },
+  };
+}
+
 describe("inline widgets in the timeline", () => {
-  test("a show_widget call is found by its result, whatever the agent titles it", () => {
-    expect(widgetIdFromToolPart(shown(ID))).toBe(ID);
-    expect(widgetIdFromToolPart(shown(ID, "Show widget"))).toBe(ID);
+  test("a forwarded show_widget result is found by its marker, whatever the agent titles it", () => {
+    expect(widgetRefFromToolPart(forwarded(ID), "t1")).toEqual({ id: ID });
+    expect(widgetRefFromToolPart(forwarded(ID, "Show widget"), "t1")).toEqual({ id: ID });
   });
 
-  test("updates, unfinished calls and other tools are not widgets", () => {
+  test("agents that drop MCP results are matched by the call's input", () => {
+    expect(widgetRefFromToolPart(geminiCall("<div>report</div>"), "thread-1")).toEqual({
+      threadId: "thread-1",
+      title: "landing_page_skill_analysis",
+      code: "<div>report</div>",
+    });
+    const flat = {
+      type: "toolCall",
+      name: "Running show_widget",
+      status: "completed",
+      args: { title: "chart", widget_code: "<svg></svg>", summary: "s" },
+    };
+    expect(widgetRefFromToolPart(flat, null)).toEqual({
+      threadId: null,
+      title: "chart",
+      code: "<svg></svg>",
+    });
+  });
+
+  test("unfinished, failed, preview and update calls are not shown", () => {
+    expect(widgetRefFromToolPart(geminiCall("<p>x</p>", "in_progress"), "t")).toBeNull();
+    expect(widgetRefFromToolPart(geminiCall("<p>x</p>", "failed"), "t")).toBeNull();
+    const preview = { ...geminiCall("<p>x</p>"), name: "pipper-browser_preview_widget" };
+    expect(widgetRefFromToolPart(preview, "t")).toBeNull();
     expect(
-      widgetIdFromToolPart({ type: "toolCall", outputPreview: `pipper-widget-updated:${ID}` }),
+      widgetRefFromToolPart(
+        { type: "toolCall", status: "completed", outputPreview: `pipper-widget-updated:${ID}` },
+        "t",
+      ),
     ).toBeNull();
-    expect(widgetIdFromToolPart({ type: "toolCall", name: "show_widget" })).toBeNull();
-    expect(widgetIdFromToolPart({ type: "toolCall", outputPreview: "Read 3 files" })).toBeNull();
     expect(
-      widgetIdFromToolPart({ type: "toolCall", outputPreview: `see pipper-widget:${ID}` }),
+      widgetRefFromToolPart(
+        { type: "toolCall", status: "completed", outputPreview: `see pipper-widget:${ID}` },
+        "t",
+      ),
     ).toBeNull();
   });
 
   test("widgets sit between the text they were shown between", () => {
-    const blocks = buildMessageBodyBlocks([
-      { type: "text", text: "Here's the breakdown." },
-      { type: "toolCall", outputPreview: "Read package.json" },
-      shown(ID),
-      { type: "text", text: "Two things stand out." },
-      { type: "text", text: "First, latency." },
-      shown(OTHER),
-      shown(ID),
-    ]);
-    expect(blocks).toEqual([
-      { kind: "text", text: "Here's the breakdown." },
-      { kind: "widget", widgetId: ID },
-      { kind: "text", text: "Two things stand out.\n\nFirst, latency." },
-      { kind: "widget", widgetId: OTHER },
+    const blocks = buildMessageBodyBlocks(
+      [
+        { type: "text", text: "Here's the breakdown." },
+        { type: "toolCall", status: "completed", outputPreview: "Read package.json" },
+        forwarded(ID),
+        { type: "text", text: "Two things stand out." },
+        { type: "text", text: "First, latency." },
+        geminiCall("<p>chart</p>"),
+        forwarded(OTHER),
+        forwarded(ID),
+        geminiCall("<p>chart</p>"),
+      ],
+      "thread-1",
+    );
+    expect(blocks.map((block) => (block.kind === "text" ? block.text : block.key))).toEqual([
+      "Here's the breakdown.",
+      ID,
+      "Two things stand out.\n\nFirst, latency.",
+      widgetRefKey({
+        threadId: "thread-1",
+        title: "landing_page_skill_analysis",
+        code: "<p>chart</p>",
+      }),
+      OTHER,
     ]);
   });
 });

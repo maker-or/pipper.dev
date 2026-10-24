@@ -44,6 +44,7 @@ describe("client-hosted MCP http server", () => {
     expect(init.status).toBe(200);
     expect(init.json.result.protocolVersion).toBe("2025-06-18");
     expect(init.json.result.serverInfo.name).toBe("pipper-subagents");
+    expect(init.json.result.instructions).toBeUndefined();
     expect(init.json.result.capabilities.tools).toBeDefined();
 
     // initialized notification is acknowledged without a body
@@ -108,7 +109,11 @@ describe("client-hosted MCP http server", () => {
   });
 
   test("each instance identifies itself and passes image results through", async () => {
-    const browser = new McpHttpServer({ name: "pipper-browser", version: "1.0.0" });
+    const browser = new McpHttpServer({
+      name: "pipper-browser",
+      version: "1.0.0",
+      instructions: "Use show_widget for visuals.",
+    });
     try {
       await browser.start();
       browser.register("tok1", {
@@ -119,7 +124,8 @@ describe("client-hosted MCP http server", () => {
       });
       const url = browser.urlFor("tok1");
       const init = await rpc(url, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
-      expect(init.json.result.serverInfo.name).toBe("pipper-browser");
+      expect(init.json.result.serverInfo).toEqual({ name: "pipper-browser", version: "1.0.0" });
+      expect(init.json.result.instructions).toBe("Use show_widget for visuals.");
       const call = await rpc(url, {
         jsonrpc: "2.0",
         id: 2,

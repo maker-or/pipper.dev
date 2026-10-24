@@ -218,11 +218,24 @@ Where the code differs from the design above:
   schemes, Pipper's dev renderer origin, permissions and popups; crash handling;
   per-session call serialization; stale-ref errors.
 - **Shown widgets:** `show_widget` stores the code in the `inline_widgets` table
-  and returns `pipper-widget:<id>` as the first line of its result. That line
-  survives into the tool call's output preview for any agent, so the renderer
-  finds widgets there (`src/lib/inline-widgets.ts`) and shows them between the
-  turn's text, in order. `update_widget` replaces the code and emits a
-  `widget-updated` event so the frame reloads in place.
+  and returns `pipper-widget:<id>` as the first line of its result. The renderer
+  (`src/lib/inline-widgets.ts`) finds widgets two ways, because ACP adapters
+  report MCP calls differently:
+  - **By id:** when the adapter forwards the MCP result, the marker reaches the
+    tool call's output preview.
+  - **By input:** some adapters never forward MCP results (Gemini via
+    Antigravity puts the model's own label in the output). Every adapter keeps
+    the call's input, so a completed `show_widget` call is matched by its title
+    and code within the thread. Main stores a hash of the original input
+    (`input_hash`), so the match survives `update_widget`.
+
+  Widgets show between the turn's text, in order. `update_widget` replaces the
+  code and emits a `widget-updated` event so the frame reloads in place.
+
+- **Server instructions:** the MCP `initialize` result carries `instructions`
+  (`BROWSER_SERVER_INSTRUCTIONS` in `electron/browser/browser-tools.ts`): use a
+  widget for anything visual, the widget tool order, and not to write HTML or
+  Markdown report files instead of showing a widget.
 - **Thread frame:** `src/components/inline-widget.tsx` loads the document from
   `widgets:getDocument` into an `<iframe sandbox="allow-scripts">` (opaque
   origin, no navigation or popups). It accepts only resize, ready, openLink

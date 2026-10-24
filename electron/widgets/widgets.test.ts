@@ -191,3 +191,61 @@ describe("widget document for the thread", () => {
     expect(doc.match(/<\/script>/g)?.length).toBe(2);
   });
 });
+
+describe("finding a widget for the thread", () => {
+  test("by id, or by the show_widget input even after update_widget changed the code", async () => {
+    const { memoryWidgetStore } = await import("./widget-store.ts");
+    const { resolveWidgetDocument } = await import("./widget-documents.ts");
+    const store = memoryWidgetStore();
+    const id = `wdg_${"c".repeat(32)}`;
+    store.insert({
+      id,
+      threadId: "t1",
+      sessionId: "s1",
+      title: "report",
+      summary: "A report.",
+      code: "<p>v1</p>",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    store.update(id, { code: "<p>v2</p>", updatedAt: 2 });
+
+    expect(resolveWidgetDocument(store, { id }, "light")?.document).toContain("v2");
+    const byInput = resolveWidgetDocument(
+      store,
+      { threadId: "t1", title: "report", code: "<p>v1</p>" },
+      "dark",
+    );
+    expect(byInput?.id).toBe(id);
+    expect(byInput?.document).toContain("v2");
+    expect(byInput?.document).toContain('data-workspace-theme="dark"');
+  });
+
+  test("other threads, wrong input and malformed refs find nothing", async () => {
+    const { memoryWidgetStore } = await import("./widget-store.ts");
+    const { resolveWidgetDocument } = await import("./widget-documents.ts");
+    const store = memoryWidgetStore();
+    store.insert({
+      id: `wdg_${"d".repeat(32)}`,
+      threadId: "t1",
+      sessionId: "s1",
+      title: "report",
+      summary: "s",
+      code: "<p>v1</p>",
+      createdAt: 1,
+      updatedAt: 1,
+    });
+    expect(
+      resolveWidgetDocument(store, { threadId: "t2", title: "report", code: "<p>v1</p>" }, "light"),
+    ).toBeNull();
+    expect(
+      resolveWidgetDocument(
+        store,
+        { threadId: "t1", title: "report", code: "<p>other</p>" },
+        "light",
+      ),
+    ).toBeNull();
+    expect(resolveWidgetDocument(store, { id: "../../etc" }, "light")).toBeNull();
+    expect(resolveWidgetDocument(store, "wdg_x", "light")).toBeNull();
+  });
+});

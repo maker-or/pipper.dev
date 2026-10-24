@@ -32,6 +32,7 @@ import type {
   SessionConfigOption,
   BrowserConfig,
   InlineWidgetDocument,
+  InlineWidgetRef,
   SubagentConfig,
   SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
@@ -328,7 +329,10 @@ declare global {
         listRuns: () => Promise<SubagentRunSnapshot[]>;
       };
       widgets: {
-        getDocument: (id: string, theme: "light" | "dark") => Promise<InlineWidgetDocument | null>;
+        getDocument: (
+          ref: InlineWidgetRef,
+          theme: "light" | "dark",
+        ) => Promise<InlineWidgetDocument | null>;
       };
       browser: {
         getConfig: () => Promise<BrowserConfig>;
