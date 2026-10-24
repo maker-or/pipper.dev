@@ -239,7 +239,9 @@ describe("agent store streamed text coalescing", () => {
     expect(s.store.getState().pendingThreadTarget).toBe("thread-b");
     // While the switch is pending, the old thread's deltas are not buffered.
     s.update(text(" ignored"));
-    vi.runAllTimers();
+    // Past the stream flush window only: running every timer would also fire
+    // the pending switch's 240 s timeout.
+    vi.advanceTimersByTime(100);
     expect(s.entries()).toEqual(["agent_text:before abort, before switch"]);
     s.emit({ type: "session-state", state: sessionState("thread-b") });
     await switching;

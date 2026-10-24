@@ -235,3 +235,103 @@ describe("concurrent tab mutations", () => {
     expect(state.openThreadIds).toEqual(["b"]);
   });
 });
+
+describe("tabs for deleted threads", () => {
+  const live = new Set<string>();
+
+  beforeEach(async () => {
+    live.clear();
+    const { setLiveThreadIdsCheck } = await import("./open-tabs.ts");
+    setLiveThreadIdsCheck((ids) => new Set(ids.filter((id) => live.has(id))));
+  });
+
+  afterEach(async () => {
+    const { setLiveThreadIdsCheck } = await import("./open-tabs.ts");
+    setLiveThreadIdsCheck(null);
+  });
+
+  test("a thread deleted without closing its tab is gone from the next read and write", async () => {
+    const { openThreadTab, readOpenTabsState, setActiveThreadTab } = await import("./open-tabs.ts");
+    live.add("a").add("ghost").add("b");
+    await openThreadTab("a");
+    await openThreadTab("ghost");
+    await openThreadTab("b");
+    live.delete("ghost");
+
+    expect((await readOpenTabsState()).openThreadIds).toEqual(["b", "a"]);
+    const written = await setActiveThreadTab("a");
+    expect(written.openThreadIds).toEqual(["b", "a"]);
+    expect(written.threadSwitchHistory).not.toContain("ghost");
+  });
+
+  test("closing the active tab never falls back to a deleted thread", async () => {
+    const { openThreadTab, recordThreadSwitch, closeThreadTab } = await import("./open-tabs.ts");
+    live.add("real").add("ghost").add("closing");
+    await openThreadTab("real");
+    await openThreadTab("ghost");
+    await openThreadTab("closing");
+    // The deleted thread is the most recent other tab, so it would win.
+    await recordThreadSwitch("real");
+    await recordThreadSwitch("ghost");
+    await recordThreadSwitch("closing");
+    live.delete("ghost");
+
+    const state = await closeThreadTab("closing");
+    expect(state.openThreadIds).toEqual(["real"]);
+    expect(state.activeThreadId).toBe("real");
+  });
+
+  test("keeps every tab when the lookup fails", async () => {
+    const { openThreadTab, readOpenTabsState, setLiveThreadIdsCheck } =
+      await import("./open-tabs.ts");
+    live.add("a");
+    await openThreadTab("a");
+    setLiveThreadIdsCheck(() => {
+      throw new Error("database closed");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect((await readOpenTabsState()).openThreadIds).toEqual(["a"]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
+describe("activateTabAfterClose", () => {
+  function activator(switchThread: (id: string) => Promise<unknown>) {
+    return {
+      getState: () => ({ threadId: "closed" }),
+      switchThread: vi.fn(switchThread),
+      clearActiveThread: vi.fn(async () => {}),
+    };
+  }
+  const next = { openThreadIds: ["next"], activeThreadId: "next", threadSwitchHistory: [] };
+
+  test("a failed switch to the next tab does not fail the close", async () => {
+    const { activateTabAfterClose } = await import("./open-tabs.ts");
+    const manager = activator(async () => {
+      throw new Error("Thread not found: next");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await expect(activateTabAfterClose(manager, next)).resolves.toBeUndefined();
+      expect(manager.switchThread).toHaveBeenCalledWith("next");
+      expect(warn).toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  test("clears the active thread when no tab is left", async () => {
+    const { activateTabAfterClose } = await import("./open-tabs.ts");
+    const manager = activator(async () => {});
+    await activateTabAfterClose(manager, {
+      openThreadIds: [],
+      activeThreadId: null,
+      threadSwitchHistory: [],
+    });
+    expect(manager.clearActiveThread).toHaveBeenCalled();
+    expect(manager.switchThread).not.toHaveBeenCalled();
+  });
+});

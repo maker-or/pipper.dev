@@ -113,9 +113,12 @@ import {
   removeThreadTabs,
   openThreadTab,
   readOpenTabsState,
+  activateTabAfterClose,
   setActiveThreadTab,
+  setLiveThreadIdsCheck,
   setTabEventObserver,
 } from "./open-tabs";
+import { isActivationSuperseded } from "./activation.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
 import {
   captureAnalytics,
@@ -2498,10 +2501,7 @@ function registerIpc(): void {
     const manager = requireAgentManager();
     await manager.deleteThread(id);
     const next = await closeThreadTab(id, isPeer);
-    if (next.activeThreadId && manager.getState().threadId !== next.activeThreadId) {
-      await manager.switchThread(next.activeThreadId);
-    }
-    if (!next.activeThreadId) await manager.clearActiveThread();
+    await activateTabAfterClose(manager, next);
     broadcastOpenTabsChanged(mainWindow, next);
   });
 
@@ -2523,12 +2523,7 @@ function registerIpc(): void {
       console.warn("[IPC] closeThreadSession failed:", err);
     }
     const next = await closeThreadTab(threadId, isPeer);
-    if (next.activeThreadId && manager.getState().threadId !== next.activeThreadId) {
-      await manager.switchThread(next.activeThreadId);
-    }
-    if (!next.activeThreadId) {
-      await manager.clearActiveThread();
-    }
+    await activateTabAfterClose(manager, next);
     broadcastOpenTabsChanged(mainWindow, next);
     return next;
   });
@@ -2589,6 +2584,9 @@ function registerIpc(): void {
         success: true,
       });
     } catch (e: any) {
+      // A newer click took over this activation. That is the expected outcome
+      // of clicking quickly through tabs, not a failed switch.
+      if (isActivationSuperseded(e)) return;
       monitorService?.noteSwitchCompleted({
         threadId,
         durationMs: Date.now() - started,
@@ -3137,6 +3135,7 @@ app.whenReady().then(async () => {
   buildAppMenu();
   logStartupMilestone("database:init:start");
   getDb();
+  setLiveThreadIdsCheck((ids) => new Set(listThreadsByIds(ids).map((thread) => thread.id)));
   configureGithubPrSnapshotCache({
     read: getGithubPrSnapshot,
     write: saveGithubPrSnapshot,

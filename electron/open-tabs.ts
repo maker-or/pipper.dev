@@ -1,6 +1,7 @@
 import type { BrowserWindow } from "electron";
 import type { OpenTabsState } from "../contracts/threads.ts";
 import type { MonitorTabEvent } from "../contracts/monitor.ts";
+import { isActivationSuperseded } from "./activation.ts";
 import {
   applyNavigationCommit,
   mutateLaunchState,
@@ -77,9 +78,38 @@ function pickNextActiveThreadId(
   return openThreadIdsAfterClose[0] ?? null;
 }
 
+/** Ids from `ids` that still name a thread, or null to keep every id. */
+let liveThreadIds: ((ids: string[]) => Set<string>) | null = null;
+
+/**
+ * Register the check for which threads still exist. Tabs and history for a
+ * deleted thread are then dropped on every read and write: a thread removed
+ * without closing its tab (bulk cleanup, benchmark runs, older builds) would
+ * otherwise stay open and become the fallback when a neighbouring tab closes,
+ * and switching to it fails with "Thread not found".
+ */
+export function setLiveThreadIdsCheck(check: ((ids: string[]) => Set<string>) | null): void {
+  liveThreadIds = check;
+}
+
+function dropDeletedThreads(openThreadIds: string[], history: string[]): [string[], string[]] {
+  if (!liveThreadIds) return [openThreadIds, history];
+  let live: Set<string>;
+  try {
+    live = liveThreadIds([...openThreadIds, ...history]);
+  } catch (error) {
+    // Never close tabs because the lookup failed.
+    console.warn("[open-tabs] Could not check which tabs still have threads:", error);
+    return [openThreadIds, history];
+  }
+  return [openThreadIds.filter((id) => live.has(id)), history.filter((id) => live.has(id))];
+}
+
 function normalize(state: OpenTabsState): OpenTabsState {
-  const openThreadIds = compactIds(state.openThreadIds);
-  const history = compactIds(state.threadSwitchHistory).slice(0, MAX_HISTORY);
+  const [openThreadIds, history] = dropDeletedThreads(
+    compactIds(state.openThreadIds),
+    compactIds(state.threadSwitchHistory).slice(0, MAX_HISTORY),
+  );
   return {
     openThreadIds,
     activeThreadId:
@@ -175,6 +205,36 @@ export async function closeThreadTab(
   });
   notifyTabEvent("close", threadId, next);
   return next;
+}
+
+/** The part of the agent manager that activates a tab after a close. */
+export interface TabActivator {
+  getState(): { threadId: string | null };
+  switchThread(threadId: string): Promise<unknown>;
+  clearActiveThread(): Promise<void>;
+}
+
+/**
+ * Activate the tab that took over from a closed or deleted one. The close is
+ * already persisted, so a failed activation is logged instead of thrown:
+ * throwing would skip the tabs broadcast and leave the closed tab on screen.
+ * The renderer selects the new active tab itself and reports any error there.
+ */
+export async function activateTabAfterClose(
+  activator: TabActivator,
+  next: OpenTabsState,
+): Promise<void> {
+  try {
+    if (!next.activeThreadId) {
+      await activator.clearActiveThread();
+    } else if (activator.getState().threadId !== next.activeThreadId) {
+      await activator.switchThread(next.activeThreadId);
+    }
+  } catch (error) {
+    if (!isActivationSuperseded(error)) {
+      console.warn("[open-tabs] Could not activate the next tab after a close:", error);
+    }
+  }
 }
 
 /**
