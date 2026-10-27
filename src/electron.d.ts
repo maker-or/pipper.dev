@@ -1,4 +1,5 @@
 import type { Project, ProjectFileTreeSnapshot } from "../contracts/projects.ts";
+import type { FilePreviewInfo, FilePreviewTarget } from "../contracts/file-preview.ts";
 import type { DatabaseCompactionResult, WorkspaceDiskUsageReport } from "../contracts/storage.ts";
 import type { GitHubApi } from "../contracts/github.ts";
 import type {
@@ -153,10 +154,18 @@ declare global {
           requestId?: string | null,
         ) => Promise<string[]>;
         cancelListFiles?: (requestId: string) => void;
-        getFileTree: () => Promise<ProjectFileTreeSnapshot>;
+        getFileTree: (
+          projectId?: string | null,
+          worktreePath?: string | null,
+        ) => Promise<ProjectFileTreeSnapshot>;
         setActive: (projectId: string) => Promise<void>;
         onActiveChanged: (callback: (projectId: string) => void) => () => void;
         onListChanged: (callback: (project: Project) => void) => () => void;
+      };
+      files: {
+        stat: (target: FilePreviewTarget) => Promise<FilePreviewInfo>;
+        reveal: (target: FilePreviewTarget) => Promise<void>;
+        openExternal: (target: FilePreviewTarget) => Promise<void>;
       };
       worktrees: {
         getAutoInstall: () => Promise<boolean>;

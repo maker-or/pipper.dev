@@ -1,6 +1,6 @@
 import { memo, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CodeView, WorkerPoolContextProvider } from "@pierre/diffs/react";
-import { canUseWASM, parseDiffFromFile, type CodeViewDiffItem } from "@pierre/diffs";
+import { parseDiffFromFile, type CodeViewDiffItem } from "@pierre/diffs";
 import type { DiffFileEntry } from "@/store/diff-store";
 import { RowsIcon, ColumnsIcon } from "@phosphor-icons/react";
 import { useDiffStore } from "@/store/diff-store";
@@ -8,18 +8,7 @@ import { Button } from "@/components/ui/button";
 import { useTheme } from "@/lib/theme";
 import { Elevated } from "@/lib/elevated";
 import { workerFactory } from "@/lib/diff-worker";
-
-// Matches the Shiki theme pair used elsewhere for code (see shiki-code-block.tsx)
-// so diff syntax highlighting stays visually consistent with the rest of the app.
-const DIFF_THEMES = { light: "github-light", dark: "github-dark" } as const;
-
-// Highlights (WebAssembly, beta in @pierre/diffs 1.6) is far faster than Shiki
-// on large files. The worker pool is a singleton, so this is read once when it
-// first starts. Fall back to Shiki where WebAssembly with SIMD is unavailable.
-const DIFF_HIGHLIGHTER_OPTIONS = {
-  theme: DIFF_THEMES,
-  preferredHighlighter: canUseWASM() ? "highlights" : "shiki-js",
-} as const;
+import { CODE_HIGHLIGHTER_OPTIONS, CODE_THEMES } from "@/lib/code-highlighting";
 
 // The library's own theme layer re-declares --diffs-bg/-fg (and the
 // color-mix()'d variants derived from them) after our light/dark overrides,
@@ -98,7 +87,7 @@ export const DiffView = memo(function DiffView() {
   const options = useMemo(
     () => ({
       diffStyle: layout,
-      theme: DIFF_THEMES,
+      theme: CODE_THEMES,
       themeType: resolvedTheme,
       unsafeCSS: DIFF_UNSAFE_CSS,
       stickyHeaders: true,
@@ -157,7 +146,7 @@ export const DiffView = memo(function DiffView() {
         <div className="min-h-0 flex-1">
           <WorkerPoolContextProvider
             poolOptions={{ workerFactory }}
-            highlighterOptions={DIFF_HIGHLIGHTER_OPTIONS}
+            highlighterOptions={CODE_HIGHLIGHTER_OPTIONS}
           >
             <CodeView items={items} options={options} className="h-full w-full overflow-y-auto" />
           </WorkerPoolContextProvider>

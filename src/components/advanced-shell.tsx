@@ -16,6 +16,8 @@ import { orderWorktreesForDisplay } from "../../contracts/worktrees.ts";
 import { AgentView } from "@/components/agent-view";
 import { DiffIngestor } from "@/components/diff-ingestor";
 import { GlobalTabBar } from "@/components/global-tab-bar";
+import { useShowPreviewWorkspace } from "@/lib/file-preview-actions";
+import { PreviewLayer } from "@/components/file-preview/preview-layer";
 import { ThreadCompletionDock } from "@/components/thread-completion-dock";
 import { WorkspaceControlPanel, type HeaderTone } from "@/components/workspace-control-panel";
 import { Toaster } from "@/components/ui/toaster";
@@ -426,6 +428,7 @@ export function AdvancedShell() {
   const selectedPath = activeProject
     ? normalizeWorkspacePath(selectedWorktreePathByProject[activeProject.id], activeProject.path)
     : null;
+  useShowPreviewWorkspace(true, activeProject?.id ?? null, selectedPath);
   const selectedWorktree = useMemo(() => {
     if (!activeProject || !selectedPath) return null;
     return (
@@ -883,6 +886,7 @@ export function AdvancedShell() {
                         </div>
                       );
                     })}
+                    <PreviewLayer />
                   </div>
                   <ThreadCompletionDock projects={projects} />
                 </section>

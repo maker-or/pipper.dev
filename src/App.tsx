@@ -44,6 +44,9 @@ import {
 } from "@/lib/monitor-runtime-observer";
 import { useMonitorTabSync } from "@/lib/monitor-tab-sync";
 import { AdvancedShell } from "@/components/advanced-shell";
+import { useShowPreviewWorkspace } from "@/lib/file-preview-actions";
+import { PreviewLayer } from "@/components/file-preview/preview-layer";
+import { normalizeWorkspacePath } from "../contracts/workspace-scope.ts";
 import { useUiModeStore } from "@/store/ui-mode-store";
 
 const EMPTY_WORKTREES: Worktree[] = [];
@@ -411,6 +414,13 @@ export default function App() {
     null;
   const selectedWorktreePath =
     selectedWorktree?.path ?? targetWorktreePath ?? currentProject?.path ?? null;
+  // Previews follow the workspace the file tree lists. The advanced shell
+  // reports its own workspace, so this one stays out of it.
+  useShowPreviewWorkspace(
+    uiMode === "basic",
+    chromeProject?.id ?? null,
+    chromeProject ? normalizeWorkspacePath(selectedWorktreePath, chromeProject.path) : null,
+  );
   // Derive a real name from the path we already know, so the label is meaningful
   // even before the worktree list loads (or if it fails): the project root reads
   // as "main"; a linked worktree reads as its folder name. Never literal "Workspace".
@@ -437,12 +447,14 @@ export default function App() {
     .join(":");
 
   useEffect(() => {
+    // react-resizable-panels applies these values by position, in panel
+    // order (agent, diff, files), not by key: keep the keys in that order.
     const layout =
       workspaceLayoutsRef.current[workspaceLayoutKey] ??
       (showFileTreePanel
         ? showDiffSplit
-          ? { files: 15, agent: 34, diff: 51 }
-          : { files: 15, agent: 85 }
+          ? { agent: 34, diff: 51, files: 15 }
+          : { agent: 85, files: 15 }
         : showDiffSplit
           ? { agent: 40, diff: 60 }
           : { agent: 100 });
@@ -948,36 +960,6 @@ export default function App() {
           className="flex-1 flex min-h-0"
           data-pipper-id="workspace split"
         >
-          {showFileTreePanel && (
-            <Panel
-              key="files"
-              id="files"
-              defaultSize="15%"
-              minSize="12%"
-              maxSize="25%"
-              data-pipper-id="file tree panel"
-              className="relative z-10 overflow-hidden"
-            >
-              <section className="flex h-full w-full flex-col bg-surface-1">
-                <div className="min-h-0 flex-1 overflow-hidden">
-                  <Suspense fallback={null}>
-                    <ProjectFileTree
-                      projectName={chromeProject.name}
-                      reloadKey={`${chromeProject.id}:${selectedWorktreePath ?? chromeProject.path ?? ""}`}
-                    />
-                  </Suspense>
-                </div>
-              </section>
-            </Panel>
-          )}
-          {showFileTreePanel && (
-            <Separator
-              key="files-separator"
-              className="group relative w-px bg-border transition-colors data-[separator-state=drag]:bg-foreground/30 data-[separator-state=hover]:bg-foreground/20"
-            >
-              <div className="absolute inset-y-0 -left-1 -right-1 cursor-col-resize" />
-            </Separator>
-          )}
           <Panel
             key="agent"
             id="agent"
@@ -992,6 +974,9 @@ export default function App() {
             <div className="flex h-full w-full flex-col">
               <AgentView />
             </div>
+            {/* Inside the agent panel, not over the whole workspace, so the
+                file tree on the right stays clickable while previewing. */}
+            <PreviewLayer />
           </Panel>
           {showDiffSplit && (
             <Separator
@@ -1013,6 +998,39 @@ export default function App() {
                 <div className="flex-1 overflow-hidden min-h-0 rounded-md">
                   <Suspense fallback={null}>
                     <DiffView />
+                  </Suspense>
+                </div>
+              </section>
+            </Panel>
+          )}
+          {showFileTreePanel && (
+            <Separator
+              key="files-separator"
+              className="group relative w-px bg-border transition-colors data-[separator-state=drag]:bg-foreground/30 data-[separator-state=hover]:bg-foreground/20"
+            >
+              <div className="absolute inset-y-0 -left-1 -right-1 cursor-col-resize" />
+            </Separator>
+          )}
+          {showFileTreePanel && (
+            <Panel
+              key="files"
+              id="files"
+              defaultSize="15%"
+              minSize="12%"
+              maxSize="25%"
+              data-pipper-id="file tree panel"
+              className="relative z-10 overflow-hidden"
+            >
+              <section className="flex h-full w-full flex-col bg-surface-1">
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <Suspense fallback={null}>
+                    <ProjectFileTree
+                      projectId={chromeProject.id}
+                      worktreePath={normalizeWorkspacePath(
+                        selectedWorktreePath,
+                        chromeProject.path,
+                      )}
+                    />
                   </Suspense>
                 </div>
               </section>

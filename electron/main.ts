@@ -6,6 +6,7 @@ import {
   ipcMain,
   dialog,
   powerMonitor,
+  protocol,
   safeStorage,
 } from "electron";
 import { join, dirname, relative, resolve, isAbsolute } from "node:path";
@@ -26,6 +27,13 @@ import {
 } from "./launch-state";
 import { pickWorkspaceThread } from "../contracts/workspace-scope.ts";
 import { createProject, getProject, listProjects } from "./projects";
+import {
+  canOpenExternally,
+  FILE_PREVIEW_SCHEME,
+  FilePreviewService,
+  servePreviewFile,
+} from "./file-preview.ts";
+import type { FilePreviewTarget } from "../contracts/file-preview.ts";
 import { logMain } from "./main-log";
 import {
   continueWorktreeOnNewBranch,
@@ -302,6 +310,43 @@ async function listProjectFileTree(projectPath: string): Promise<ProjectFileTree
   return { paths, gitStatus };
 }
 let currentTheme: "light" | "dark" | "system" = "system";
+
+// Read-only project file previews. Must be registered before the app is
+// ready; `standard` + `secure` give it normal URL parsing and a secure
+// origin, and `stream` lets video and audio seek with range requests.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: FILE_PREVIEW_SCHEME,
+    privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true },
+  },
+]);
+const filePreview = new FilePreviewService({
+  getProjectPath: (projectId) => getProject(projectId)?.path ?? null,
+  listWorktreePaths: async (projectPath) =>
+    (await listWorktrees(projectPath)).map((worktree) => worktree.path),
+});
+
+/** Serve `pipper-file://` requests issued by `files:stat`, never anything else. */
+function registerFilePreviewProtocol(): void {
+  protocol.handle(FILE_PREVIEW_SCHEME, async (request) => {
+    const realPath = await filePreview.resolveRequest(request.url);
+    if (!realPath) return new Response("Not found", { status: 404 });
+    return servePreviewFile(realPath, request.headers.get("range"));
+  });
+}
+
+function filePreviewTarget(value: unknown): FilePreviewTarget {
+  const target = value as Partial<FilePreviewTarget> | null;
+  if (
+    !target ||
+    typeof target.projectId !== "string" ||
+    typeof target.path !== "string" ||
+    (target.worktreePath !== null && typeof target.worktreePath !== "string")
+  ) {
+    throw new Error("Invalid file target.");
+  }
+  return { projectId: target.projectId, worktreePath: target.worktreePath, path: target.path };
+}
 
 const benchmarkEnabled = process.env.PIPPER_BENCHMARK_MODE === "1";
 const isDev = !app.isPackaged && !benchmarkEnabled;
@@ -1829,7 +1874,39 @@ function registerIpc(): void {
     projectFileLister.cancel(`${event.sender.id}:${requestId}`);
   });
 
-  ipcMain.handle("projects:getFileTree", async () => {
+  ipcMain.handle(
+    "projects:getFileTree",
+    async (_event, projectId?: string | null, worktreePath?: string | null) => {
+      // A caller that names its workspace (the Files panel, the basic tree)
+      // gets that workspace's files, after checking it belongs to the project.
+      if (projectId) {
+        return listProjectFileTree(
+          await filePreview.workspaceRoot(projectId, worktreePath ?? null),
+        );
+      }
+      return listActiveFileTree();
+    },
+  );
+
+  ipcMain.handle("files:stat", (_event, target: unknown) =>
+    filePreview.stat(filePreviewTarget(target)),
+  );
+  ipcMain.handle("files:reveal", async (_event, target: unknown) => {
+    const { real } = await filePreview.resolve(filePreviewTarget(target));
+    shell.showItemInFolder(real);
+  });
+  ipcMain.handle("files:openExternal", async (_event, target: unknown) => {
+    const { real, kind } = await filePreview.resolve(filePreviewTarget(target));
+    // Only media and document formats: opening a script or executable with
+    // its default app would run it.
+    if (!canOpenExternally(real, kind)) {
+      throw new Error("This file type can only be revealed, not opened.");
+    }
+    const error = await shell.openPath(real);
+    if (error) throw new Error(error);
+  });
+
+  async function listActiveFileTree(): Promise<ProjectFileTreeSnapshot> {
     // Keep the flyout aligned with the currently selected worktree.
     const cwd = await requireAgentManager().getActiveCwd();
     if (cwd && fs.existsSync(cwd)) return listProjectFileTree(cwd);
@@ -1837,7 +1914,7 @@ function registerIpc(): void {
     const project = id ? getProject(id) : null;
     if (!project || !fs.existsSync(project.path)) return { paths: [], gitStatus: [] };
     return listProjectFileTree(project.path);
-  });
+  }
 
   ipcMain.handle(
     "projects:create",
@@ -3325,6 +3402,7 @@ app.whenReady().then(async () => {
     broadcastProgress: (progress) => broadcastToWindows("launcher-update:progress", progress),
   });
   registerIpc();
+  registerFilePreviewProtocol();
 
   logStartupMilestone("launch-state:read:start");
   const state = await readLaunchState();

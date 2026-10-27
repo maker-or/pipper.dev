@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowsClockwise,
   ArrowUpRight,
@@ -27,6 +27,7 @@ import {
 } from "@/lib/workspace-agent-prompt";
 import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import { WorkspacePrDetail, type PrStatusItem } from "@/components/workspace-pr-detail";
+import { openFilePreview } from "@/lib/file-preview-actions";
 import { SplitButton, type SplitMenuItem } from "@/components/workspace-split-button";
 
 /**
@@ -199,7 +200,12 @@ function prBlocker(status: WorkspaceGitStatus): string | null {
 /** Git work currently delegated to this workspace's agent thread. */
 type AgentTask = "commit" | "commitPush" | "getLatest";
 
-type PanelTab = "check" | "changes";
+// Loaded when the Files tab first opens, keeping the tree out of the panel's chunk.
+const ProjectFileTree = lazy(() =>
+  import("@/components/project-file-tree").then((m) => ({ default: m.ProjectFileTree })),
+);
+
+type PanelTab = "check" | "changes" | "files";
 
 /** Where the Changes tab reads its file list from. */
 type ChangesSource = "turn" | "git";
@@ -1051,11 +1057,32 @@ export function WorkspaceControlPanel({
           Workflow
         </div>
       ) : null}
-      <div className="flex min-h-0 flex-1 flex-col overflow-y-auto pb-4">
-        {!project || !worktreePath ? (
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col",
+          // The file tree scrolls itself; everything else scrolls the panel.
+          (tab === "files" && status) || (project && !worktreePath)
+            ? "overflow-hidden"
+            : "overflow-y-auto pb-4",
+        )}
+      >
+        {!project ? (
           <p className="px-4 text-xs leading-5 text-muted-foreground">
             Select a workspace to see its git state.
           </p>
+        ) : !worktreePath ? (
+          // The project root has no workspace card or git panel, but its
+          // files must still be browsable.
+          <div className="flex min-h-0 flex-1 flex-col gap-2">
+            <p className="px-4 text-xs leading-5 text-muted-foreground">
+              Select a workspace to see its git state. Project files:
+            </p>
+            <div className="min-h-0 flex-1" data-pipper-id="workspace-files">
+              <Suspense fallback={null}>
+                <ProjectFileTree projectId={project.id} worktreePath={null} />
+              </Suspense>
+            </div>
+          </div>
         ) : !status ? (
           <div className="flex flex-col gap-2 px-4 pt-3">
             <p className="text-xs leading-5 text-muted-foreground">
@@ -1142,7 +1169,7 @@ export function WorkspaceControlPanel({
                 </div>
               </div>
               <div className="mt-3 flex items-center gap-4 text-[13px] font-medium leading-5">
-                {(["check", "changes"] as const).map((value) => (
+                {(["check", "changes", "files"] as const).map((value) => (
                   <button
                     key={value}
                     type="button"
@@ -1157,7 +1184,7 @@ export function WorkspaceControlPanel({
                         : "text-muted-foreground hover:text-foreground",
                     )}
                   >
-                    {value === "check" ? "Check" : "Changes"}
+                    {value === "check" ? "Check" : value === "changes" ? "Changes" : "Files"}
                   </button>
                 ))}
                 {tab === "changes" ? (
@@ -1226,7 +1253,9 @@ export function WorkspaceControlPanel({
               </div>
             </WorkspaceStateSurface>
 
-            <div className="flex flex-col gap-3 px-4 pt-3">
+            <div
+              className={cn("flex flex-col gap-3 px-4 pt-3", tab === "files" && "min-h-0 flex-1")}
+            >
               {hasTeamChanges(status) ? (
                 <WorkspaceStateSurface
                   tone="stale"
@@ -1284,7 +1313,16 @@ export function WorkspaceControlPanel({
                   Refresh failed: {error}. Showing the previous state.
                 </p>
               ) : null}
-              {tab === "check" ? (
+              {tab === "files" ? (
+                <div className="-mx-4 min-h-0 flex-1" data-pipper-id="workspace-files">
+                  <Suspense fallback={null}>
+                    <ProjectFileTree
+                      projectId={project.id}
+                      worktreePath={normalizeWorkspacePath(worktreePath, project.path)}
+                    />
+                  </Suspense>
+                </div>
+              ) : tab === "check" ? (
                 <div className="flex flex-col gap-3">
                   {status.pr ? (
                     <WorkspacePrDetail
@@ -1363,9 +1401,23 @@ export function WorkspaceControlPanel({
                                 {rowContent}
                               </button>
                             ) : (
-                              <div title={file.path} className={rowClass}>
+                              <button
+                                type="button"
+                                title={file.path}
+                                className={rowClass}
+                                onClick={() =>
+                                  openFilePreview({
+                                    projectId: project.id,
+                                    worktreePath: normalizeWorkspacePath(
+                                      worktreePath,
+                                      project.path,
+                                    ),
+                                    path: file.path,
+                                  })
+                                }
+                              >
                                 {rowContent}
-                              </div>
+                              </button>
                             )}
                           </li>
                         );
