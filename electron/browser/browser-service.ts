@@ -34,7 +34,7 @@ import { checkUrl, normalizeUserUrl, type UrlDecision } from "./url-policy.ts";
 
 /**
  * Headless browser pages for ACP agents, exposed as a client-hosted MCP
- * server (same per-session endpoint pattern as SubagentManager).
+ * server (same per-session endpoint pattern as AgentTaskService).
  *
  * Invariants:
  * - Every page belongs to exactly one session token and lives in that

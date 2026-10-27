@@ -10,6 +10,8 @@ export const ACP_PROMPT_TIMEOUT_MS =
 export interface QueuedPrompt {
   blocks: ContentBlock[];
   streamingBehavior?: "followUp" | "steer";
+  /** Who asked for this turn; agent-task notes and briefs are not the user. */
+  origin?: "user" | "agent-task";
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ACP prompt result shape varies by agent
   resolve: (result: any) => void;
   reject: (error: unknown) => void;
@@ -28,7 +30,7 @@ export class PromptScheduler {
   /** Queue a prompt and hand back the promise the caller awaits. */
   enqueue(
     threadId: string,
-    prompt: Pick<QueuedPrompt, "blocks" | "streamingBehavior">,
+    prompt: Pick<QueuedPrompt, "blocks" | "streamingBehavior" | "origin">,
   ): Promise<any> {
     return new Promise((resolve, reject) => {
       const queue = this.queued.get(threadId) ?? [];

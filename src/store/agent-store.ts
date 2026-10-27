@@ -12,8 +12,8 @@ import type {
   AuthMethod,
   AvailableCommand,
   SessionConfigOption,
-  SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
+import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import {
   createChatProjector,
   projectToolResultMessages,
@@ -117,8 +117,8 @@ interface AgentState {
   threadToolCalls: Record<string, Record<string, AcpToolCallState>>;
   /** Renderer-visible switch target; null once main has authoritatively settled. */
   pendingThreadTarget: string | null;
-  /** Subagent runs spawned via the client-hosted spawn_subagent tool. */
-  subagentRuns: SubagentRunSnapshot[];
+  /** Recent tasks (child threads) started through the pipper-agents tools. */
+  agentTasks: AgentTaskSnapshot[];
   permissionRequest: AcpPermissionRequest | null;
   /** Pending questions from agents (mapped from ACP request_permission),
    *  in arrival order. Multiple background threads can each raise a question;
@@ -554,10 +554,10 @@ function applyBridgeEvent(
     return { threadToolCalls };
   }
 
-  // Subagent activity is global (not per-thread); apply regardless of which
-  // thread is displayed or being switched into.
-  if (payload.type === "subagent-runs") {
-    return { subagentRuns: payload.runs };
+  // Tasks are global (not per-thread); apply regardless of which thread is
+  // displayed or being switched into.
+  if (payload.type === "agent-tasks") {
+    return { agentTasks: payload.tasks };
   }
 
   // Catalogs live in the model-catalog store (applied by the bridge listener).
@@ -852,7 +852,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   runningThreadIds: [],
   threadToolCalls: {},
   pendingThreadTarget: null,
-  subagentRuns: [],
+  agentTasks: [],
   permissionRequest: null,
   uiRequestQueue: [],
   uiRequest: null,
@@ -978,6 +978,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       if (window.omni.agent.getRunningThreads) {
         const runningThreadIds = await window.omni.agent.getRunningThreads();
         set({ runningThreadIds });
+      }
+      // Tasks only arrive as change events; seed them so nesting survives a reload.
+      if (window.omni.agentTasks?.list) {
+        set({ agentTasks: await window.omni.agentTasks.list() });
       }
     } catch (err) {
       set({

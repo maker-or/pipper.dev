@@ -27,9 +27,8 @@ import type {
   BrowserConfig,
   InlineWidgetDocument,
   InlineWidgetRef,
-  SubagentConfig,
-  SubagentRunSnapshot,
 } from "../contracts/acp.ts";
+import type { AgentTaskConfig, AgentTaskSnapshot } from "../contracts/agent-tasks.ts";
 import type {
   LauncherDownloadProgress,
   LauncherUpdateDiagnostics,
@@ -530,11 +529,11 @@ const api = {
       };
     },
   },
-  subagents: {
-    getConfig: (): Promise<SubagentConfig> => ipcRenderer.invoke("subagents:getConfig"),
-    setConfig: (partial: Partial<SubagentConfig>): Promise<SubagentConfig> =>
-      ipcRenderer.invoke("subagents:setConfig", partial),
-    listRuns: (): Promise<SubagentRunSnapshot[]> => ipcRenderer.invoke("subagents:listRuns"),
+  agentTasks: {
+    getConfig: (): Promise<AgentTaskConfig> => ipcRenderer.invoke("agentTasks:getConfig"),
+    setConfig: (partial: Partial<AgentTaskConfig>): Promise<AgentTaskConfig> =>
+      ipcRenderer.invoke("agentTasks:setConfig", partial),
+    list: (): Promise<AgentTaskSnapshot[]> => ipcRenderer.invoke("agentTasks:list"),
   },
   widgets: {
     getDocument: (

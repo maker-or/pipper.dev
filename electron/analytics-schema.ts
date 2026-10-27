@@ -43,7 +43,7 @@ export type AnalyticsEventName =
   | "prompt_timeout"
   | "tokens_reported"
   | "tool_call_finished"
-  | "subagent_run_completed"
+  | "agent_task_settled"
   | "agent_connected"
   | "agent_connection_failed"
   | "agent_switched"

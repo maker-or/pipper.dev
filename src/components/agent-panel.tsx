@@ -83,8 +83,10 @@ import {
 import { CONTINUE_COMMAND, matchAgentCommands, mergeAgentCommands } from "@/lib/agent-commands";
 import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subagent-orchestration";
 import { SubagentComposer, type SubagentComposerSubmit } from "@/components/subagent-composer";
-import { SubagentActivity } from "@/components/subagent-activity";
+import { AgentTaskActivity, AgentTaskOrigin } from "@/components/agent-task-activity";
 import { DiffSummaryCard } from "@/components/diff-summary-card";
+import { NextStepCard } from "@/components/next-step-card";
+import { nextStepFromParts } from "@/lib/next-step";
 /** Max agents shown in (and selectable from) the `/continue` picker. */
 const MAX_CONTINUE_AGENTS = 8;
 const SCROLL_LIVE_EDGE_PX = 24;
@@ -516,10 +518,12 @@ function MessageBody({
   diffSummary,
   traceDeckOpen,
   onTraceDeckOpenChange,
+  isLatestTurn = false,
 }: {
   messages: MessageLike[];
   threadId?: string | null;
   isStreaming?: boolean;
+  isLatestTurn?: boolean;
   activeMessages?: MessageLike[];
   diffSummary?: DiffTurnSummary;
   traceDeckOpen?: boolean;
@@ -528,7 +532,11 @@ function MessageBody({
   const role = messages[0]?.role;
   const assistantContent = useMemo(() => {
     if (role !== "assistant") {
-      return { allTraceParts: [] as any[], bodyBlocks: [] as MessageBodyBlock[] };
+      return {
+        allTraceParts: [] as any[],
+        bodyBlocks: [] as MessageBodyBlock[],
+        nextStep: null,
+      };
     }
 
     const allTraceParts: any[] = [];
@@ -554,11 +562,12 @@ function MessageBody({
     return {
       allTraceParts,
       bodyBlocks: buildMessageBodyBlocks(bodyParts, threadId),
+      nextStep: nextStepFromParts(bodyParts),
     };
   }, [messages, role, threadId]);
 
   if (role === "assistant") {
-    const { allTraceParts, bodyBlocks } = assistantContent;
+    const { allTraceParts, bodyBlocks, nextStep } = assistantContent;
 
     return (
       <div className="space-y-3">
@@ -590,6 +599,10 @@ function MessageBody({
         )}
 
         {!isStreaming && diffSummary && <DiffSummaryCard summary={diffSummary} />}
+
+        {!isStreaming && nextStep && (
+          <NextStepCard step={nextStep} threadId={threadId} answerable={isLatestTurn} />
+        )}
       </div>
     );
   }
@@ -683,7 +696,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     authMethods,
     uiRequest,
     uiRequestQueue,
-    subagentRuns,
+    agentTasks,
     connect,
     refresh,
     hydrateToolCalls,
@@ -2553,6 +2566,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                                   messages={messages}
                                   threadId={snapshot?.threadId ?? null}
                                   isStreaming={isStreaming}
+                                  isLatestTurn={virtualRow.index === allMessages.length - 1}
                                   activeMessages={activeMessages}
                                   diffSummary={
                                     firstToolCallId ? diffSummaries[firstToolCallId] : undefined
@@ -2748,10 +2762,17 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                         />
                       ) : null}
 
-                      <SubagentActivity
-                        runs={subagentRuns}
+                      <AgentTaskOrigin
+                        tasks={agentTasks}
+                        threadId={threadId || null}
+                        onOpenThread={(parentThreadId) => void selectThread(parentThreadId)}
+                        className="relative z-10 mb-1"
+                      />
+                      <AgentTaskActivity
+                        tasks={agentTasks}
                         agents={registryAgents}
-                        activeSessionId={activeSessionId}
+                        parentThreadId={threadId || null}
+                        onOpenThread={(childThreadId) => void selectThread(childThreadId)}
                         className="relative z-10 mb-1.5"
                       />
 

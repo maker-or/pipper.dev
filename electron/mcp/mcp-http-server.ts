@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 
 /**
  * Minimal MCP server over streamable HTTP (JSON response mode only, no SSE).
- * Each client-hosted tool family (subagents, browser) runs one instance and
+ * Each client-hosted tool family (agent tasks, browser) runs one instance and
  * registers a distinct endpoint per ACP session at `/mcp/<token>`, so tool
  * calls are attributable to the session that made them — that's what depth
  * limits, cancel cascades and per-session browser pages key off.
@@ -48,7 +48,7 @@ interface JsonRpcMessage {
   params?: Record<string, unknown>;
 }
 
-const DEFAULT_SERVER_INFO: McpServerInfo = { name: "pipper-subagents", version: "1.0.0" };
+const DEFAULT_SERVER_INFO: McpServerInfo = { name: "pipper", version: "1.0.0" };
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_IN_FLIGHT_PER_ENDPOINT = 16;
 
@@ -247,9 +247,9 @@ export class McpHttpServer {
           return rpcError(id, -32602, "tools/call requires a tool name");
         }
         // Calls block until the tool settles; there is no SSE progress
-        // stream. A client that disconnects or times out does not cancel the
-        // work: SubagentManager bounds each run with its own deadline and lets
-        // an identical retry attach to it (see its long-running call contract).
+        // stream. Tools keep their own calls short (agent tasks return at once
+        // and wait at most 240 s) and a client that gives up does not cancel
+        // the work behind them.
         try {
           const result = await endpoint.callTool(params.name, params.arguments ?? {});
           return { jsonrpc: "2.0", id, result };

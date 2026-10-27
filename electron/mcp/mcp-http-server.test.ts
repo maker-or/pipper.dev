@@ -4,8 +4,8 @@ import { McpHttpServer, type McpEndpoint } from "./mcp-http-server.ts";
 const endpoint: McpEndpoint = {
   listTools: () => [
     {
-      name: "spawn_subagent",
-      description: "spawn",
+      name: "start_task",
+      description: "start",
       inputSchema: { type: "object", properties: {} },
     },
   ],
@@ -43,7 +43,7 @@ describe("client-hosted MCP http server", () => {
     });
     expect(init.status).toBe(200);
     expect(init.json.result.protocolVersion).toBe("2025-06-18");
-    expect(init.json.result.serverInfo.name).toBe("pipper-subagents");
+    expect(init.json.result.serverInfo.name).toBe("pipper");
     expect(init.json.result.instructions).toBeUndefined();
     expect(init.json.result.capabilities.tools).toBeDefined();
 
@@ -56,7 +56,7 @@ describe("client-hosted MCP http server", () => {
     expect(notified.status).toBe(202);
 
     const list = await rpc(url, { jsonrpc: "2.0", id: 2, method: "tools/list" });
-    expect(list.json.result.tools.map((t: any) => t.name)).toEqual(["spawn_subagent"]);
+    expect(list.json.result.tools.map((t: any) => t.name)).toEqual(["start_task"]);
 
     const call = await rpc(url, {
       jsonrpc: "2.0",

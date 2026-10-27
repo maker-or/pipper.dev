@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import type { AcpBridgeEvent, AcpSessionState, SubagentRunSnapshot } from "../../contracts/acp.ts";
+import type { AcpBridgeEvent, AcpSessionState } from "../../contracts/acp.ts";
+import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 
 function sessionState(threadId: string): AcpSessionState {
   return {
@@ -24,18 +25,27 @@ function sessionState(threadId: string): AcpSessionState {
   };
 }
 
-function run(runId: string, status: SubagentRunSnapshot["status"]): SubagentRunSnapshot {
+function task(taskId: string, status: AgentTaskSnapshot["status"]): AgentTaskSnapshot {
   return {
-    runId,
-    parentSessionId: "session-thread-a",
-    sessionId: `sub-${runId}`,
+    taskId,
+    parentThreadId: "thread-a",
+    childThreadId: `child-${taskId}`,
+    projectId: "project-1",
     agentId: "codex-acp",
-    task: "audit the auth flow",
+    title: "audit the auth flow",
     status,
+    outcome: status === "idle" ? "done" : null,
+    waitingForPermission: false,
+    workspaceMode: "shared",
+    workspacePath: "/tmp/project",
+    branch: null,
     depth: 1,
-    startedAt: 1,
-    finishedAt: status === "running" || status === "queued" ? null : 2,
-    resultPreview: status === "finished" ? "done" : null,
+    turns: status === "idle" ? 1 : 0,
+    createdAt: 1,
+    updatedAt: 2,
+    reportPreview: null,
+    nextStep: null,
+    error: null,
   };
 }
 
@@ -49,7 +59,7 @@ async function loadStore() {
     permissionRequest: null,
     isConnecting: false,
     error: null,
-    subagentRuns: [],
+    agentTasks: [],
   });
   return mod.useAgentStore;
 }
@@ -59,8 +69,8 @@ afterEach(() => {
   vi.resetModules();
 });
 
-describe("subagent runs in the agent store", () => {
-  test("subagent-runs bridge events update the store, including while a thread switch is pending", async () => {
+describe("agent tasks in the agent store", () => {
+  test("agent-tasks bridge events update the store, including while a thread switch is pending", async () => {
     let bridgeHandler: ((payload: AcpBridgeEvent) => void) | null = null;
     let resolveSwitch: (() => void) | null = null;
     const switchGate = new Promise<void>((resolve) => {
@@ -85,19 +95,19 @@ describe("subagent runs in the agent store", () => {
     const store = await loadStore();
     await store.getState().connect();
 
-    bridgeHandler!({ type: "subagent-runs", runs: [run("r1", "running")] });
-    expect(store.getState().subagentRuns.map((r) => r.runId)).toEqual(["r1"]);
+    bridgeHandler!({ type: "agent-tasks", tasks: [task("t1", "running")] });
+    expect(store.getState().agentTasks.map((t) => t.taskId)).toEqual(["t1"]);
 
-    // Subagent activity is global — it must keep flowing while the panel is
-    // switching threads (when most per-thread events are deliberately dropped).
+    // Tasks are global — they must keep flowing while the panel is switching
+    // threads (when most per-thread events are deliberately dropped).
     const switching = store.getState().switchThread("thread-b");
     bridgeHandler!({
-      type: "subagent-runs",
-      runs: [run("r1", "finished"), run("r2", "queued")],
+      type: "agent-tasks",
+      tasks: [task("t1", "idle"), task("t2", "starting")],
     });
-    expect(store.getState().subagentRuns.map((r) => [r.runId, r.status])).toEqual([
-      ["r1", "finished"],
-      ["r2", "queued"],
+    expect(store.getState().agentTasks.map((t) => [t.taskId, t.status])).toEqual([
+      ["t1", "idle"],
+      ["t2", "starting"],
     ]);
 
     resolveSwitch!();

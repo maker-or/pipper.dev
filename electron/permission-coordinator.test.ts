@@ -124,7 +124,7 @@ describe("PermissionCoordinator", () => {
     });
   });
 
-  test("subagent auto-answer bypasses the pending queue entirely", async () => {
+  test("a policy answer bypasses the pending queue entirely", async () => {
     const auto = { outcome: { outcome: "cancelled" } } as acp.RequestPermissionResponse;
     const { coordinator, events } = makeCoordinator(auto);
 

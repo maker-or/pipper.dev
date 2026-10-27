@@ -36,7 +36,7 @@ const DOM_ATTRIBUTION_IDS = new Set([
   "diff-view",
   "project-file-tree",
   "global-tab-bar",
-  "subagent-activity",
+  "agent-task-activity",
   "agent-selector",
   "agent-terminal-output",
   "workspace-name-dialog",

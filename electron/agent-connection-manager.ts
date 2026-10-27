@@ -20,7 +20,7 @@ import type {
 import type { OpenTabsState, Thread } from "../contracts/threads.ts";
 import { commitThreadNavigation, readOpenTabsState } from "./open-tabs.ts";
 import { getProject } from "./projects.ts";
-import { getAppSetting, setAppSetting, getSelectedAgentIds } from "./db.ts";
+import { getAppSetting, setAppSetting, getSelectedAgentIds, getDb } from "./db.ts";
 import { setActiveProjectId } from "./session.ts";
 import {
   getThread,
@@ -34,7 +34,8 @@ import {
 } from "./threads.ts";
 import { commitNavigation, readLaunchState, updateLaunchSelection } from "./launch-state.ts";
 import { normalizeWorkspacePath, pickWorkspaceThread } from "../contracts/workspace-scope.ts";
-import { isLiveWorktree } from "./worktree-manager.ts";
+import { isLiveWorktree, listWorktrees } from "./worktree-manager.ts";
+import { createWorkspace } from "./workspace-lifecycle.ts";
 import { getAgentDescriptor, getDefaultAgentId, listRegisteredAgents } from "./agents/registry.ts";
 import { listAgentInstanceDescriptors, hasAgentInstances } from "./agent-instances.ts";
 import {
@@ -46,7 +47,10 @@ import {
 } from "./connection-lifecycle.ts";
 import type { BrowserService } from "./browser/browser-service.ts";
 import { listMcpServers, toAcpMcpServers } from "./mcp-servers.ts";
-import { SubagentManager } from "./subagents/subagent-manager.ts";
+import { AgentTaskService, type AgentTaskHost } from "./agent-tasks/agent-task-service.ts";
+import { AgentTaskStore } from "./agent-tasks/agent-task-store.ts";
+import { summarizeLastTurn } from "./agent-tasks/agent-task-receipt.ts";
+import { changedFiles, headSha } from "./agent-tasks/agent-task-git.ts";
 import { TerminalManager } from "./terminal-manager.ts";
 import type { AgentOsNotification, OsNotifier } from "./os-notifications.ts";
 import type { WindowAttentionSource, WindowVisibilitySource } from "./window-visibility.ts";
@@ -337,7 +341,7 @@ export class AgentConnectionManager {
   /** Per-session filesystem containment for agent reads/writes/terminals. */
   private readonly workspaceGuard = new WorkspaceGuard();
   private readonly permissions = new PermissionCoordinator({
-    autoResponse: (params) => this.subagents.autoPermissionResponse(params),
+    autoResponse: (params) => this.tasks.autoPermissionResponse(params),
     findThreadBySessionId: (sessionId) => this.findThreadBySessionId(sessionId),
     emit: (event) => this.emit(event),
     notifyIfHidden: (notification) => this.notifyIfHidden(notification),
@@ -348,8 +352,8 @@ export class AgentConnectionManager {
   private readonly terminalManager: TerminalManager;
   private broadcaster!: RendererBroadcaster;
   private lifecycle!: ConnectionLifecycle;
-  /** Client-hosted subagent tool: lets any session spawn sibling agent sessions. */
-  private readonly subagents: SubagentManager;
+  /** Client-hosted `pipper-agents` tools: threads start other agents as nested task threads. */
+  private readonly tasks: AgentTaskService;
   private readonly browser: BrowserService | null;
   /** Dedup key for the last broadcast running-threads set. */
   private lastRunningThreadsKey = "";
@@ -395,6 +399,8 @@ export class AgentConnectionManager {
     catalogPath?: string;
     /** Headless browser exposed to sessions over MCP; omitted in tests. */
     browser?: BrowserService | null;
+    /** Task rows; defaults to the app database (tests inject one). */
+    agentTaskStore?: AgentTaskStore;
   }) {
     this.browser = options.browser ?? null;
     // Downloads from agent pages are approved in the session's thread, like
@@ -449,22 +455,14 @@ export class AgentConnectionManager {
         this.emit({ type: "terminal-output", terminalId, output: chunk, append: true });
       },
     });
-    this.subagents = new SubagentManager({
-      host: {
-        acquireConnection: async (agentId) => {
-          const live = await this.acquireConnection(agentId);
-          return {
-            agentId: live.agentId,
-            agentCapabilities: live.agentCapabilities,
-            agent: live.agent,
-          };
-        },
-        baseMcpServers: (caps) => toAcpMcpServers(listMcpServers(), caps.mcpCapabilities),
-        emitEvent: (event) => this.emit(event),
-      },
+    this.tasks = new AgentTaskService({
+      host: this.agentTaskHost(),
+      store: options.agentTaskStore ?? new AgentTaskStore(() => getDb()),
       captureAnalytics: (name, properties) => this.captureAnalytics?.(name, properties),
     });
-    void this.subagents.init();
+    void this.tasks.init().catch((error: unknown) => {
+      console.warn("[agent-tasks] could not load task state:", error);
+    });
     this.lifecycle = new ConnectionLifecycle({
       terminal: this.terminalManager,
       clientVersion: options.clientVersion ?? "0.0.0",
@@ -502,16 +500,118 @@ export class AgentConnectionManager {
     this.scheduleIdleSweep();
   }
 
-  getSubagentConfig() {
-    return this.subagents.getConfig();
+  getAgentTaskConfig() {
+    return this.tasks.getConfig();
   }
 
-  setSubagentConfig(partial: Parameters<SubagentManager["setConfig"]>[0]) {
-    return this.subagents.setConfig(partial);
+  setAgentTaskConfig(partial: Parameters<AgentTaskService["setConfig"]>[0]) {
+    return this.tasks.setConfig(partial);
   }
 
-  getSubagentRuns() {
-    return this.subagents.getRunSnapshots();
+  getAgentTasks() {
+    return this.tasks.snapshots();
+  }
+
+  /** The connection manager's side of the agent-task service. */
+  private agentTaskHost(): AgentTaskHost {
+    return {
+      listAgents: () => this.listAgents(),
+      threadIdForSession: (sessionId) => this.findThreadBySessionId(sessionId),
+      threadInfo: (threadId) => {
+        const thread = getThread(threadId);
+        const project = thread ? getProject(thread.project_id) : null;
+        if (!thread || !project) return null;
+        return {
+          threadId,
+          projectId: project.id,
+          projectPath: project.path,
+          title: this.threadDisplayTitle(threadId),
+          cwd: this.sessions.get(threadId)?.cwd ?? thread.worktree_path ?? project.path,
+        };
+      },
+      createWorkspace: async (projectId, name, installDependencies) => {
+        const created = await createWorkspace({
+          projectId,
+          name,
+          setup: installDependencies ? "prepared" : "source-only",
+          activation: "background",
+        });
+        return {
+          path: created.worktree.path,
+          branch: created.worktree.branch,
+          rollback: created.rollback,
+        };
+      },
+      listWorkspaces: async (projectId) => {
+        const project = getProject(projectId);
+        if (!project) return [];
+        return (await listWorktrees(project.path)).map((worktree) => ({
+          path: worktree.path,
+          branch: worktree.branch,
+          isProjectRoot: Boolean(worktree.isProjectRoot),
+        }));
+      },
+      createThread: async ({ projectId, agentId, title, cwd, model }) => {
+        const project = getProject(projectId);
+        const inWorktree = Boolean(project && cwd !== project.path);
+        const thread = await this.createThread(
+          projectId,
+          title,
+          null,
+          agentId,
+          inWorktree ? cwd : null,
+          model,
+          { background: true, requireWorktree: inWorktree },
+        );
+        return { threadId: thread.id };
+      },
+      sendPrompt: (threadId, message, { mode, origin }) =>
+        this.sendPrompt(
+          {
+            threadId,
+            message,
+            streamingBehavior:
+              mode === "steer" ? "steer" : mode === "follow_up" ? "followUp" : undefined,
+          },
+          { background: true, origin },
+        ),
+      cancelTurn: (threadId) => this.abortThread(threadId),
+      isTurnInFlight: (threadId) => Boolean(this.sessions.get(threadId)?.promptInFlight),
+      lastTurn: (threadId) => {
+        const runtime = this.sessions.get(threadId);
+        return runtime ? summarizeLastTurn(runtime.slice) : null;
+      },
+      hasPendingPermission: (threadId) => this.permissions.listForThread(threadId).length > 0,
+      requestApproval: async (threadId, { title, detail }) => {
+        const sessionId =
+          this.sessions.get(threadId)?.agentSessionId ?? getThread(threadId)?.agent_session_id;
+        if (!sessionId) return "deny";
+        const response = await this.permissions.handle(
+          {
+            sessionId,
+            toolCall: {
+              toolCallId: `agent-task-${randomUUID()}`,
+              title,
+              kind: "other",
+              status: "pending",
+              rawInput: detail,
+            },
+            options: [
+              { optionId: "once", name: "Allow", kind: "allow_once" },
+              { optionId: "always", name: "Allow for this thread", kind: "allow_always" },
+              { optionId: "deny", name: "Don't allow", kind: "reject_once" },
+            ],
+          },
+          null,
+        );
+        if (response.outcome.outcome !== "selected") return "deny";
+        const choice = response.outcome.optionId;
+        return choice === "once" || choice === "always" ? choice : "deny";
+      },
+      headSha,
+      changedFiles,
+      emitTasks: (tasks) => this.emit({ type: "agent-tasks", tasks }),
+    };
   }
 
   listAgents(): AcpAgentDescriptor[] {
@@ -643,7 +743,7 @@ export class AgentConnectionManager {
     let attached: Awaited<ReturnType<typeof this.sessionMcpServers>> | null = null;
     let sessionId: string | null = null;
     try {
-      attached = await this.sessionMcpServers(live, cwd);
+      attached = await this.sessionMcpServers(live);
       const request = live.agent.request(acp.methods.agent.session.new, {
         cwd,
         mcpServers: attached.servers as never,
@@ -737,7 +837,6 @@ export class AgentConnectionManager {
   private providerBusy(agentId: string): boolean {
     if (this.providerLeases.has(agentId)) return true;
     if (this.catalogs.isRefreshing(agentId)) return true;
-    if (this.subagents.hasActiveRunsForAgent(agentId)) return true;
     for (const runtime of this.sessions.values()) {
       if (runtime.agentId === agentId) return true;
     }
@@ -1671,10 +1770,6 @@ export class AgentConnectionManager {
 
   private async handleSessionUpdate(sessionId: string, update: SessionUpdate): Promise<void> {
     const startedAt = performance.now();
-    // Headless subagent sessions accumulate into their run's slice; their
-    // streaming must not leak into thread timelines or the renderer.
-    if (this.subagents.handleSessionUpdate(sessionId, update)) return;
-
     const threadId = this.findThreadBySessionId(sessionId);
     let runtime: ThreadSessionRuntime | null = null;
     if (threadId && this.sessions.has(threadId)) {
@@ -1931,6 +2026,7 @@ export class AgentConnectionManager {
     if (!prompt) return;
 
     runtime.promptInFlight = true;
+    this.tasks.onTurnStarted(runtime.threadId, prompt.origin ?? "user");
     const turnStartedAt = Date.now();
     runtime.activeTurnId = `${runtime.threadId}:${turnStartedAt}:${++this.turnSequence}`;
     const toolCallsBefore = Object.keys(runtime.slice.toolCalls).length;
@@ -1966,6 +2062,7 @@ export class AgentConnectionManager {
           threadId: runtime.threadId,
           stopReason: result.stopReason,
         });
+        this.tasks.onTurnSettled(runtime.threadId, { stopReason: result.stopReason });
         // The user walked away: surface the settled turn at the OS level.
         this.notifyIfHidden({
           kind: "turn-completed",
@@ -2009,6 +2106,13 @@ export class AgentConnectionManager {
           threadTitle: this.threadDisplayTitle(runtime.threadId),
           detail: error instanceof Error ? error.message.slice(0, 140) : undefined,
         });
+        // A local abort rejects with this message; it is a stop, not a failure.
+        this.tasks.onTurnSettled(
+          runtime.threadId,
+          error instanceof Error && error.message === "agent prompt cancelled"
+            ? { stopReason: "cancelled" }
+            : { error: error instanceof Error ? error.message : String(error) },
+        );
         prompt.reject(error);
       })
       .finally(() => {
@@ -2051,51 +2155,52 @@ export class AgentConnectionManager {
   }
 
   /**
-   * User-configured MCP servers plus the client-hosted subagent tool endpoint
-   * (a fresh token per session so tool calls are attributable). The returned
-   * bind() must be called with the established ACP session id.
+   * User-configured MCP servers plus the client-hosted endpoints (agent tasks,
+   * browser), each with a fresh token per session so tool calls are
+   * attributable. The returned bind() must be called with the established ACP
+   * session id.
    */
-  private async sessionMcpServers(
-    live: LiveConnection,
-    cwd: string,
-  ): Promise<{
+  private async sessionMcpServers(live: LiveConnection): Promise<{
     servers: Array<Record<string, unknown>>;
     bind: (sessionId: string) => void;
     release: () => void;
   }> {
-    const base = this.mcpServersForConnection(live);
-    const attached = await this.subagents.attachMcpServers(base, live.agentCapabilities, {
-      cwd,
-      depth: 0,
-    });
-    let browser: { servers: Array<Record<string, unknown>>; token: string | null } = {
-      servers: attached.servers,
-      token: null,
-    };
+    let servers = this.mcpServersForConnection(live);
+    let tasksToken: string | null = null;
+    let browserToken: string | null = null;
+    try {
+      const attached = await this.tasks.attachMcpServers(servers, live.agentCapabilities);
+      servers = attached.servers;
+      tasksToken = attached.token;
+    } catch (error) {
+      // Optional like the browser: a session must still start without it.
+      console.warn("[agent-tasks] could not attach the agent-task MCP endpoint", error);
+    }
     try {
       if (this.browser) {
-        browser = await this.browser.attachMcpServers(attached.servers, live.agentCapabilities);
+        const attached = await this.browser.attachMcpServers(servers, live.agentCapabilities);
+        servers = attached.servers;
+        browserToken = attached.token;
       }
     } catch (error) {
-      // The browser is optional; a session must still start without it.
       console.warn("[browser] could not attach browser MCP endpoint", error);
     }
     return {
-      servers: browser.servers,
+      servers,
       bind: (sessionId) => {
-        if (attached.token) this.subagents.bindSession(attached.token, sessionId);
-        if (browser.token) this.browser?.bindSession(browser.token, sessionId);
+        if (tasksToken) this.tasks.bindSession(tasksToken, sessionId);
+        if (browserToken) this.browser?.bindSession(browserToken, sessionId);
       },
       release: () => {
-        if (attached.token) this.subagents.releaseTokenForSession(attached.token);
-        if (browser.token) this.browser?.releaseTokenForSession(browser.token);
+        if (tasksToken) this.tasks.releaseTokenForSession(tasksToken);
+        if (browserToken) this.browser?.releaseTokenForSession(browserToken);
       },
     };
   }
 
   /** Release every client-hosted MCP endpoint owned by a closed ACP session. */
   private releaseSessionMcp(sessionId: string): void {
-    this.subagents.releaseSessionMcp(sessionId);
+    this.tasks.releaseSessionMcp(sessionId);
     this.browser?.releaseSessionMcp(sessionId);
   }
 
@@ -2201,7 +2306,7 @@ export class AgentConnectionManager {
     live: LiveConnection,
     cwd: string,
   ): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> {
-    const attached = await this.sessionMcpServers(live, cwd);
+    const attached = await this.sessionMcpServers(live);
     const request = live.agent.request(acp.methods.agent.session.new, {
       cwd,
       mcpServers: attached.servers as never,
@@ -2266,7 +2371,7 @@ export class AgentConnectionManager {
     cwd: string,
     sessionId: string,
   ): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> {
-    const attached = await this.sessionMcpServers(live, cwd);
+    const attached = await this.sessionMcpServers(live);
     const request = live.agent.request(acp.methods.agent.session.load, {
       cwd,
       sessionId,
@@ -2296,7 +2401,7 @@ export class AgentConnectionManager {
     prevSessionId: string,
     cwd: string,
   ): Promise<{ sessionId: string; configOptions: SessionConfigOption[] }> {
-    const attached = await this.sessionMcpServers(live, cwd);
+    const attached = await this.sessionMcpServers(live);
     const request = live.agent.request(acp.methods.agent.session.resume, {
       sessionId: prevSessionId,
       cwd,
@@ -3160,6 +3265,7 @@ export class AgentConnectionManager {
     });
     this.emit({ type: "thread-closed", threadId });
     removeThreadRow(threadId);
+    this.tasks.onThreadDeleted(threadId);
 
     if (this.activeThreadId !== threadId) return;
     this.activeThreadId = null;
@@ -3260,7 +3366,7 @@ export class AgentConnectionManager {
 
   async sendPrompt(
     input: AcpPromptInput,
-    opts?: { background?: boolean; requireWorktree?: boolean },
+    opts?: { background?: boolean; requireWorktree?: boolean; origin?: "user" | "agent-task" },
   ): Promise<void> {
     return this.sendPromptInternal(input, true, opts);
   }
@@ -3268,7 +3374,7 @@ export class AgentConnectionManager {
   private async sendPromptInternal(
     input: AcpPromptInput,
     appendUserMessage: boolean,
-    opts?: { background?: boolean; requireWorktree?: boolean },
+    opts?: { background?: boolean; requireWorktree?: boolean; origin?: "user" | "agent-task" },
   ): Promise<void> {
     const threadId = input.threadId ?? this.activeThreadId;
     if (!threadId) throw new Error("No active thread");
@@ -3367,6 +3473,7 @@ export class AgentConnectionManager {
     const queued = this.prompts.enqueue(threadId, {
       blocks,
       streamingBehavior: input.streamingBehavior,
+      origin: opts?.origin,
     });
     console.log(
       `[sendPrompt] thread=${threadId} project=${runtime.projectId} cwd=${runtime.cwd} session=${runtime.agentSessionId.slice(0, 8)} msgLen=${(input.message ?? "").length} images=${input.images?.length ?? 0}`,
@@ -3476,8 +3583,6 @@ export class AgentConnectionManager {
       .notify(acp.methods.agent.session.cancel, { sessionId: runtime.agentSessionId })
       .catch(() => {});
     this.permissions.cancelForSession(runtime.agentSessionId);
-    // Cascade cancel to subagent runs this session spawned.
-    this.subagents.cancelRunsForParent(runtime.agentSessionId);
     // Cascade cancel to ACP agent terminals (session/cancel → terminal/kill).
     // Kill keeps terminalIds valid for final output queries; release is agent-owned.
     this.terminalManager.killRunning(runtime.agentSessionId);
@@ -3671,7 +3776,7 @@ export class AgentConnectionManager {
     if (this.idleSweepTimer) clearInterval(this.idleSweepTimer);
     this.idleSweepTimer = null;
     this.terminalManager.killAll();
-    this.subagents.dispose();
+    this.tasks.dispose();
     this.browser?.dispose();
     const flushed = await waitBounded(
       Promise.all([this.flushAllSnapshots(), this.catalogs.flush()]),
@@ -3705,7 +3810,7 @@ export class AgentConnectionManager {
       workspaceRoots: this.workspaceGuard.size,
       toolCallStarts: this.toolCallStarts.size,
       abortGenerations: this.abortGenerations.size,
-      subagentMcpEndpoints: this.subagents.endpointCount(),
+      agentTaskMcpEndpoints: this.tasks.endpointCount(),
       browserMcpEndpoints: this.browser?.endpointCount() ?? 0,
       browserPages: this.browser?.pageCount() ?? 0,
       snapshotTimers: this.snapshotTimers.size,

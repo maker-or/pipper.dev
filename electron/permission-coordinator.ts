@@ -15,7 +15,7 @@ interface PendingPermission {
 }
 
 export interface PermissionCoordinatorDeps {
-  /** Auto-answer for headless subagent sessions; null means "ask the user". */
+  /** Policy answer (agent-task workspace rules); null means "ask the user". */
   autoResponse: (params: acp.RequestPermissionRequest) => acp.RequestPermissionResponse | null;
   findThreadBySessionId: (sessionId: string) => string | null;
   emit: (event: AcpBridgeEvent) => void;
@@ -46,7 +46,7 @@ export class PermissionCoordinator {
     params: acp.RequestPermissionRequest,
     requestId: string | number | null,
   ): Promise<acp.RequestPermissionResponse> {
-    // Subagent sessions have no UI surface to answer on; resolve per config.
+    // A policy may answer without a prompt (see AgentTaskService).
     const auto = this.deps.autoResponse(params);
     if (auto) return Promise.resolve(auto);
 

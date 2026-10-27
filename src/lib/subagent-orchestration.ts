@@ -3,9 +3,9 @@ import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 /**
  * Client-side `/subagent` composer logic: the draft the morphed composer
  * edits, its validation, and the single orchestration prompt composed for
- * the orchestrator thread on submit. The orchestrator drives the actual
- * fan-out through the client-hosted `spawn_subagent` MCP tool
- * (docs/subagents.md); nothing here talks to subagents directly.
+ * the orchestrator thread on submit. The orchestrator starts each subagent
+ * as a task thread through the client-hosted `pipper-agents` MCP tools
+ * (docs/agent-tasks/design.md); nothing here talks to subagents directly.
  */
 
 export const SUBAGENT_COMMAND = "subagent";
@@ -64,11 +64,13 @@ function agentLabel(
 }
 
 const ORCHESTRATOR_PREAMBLE =
-  "You are acting as an orchestrator. You have a `spawn_subagent` tool (from the " +
-  "pipper-subagents MCP server) that runs another coding agent in its own isolated session " +
-  "and returns its final report; `list_subagents` shows what is available. Subagents share " +
-  "none of your context, so every task you delegate must be fully self-contained: include " +
-  "the background, relevant file paths, constraints, and the exact output you expect back.";
+  "You are acting as an orchestrator. The pipper-agents MCP server lets you start other " +
+  "coding agents as tasks: `start_task` opens a thread for one agent and returns at once, " +
+  "`wait_for_tasks` collects their receipts, and `list_agents` shows what is available. " +
+  "Subagents share none of your context, so every brief must be fully self-contained: " +
+  "include the background, relevant file paths, constraints, and the exact output you " +
+  'expect back. Give tasks that change files in parallel `workspace: "new"` so each gets ' +
+  "its own worktree.";
 
 /**
  * Compose the single prompt sent to the orchestrator thread. Pure so the
@@ -89,9 +91,9 @@ export function composeOrchestrationPrompt(
     const split =
       parallelCap != null
         ? `Decide how to split the goal below into at most ${parallelCap} subagent task${parallelCap === 1 ? "" : "s"}: ` +
-          `spawn up to ${parallelCap} subagent${parallelCap === 1 ? "" : "s"} ` +
-          `(running independent tasks in parallel). Do not spawn more than ${parallelCap}. `
-        : "Decide how to split the goal below into subagent tasks: spawn as many subagents as " +
+          `start up to ${parallelCap} subagent${parallelCap === 1 ? "" : "s"} ` +
+          `(running independent tasks in parallel). Do not start more than ${parallelCap}. `
+        : "Decide how to split the goal below into subagent tasks: start as many subagents as " +
           "genuinely help (running independent tasks in parallel), ";
     return [
       ORCHESTRATOR_PREAMBLE,
@@ -110,13 +112,14 @@ export function composeOrchestrationPrompt(
 
   return [
     ORCHESTRATOR_PREAMBLE,
-    "The user assigned the following subagents. Spawn each with spawn_subagent, using the " +
-      "listed agent_id, and run independent tasks in parallel. Enrich each task with any " +
+    "The user assigned the following subagents. Start each with start_task, using the " +
+      "listed agent_id, and run independent tasks in parallel. Enrich each brief with any " +
       "context the subagent will need before delegating it.",
     `<assignments>\n${taskList}\n</assignments>`,
     goal ? `<goal>\n${goal}\n</goal>` : null,
-    "When every subagent reports back, verify the results, resolve any conflicts between " +
-      "them, and synthesize a single final answer for the user.",
+    "Collect every receipt with wait_for_tasks, verify the results against the facts in each " +
+      "receipt, resolve any conflicts between them, and synthesize a single final answer for " +
+      "the user.",
   ]
     .filter(Boolean)
     .join("\n\n");

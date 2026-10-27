@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  ArrowElbowDownRightIcon,
   ChatCircleIcon,
   CircleNotchIcon,
   ClockCounterClockwiseIcon,
@@ -17,6 +18,7 @@ import { OPEN_TABS_QUERY_KEY } from "@/lib/thread-queries";
 import { Dropdown, DropdownLabel, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
 import type { Thread } from "../../contracts/threads.ts";
+import { nestThreads, taskStatusText } from "@/lib/agent-task-tree";
 
 const PAGE_SIZE = 5;
 
@@ -39,6 +41,7 @@ function formatTimestamp(ts: number | undefined): string {
 export function ProjectThreadsDropdown() {
   const activeProject = useProjectStore((s) => s.activeProject);
   const activeThreadId = useAgentStore((s) => s.snapshot?.threadId);
+  const agentTasks = useAgentStore((s) => s.agentTasks);
   const queryClient = useQueryClient();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -151,9 +154,11 @@ export function ProjectThreadsDropdown() {
     }
   };
 
+  const rows = useMemo(() => nestThreads(threads, agentTasks), [threads, agentTasks]);
+
   if (!activeProject) return null;
 
-  const checkedIndex = threads.findIndex((t) => t.id === activeThreadId);
+  const checkedIndex = rows.findIndex((row) => row.thread.id === activeThreadId);
 
   return (
     <div ref={containerRef} className="relative inline-block">
@@ -199,17 +204,21 @@ export function ProjectThreadsDropdown() {
               </DropdownLabel>
             ) : (
               <>
-                {threads.map((thread, idx) => (
-                  <MenuItem
-                    key={thread.id}
-                    index={idx}
-                    label={thread.title?.trim() || "Untitled thread"}
-                    description={formatTimestamp(thread.last_used_at || thread.created_at)}
-                    icon={ChatCircleIcon}
-                    checked={thread.id === activeThreadId}
-                    onSelect={() => void handleSelectThread(thread.id)}
-                  />
-                ))}
+                {rows.map(({ thread, depth, task }, idx) => {
+                  const when = formatTimestamp(thread.last_used_at || thread.created_at);
+                  return (
+                    <MenuItem
+                      key={thread.id}
+                      index={idx}
+                      label={thread.title?.trim() || "Untitled thread"}
+                      description={task ? `${taskStatusText(task)} · ${when}` : when}
+                      icon={depth > 0 ? ArrowElbowDownRightIcon : ChatCircleIcon}
+                      checked={thread.id === activeThreadId}
+                      onSelect={() => void handleSelectThread(thread.id)}
+                      style={depth > 0 ? { paddingLeft: `${depth * 12}px` } : undefined}
+                    />
+                  );
+                })}
 
                 {hasMore && (
                   <>

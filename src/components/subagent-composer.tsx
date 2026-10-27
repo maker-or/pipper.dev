@@ -14,7 +14,8 @@ import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
 import { createProviderLogoIcon } from "@/components/provider-logos";
 import type { IconComponent } from "@/lib/icon-context";
-import type { AcpAgentDescriptor, SubagentConfig } from "../../contracts/acp.ts";
+import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
+import type { AgentTaskConfig } from "../../contracts/agent-tasks.ts";
 import {
   composeOrchestrationPrompt,
   emptyOrchestrationDraft,
@@ -112,8 +113,8 @@ function ParallelTabs({ value, onChange }: { value: number; onChange: (count: nu
  * The composer, morphed into orchestration mode by `/subagent`: pick an
  * orchestrator, describe a goal (auto) or assign per-agent tasks (manual),
  * and submit one orchestration prompt to the orchestrator's thread. The
- * orchestrator does the actual spawning through the client-hosted
- * `spawn_subagent` tool.
+ * orchestrator starts each subagent as a task thread through the
+ * client-hosted `pipper-agents` tools (docs/agent-tasks/design.md).
  */
 export function SubagentComposer({
   agents,
@@ -134,11 +135,11 @@ export function SubagentComposer({
     ...emptyOrchestrationDraft(),
     goal: initialGoal?.trim() ?? "",
   }));
-  const [config, setConfig] = useState<SubagentConfig | null>(null);
+  const [config, setConfig] = useState<AgentTaskConfig | null>(null);
 
   useEffect(() => {
     let stale = false;
-    void window.omni?.subagents
+    void window.omni?.agentTasks
       ?.getConfig()
       .then((loaded) => {
         if (!stale) setConfig(loaded);
@@ -149,7 +150,7 @@ export function SubagentComposer({
     };
   }, []);
 
-  // Agents the user allows as subagents (subagents.json); orchestrator can be anyone.
+  // Agents the user allows as tasks (agent-tasks.json); orchestrator can be anyone.
   const subagentChoices = useMemo(() => {
     if (!config || config.allowedAgents === "all") return installed;
     const allowed = new Set(config.allowedAgents);
@@ -162,18 +163,18 @@ export function SubagentComposer({
   const submit = () => {
     if (!canSubmit) return;
     onSubmit({
-      prompt: composeOrchestrationPrompt(draft, installed, config?.maxConcurrent),
+      prompt: composeOrchestrationPrompt(draft, installed, config?.maxRunningPerThread),
       orchestratorAgentId: orchestratorId,
       draft,
     });
   };
 
-  const updateConfig = (partial: Partial<SubagentConfig>) => {
+  const updateConfig = (partial: Partial<AgentTaskConfig>) => {
     if (!config) return;
     const previous = config;
     const next = { ...config, ...partial };
     setConfig(next);
-    void window.omni?.subagents
+    void window.omni?.agentTasks
       ?.setConfig(partial)
       .then((saved) => setConfig(saved))
       .catch(() => setConfig(previous));
@@ -263,13 +264,13 @@ export function SubagentComposer({
         <div className="flex flex-wrap items-center gap-2 px-0.5">
           <span className="text-[11px] text-muted-foreground">Parallel</span>
           <ParallelTabs
-            value={config.maxConcurrent}
-            onChange={(maxConcurrent) => updateConfig({ maxConcurrent })}
+            value={config.maxRunningPerThread}
+            onChange={(maxRunningPerThread) => updateConfig({ maxRunningPerThread })}
           />
           <span className="min-w-0 text-[11px] leading-4 text-muted-foreground">
             {draft.mode === "auto"
               ? "How many subagents auto mode may spawn."
-              : "How many assigned subagents may run at once. Extra tasks wait."}
+              : "How many assigned subagents may run at once."}
           </span>
         </div>
       )}
@@ -381,13 +382,13 @@ export function SubagentComposer({
         <div className="flex min-w-0 items-center">
           {config && (
             <Switch
-              label={`Auto-approve: ${config.autoApprovePermissions ? "on" : "off"}`}
-              checked={config.autoApprovePermissions}
+              label={`Ask before starting: ${config.startApproval === "ask" ? "on" : "off"}`}
+              checked={config.startApproval === "ask"}
               onToggle={() =>
-                updateConfig({ autoApprovePermissions: !config.autoApprovePermissions })
+                updateConfig({ startApproval: config.startApproval === "ask" ? "allow" : "ask" })
               }
-              aria-label="Toggle auto-approve subagent permissions"
-              title="Auto-approve permission requests raised by subagent sessions"
+              aria-label="Toggle asking before the orchestrator starts each task"
+              title="Ask in this thread before the orchestrator starts each task"
               className="gap-2 px-1.5 py-0"
             />
           )}

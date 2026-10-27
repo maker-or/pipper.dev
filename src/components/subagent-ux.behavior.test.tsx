@@ -1,8 +1,9 @@
 import { describe, expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { AcpAgentDescriptor, SubagentRunSnapshot } from "../../contracts/acp.ts";
+import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
+import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import { SubagentComposer } from "@/components/subagent-composer";
-import { SubagentActivity } from "@/components/subagent-activity";
+import { AgentTaskActivity, AgentTaskOrigin } from "@/components/agent-task-activity";
 
 function agent(id: string, displayName: string, available = true): AcpAgentDescriptor {
   return { id, name: id, displayName, command: id, args: [], available };
@@ -22,24 +23,36 @@ function submitButtonTag(html: string): string {
   return html.slice(buttonIndex, html.indexOf(">", buttonIndex) + 1);
 }
 
-function runSnapshot(
-  runId: string,
-  status: SubagentRunSnapshot["status"],
-  finishedAt: number | null = null,
-): SubagentRunSnapshot {
+function task(
+  taskId: string,
+  status: AgentTaskSnapshot["status"],
+  extra: Partial<AgentTaskSnapshot> = {},
+): AgentTaskSnapshot {
   return {
-    runId,
-    parentSessionId: "parent",
-    sessionId: `sub-${runId}`,
+    taskId,
+    parentThreadId: "parent",
+    childThreadId: `child-${taskId}`,
+    projectId: "project",
     agentId: "codex-acp",
-    task: `task for ${runId}`,
+    title: `task for ${taskId}`,
     status,
+    outcome: status === "idle" ? "done" : null,
+    waitingForPermission: false,
+    workspaceMode: "shared",
+    workspacePath: "/repo",
+    branch: null,
     depth: 1,
-    startedAt: 1,
-    finishedAt,
-    resultPreview: null,
+    turns: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    reportPreview: null,
+    nextStep: null,
+    error: null,
+    ...extra,
   };
 }
+
+const noop = () => {};
 
 describe("SubagentComposer", () => {
   test("offers only installed agents as orchestrators and blocks submit until a goal exists", () => {
@@ -80,63 +93,68 @@ describe("SubagentComposer", () => {
   });
 });
 
-describe("SubagentActivity", () => {
-  test("renders nothing when there are no runs", () => {
-    expect(
-      renderToStaticMarkup(<SubagentActivity runs={[]} agents={AGENTS} activeSessionId="parent" />),
-    ).toBe("");
+describe("AgentTaskActivity", () => {
+  const render = (tasks: AgentTaskSnapshot[], parentThreadId: string | null = "parent") =>
+    renderToStaticMarkup(
+      <AgentTaskActivity
+        tasks={tasks}
+        agents={AGENTS}
+        parentThreadId={parentThreadId}
+        onOpenThread={noop}
+      />,
+    );
+
+  test("renders nothing when there are no tasks", () => {
+    expect(render([])).toBe("");
   });
 
-  test("shows only in-flight runs and hides settled ones immediately", () => {
-    const runs = [
-      runSnapshot("a1", "running"),
-      runSnapshot("a2", "queued"),
-      runSnapshot("s1", "finished", 10),
-      runSnapshot("s2", "failed", 20),
-      runSnapshot("s3", "cancelled", 30),
-      runSnapshot("s4", "finished", 40),
-    ];
-    const html = renderToStaticMarkup(
-      <SubagentActivity runs={runs} agents={AGENTS} activeSessionId="parent" />,
-    );
-    // In-flight runs for this turn…
-    expect(html).toContain("task for a1");
-    expect(html).toContain("task for a2");
-    // …settled runs never linger (next turn must not show prior activity).
-    expect(html).not.toContain("task for s1");
-    expect(html).not.toContain("task for s2");
-    expect(html).not.toContain("task for s3");
-    expect(html).not.toContain("task for s4");
-    // Items show the agent's display name and expose status for styling/tests.
+  test("shows running tasks and tasks waiting on someone, not settled ones", () => {
+    const html = render([
+      task("run", "running"),
+      task("start", "starting"),
+      task("perm", "running", { waitingForPermission: true }),
+      task("ask", "idle", { outcome: "needs_input" }),
+      task("done", "idle"),
+      task("fail", "failed"),
+      task("gone", "cancelled"),
+    ]);
+    expect(html).toContain("task for run");
+    expect(html).toContain("task for start");
+    expect(html).toContain("task for perm");
+    expect(html).toContain("Needs permission");
+    expect(html).toContain("task for ask");
+    expect(html).toContain("Has a question");
+    expect(html).not.toContain("task for done");
+    expect(html).not.toContain("task for fail");
+    expect(html).not.toContain("task for gone");
     expect(html).toContain("Codex");
-    expect(html).toContain('data-status="running"');
   });
 
-  test("renders nothing once every run has settled", () => {
-    const runs = [runSnapshot("s1", "finished", 10), runSnapshot("s2", "failed", 20)];
-    expect(
-      renderToStaticMarkup(
-        <SubagentActivity runs={runs} agents={AGENTS} activeSessionId="parent" />,
-      ),
-    ).toBe("");
-  });
-
-  test("scopes runs to the active thread's orchestrator session", () => {
-    const mine = { ...runSnapshot("mine", "running"), parentSessionId: "thread-1" };
-    const other = { ...runSnapshot("other", "running"), parentSessionId: "thread-2" };
-    const html = renderToStaticMarkup(
-      <SubagentActivity runs={[mine, other]} agents={AGENTS} activeSessionId="thread-1" />,
-    );
-    // Only the run spawned by the viewed thread shows; the other thread's
-    // run does not leak in after switching threads.
+  test("scopes tasks to the viewed thread", () => {
+    const html = render([
+      task("mine", "running"),
+      task("other", "running", { parentThreadId: "another-thread" }),
+    ]);
     expect(html).toContain("task for mine");
     expect(html).not.toContain("task for other");
   });
 
-  test("renders nothing when no thread session is active", () => {
-    const runs = [runSnapshot("a1", "running")];
+  test("renders nothing when no thread is being viewed", () => {
+    expect(render([task("a1", "running")], null)).toBe("");
+  });
+});
+
+describe("AgentTaskOrigin", () => {
+  test("shows only in a task's own thread, with its status and a way back", () => {
+    const tasks = [task("t1", "idle", { outcome: "needs_input" })];
+    const inChild = renderToStaticMarkup(
+      <AgentTaskOrigin tasks={tasks} threadId="child-t1" onOpenThread={noop} />,
+    );
+    expect(inChild).toContain("Task started by another agent");
+    expect(inChild).toContain("Has a question");
+    expect(inChild).toContain("Open parent thread");
     expect(
-      renderToStaticMarkup(<SubagentActivity runs={runs} agents={AGENTS} activeSessionId={null} />),
+      renderToStaticMarkup(<AgentTaskOrigin tasks={tasks} threadId="parent" onOpenThread={noop} />),
     ).toBe("");
   });
 });

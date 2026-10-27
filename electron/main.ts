@@ -2823,11 +2823,11 @@ function registerIpc(): void {
     windowVisibilityGate.setRendererVisible(visible === true);
   });
 
-  ipcMain.handle("subagents:getConfig", () => requireAgentManager().getSubagentConfig());
-  ipcMain.handle("subagents:setConfig", (_event, partial) =>
-    requireAgentManager().setSubagentConfig(partial),
+  ipcMain.handle("agentTasks:getConfig", () => requireAgentManager().getAgentTaskConfig());
+  ipcMain.handle("agentTasks:setConfig", (_event, partial) =>
+    requireAgentManager().setAgentTaskConfig(partial),
   );
-  ipcMain.handle("subagents:listRuns", () => requireAgentManager().getSubagentRuns());
+  ipcMain.handle("agentTasks:list", () => requireAgentManager().getAgentTasks());
 
   ipcMain.handle(
     "widgets:getDocument",

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { app } from "electron";
 import { join } from "node:path";
 import { ensureThreadSnapshotSchema } from "./thread-snapshot-schema.ts";
+import { ensureAgentTaskSchema } from "./agent-tasks/agent-task-store.ts";
 
 let db: DatabaseSync | null = null;
 
@@ -212,6 +213,8 @@ export function getDb(): DatabaseSync {
   // can paint synchronously; tool bodies and large images live in
   // generation-named body files (see thread-snapshot-store.ts).
   ensureThreadSnapshotSchema(db);
+  // Tasks a thread started through the pipper-agents MCP server.
+  ensureAgentTaskSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_agent_selections (

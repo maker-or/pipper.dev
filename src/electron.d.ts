@@ -34,9 +34,8 @@ import type {
   BrowserConfig,
   InlineWidgetDocument,
   InlineWidgetRef,
-  SubagentConfig,
-  SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
+import type { AgentTaskConfig, AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import type {
   LauncherDownloadProgress,
   LauncherUpdateDiagnostics,
@@ -332,10 +331,10 @@ declare global {
         reportEditorText: (text: string) => void;
         onEvent: (callback: (payload: AcpBridgeEvent) => void) => () => void;
       };
-      subagents: {
-        getConfig: () => Promise<SubagentConfig>;
-        setConfig: (partial: Partial<SubagentConfig>) => Promise<SubagentConfig>;
-        listRuns: () => Promise<SubagentRunSnapshot[]>;
+      agentTasks: {
+        getConfig: () => Promise<AgentTaskConfig>;
+        setConfig: (partial: Partial<AgentTaskConfig>) => Promise<AgentTaskConfig>;
+        list: () => Promise<AgentTaskSnapshot[]>;
       };
       widgets: {
         getDocument: (
