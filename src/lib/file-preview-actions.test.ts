@@ -134,7 +134,7 @@ describe("sendFileComments", () => {
     expect(status()).toBe("draft");
   });
 
-  test("a turn that fails before the agent took the comment puts it back and says so", async () => {
+  test("a failed turn keeps the comment sent and lets the user mark it unsent", async () => {
     const { sendFileComments, comment, status } = await setup();
     let failTurn: (error: Error) => void = () => {};
     sendWorkspaceAgentPrompt.mockResolvedValueOnce({
@@ -143,12 +143,17 @@ describe("sendFileComments", () => {
         failTurn = reject;
       }),
     });
-    const onUndelivered = vi.fn();
-    await sendFileComments({ projectId: "p1", worktreePath: null }, [comment], { onUndelivered });
+    const onTurnFailed = vi.fn();
+    await sendFileComments({ projectId: "p1", worktreePath: null }, [comment], { onTurnFailed });
+
+    // The turn can fail after the agent already read the comments: keep them
+    // sent so nothing goes twice on its own.
+    failTurn(new Error("timed out"));
+    await vi.waitFor(() => expect(onTurnFailed).toHaveBeenCalledTimes(1));
     expect(status()).toBe("sent");
 
-    failTurn(new Error("Sign in to continue"));
-    await vi.waitFor(() => expect(onUndelivered).toHaveBeenCalledTimes(1));
+    const markUnsent = onTurnFailed.mock.calls[0][1] as () => void;
+    markUnsent();
     expect(status()).toBe("draft");
   });
 });

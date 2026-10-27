@@ -41,12 +41,17 @@ function isAppOrigin(url: URL, options: UrlPolicyOptions): boolean {
 }
 
 /**
- * Agents often pass bare hosts ("example.com", "localhost:3000"). Add a
- * scheme so they resolve as web URLs instead of failing as relative paths.
+ * Agents often pass bare hosts ("example.com", "localhost:3000",
+ * "devbox:8080"). Add a scheme so they resolve as web URLs instead of
+ * failing as relative paths. `name:<digits>` is a host and port, not a URL
+ * scheme. Local hosts, and any host with a port other than 443, get http:
+ * that's how dev servers run.
  */
 export function normalizeUserUrl(raw: string): string {
   const trimmed = raw.trim();
-  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !/^localhost:\d/i.test(trimmed)) return trimmed;
-  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?(\/|$)/i.test(trimmed);
-  return `${isLocal ? "http" : "https"}://${trimmed}`;
+  const hostAndPort = /^[a-z0-9.-]+:(\d+)([/?#]|$)/i.exec(trimmed);
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed) && !hostAndPort) return trimmed;
+  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])(:\d+)?([/?#]|$)/i.test(trimmed);
+  const plainHttp = isLocal || (hostAndPort !== null && hostAndPort[1] !== "443");
+  return `${plainHttp ? "http" : "https"}://${trimmed}`;
 }

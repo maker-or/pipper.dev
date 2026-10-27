@@ -2577,8 +2577,10 @@ function registerIpc(): void {
     const isPeer = makeWorkspacePeerPredicate(id);
     const manager = requireAgentManager();
     await manager.deleteThread(id);
+    // After deleteThread: its own replacement switch is part of this delete.
+    const selectionAtClose = manager.selectionGeneration();
     const next = await closeThreadTab(id, isPeer);
-    await activateTabAfterClose(manager, next);
+    await activateTabAfterClose(manager, next, selectionAtClose);
     broadcastOpenTabsChanged(mainWindow, next);
   });
 
@@ -2594,13 +2596,14 @@ function registerIpc(): void {
   ipcMain.handle("tabs:close", async (_event, threadId: string) => {
     const isPeer = makeWorkspacePeerPredicate(threadId);
     const manager = requireAgentManager();
+    const selectionAtClose = manager.selectionGeneration();
     try {
       await manager.closeThreadSession(threadId);
     } catch (err) {
       console.warn("[IPC] closeThreadSession failed:", err);
     }
     const next = await closeThreadTab(threadId, isPeer);
-    await activateTabAfterClose(manager, next);
+    await activateTabAfterClose(manager, next, selectionAtClose);
     broadcastOpenTabsChanged(mainWindow, next);
     return next;
   });

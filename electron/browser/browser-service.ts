@@ -132,6 +132,12 @@ interface SessionRecord {
   queue: Promise<unknown>;
   unboundTimer: ReturnType<typeof setTimeout> | null;
   released: boolean;
+  /**
+   * A page was ever created in this partition. Its pages may all be gone by
+   * release (idle close, browser_close, a crash), but the partition still
+   * holds their cookies and cache until it is cleared.
+   */
+  partitionUsed: boolean;
 }
 
 const CONSOLE_RANK: Record<ConsoleEntry["level"], number> = {
@@ -226,6 +232,7 @@ export class BrowserService {
       queue: Promise.resolve(),
       unboundTimer: null,
       released: false,
+      partitionUsed: false,
     };
     record.unboundTimer = setTimeout(() => {
       if (record.sessionId === null) void this.releaseToken(token);
@@ -438,11 +445,10 @@ export class BrowserService {
     if (record.unboundTimer) clearTimeout(record.unboundTimer);
     this.sessions.delete(token);
     this.server.unregister(token);
-    const hadPages = record.pages.size > 0;
     for (const entry of record.pages.values()) entry.page.close();
     record.pages.clear();
     this.stopSweepIfIdle();
-    if (hadPages) {
+    if (record.partitionUsed) {
       try {
         await this.host.clearPartition(record.partition);
       } catch {
@@ -506,7 +512,14 @@ export class BrowserService {
       };
     }
     this.enforceMemoryLimits(record);
-    const pageId = typeof args.page_id === "string" ? args.page_id : record.currentPageId;
+    // Only tools that drive a page can wedge it. A slow widget preview or a
+    // page listing must not get the session's current page closed.
+    const drivesPage = name.startsWith("browser_") && name !== "browser_pages";
+    const pageId = !drivesPage
+      ? null
+      : typeof args.page_id === "string"
+        ? args.page_id
+        : record.currentPageId;
     const work = this.dispatch(record, name, args);
     const settled = this.boundSettle(record, work, pageId);
     let result: McpToolResult;
@@ -761,6 +774,9 @@ export class BrowserService {
     }
     const id = `p${record.nextPageNumber++}`;
     const appOrigins = this.appOrigins();
+    // Set before creating: a page that fails partway may still have set up
+    // the partition, and clearing an unused one is harmless.
+    record.partitionUsed = true;
     const page = await this.host.createPage({
       partition: record.partition,
       downloadDir: this.downloadDirFor(record),

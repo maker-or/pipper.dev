@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createSettingsSaver } from "@/lib/settings-saver";
 import {
   ArrowsClockwiseIcon,
   CheckCircleIcon,
@@ -704,41 +705,37 @@ function closestIndex(choices: number[], value: number): number {
 function BrowserView() {
   const [config, setConfig] = useState<BrowserConfig | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const pending = useRef<Partial<BrowserConfig>>({});
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const saver = useRef<ReturnType<typeof createSettingsSaver<BrowserConfig>> | null>(null);
 
   useEffect(() => {
-    let disposed = false;
+    let mounted = true;
+    const current = createSettingsSaver<BrowserConfig>({
+      save: (changes) => window.omni.browser.setConfig(changes),
+      onSaved: setConfig,
+      onError: () => setError("Could not save browser settings."),
+      debounceMs: SAVE_DEBOUNCE_MS,
+    });
+    saver.current = current;
     window.omni.browser
       .getConfig()
       .then((value) => {
-        if (!disposed) setConfig(value);
+        if (mounted) setConfig(value);
       })
       .catch(() => {
-        if (!disposed) setError("Could not load browser settings.");
+        if (mounted) setError("Could not load browser settings.");
       });
     return () => {
-      disposed = true;
-      if (timer.current) clearTimeout(timer.current);
+      mounted = false;
+      // Leaving the page within the debounce window still saves the change.
+      current.dispose();
     };
   }, []);
 
   // Sliders report every step while dragging; save once they settle.
   const update = (partial: Partial<BrowserConfig>, immediate = false) => {
     setConfig((current) => (current ? { ...current, ...partial } : current));
-    pending.current = { ...pending.current, ...partial };
-    if (timer.current) clearTimeout(timer.current);
-    const save = () => {
-      const changes = pending.current;
-      pending.current = {};
-      setError(null);
-      window.omni.browser
-        .setConfig(changes)
-        .then(setConfig)
-        .catch(() => setError("Could not save browser settings."));
-    };
-    if (immediate) save();
-    else timer.current = setTimeout(save, SAVE_DEBOUNCE_MS);
+    setError(null);
+    saver.current?.update(partial, immediate);
   };
 
   const disabled = config === null;

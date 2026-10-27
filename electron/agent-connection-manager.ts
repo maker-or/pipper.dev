@@ -3195,6 +3195,11 @@ export class AgentConnectionManager {
     }
   }
 
+  /** Changes whenever a thread selection is requested (see SelectionFence). */
+  selectionGeneration(): number {
+    return this.selection.current;
+  }
+
   async closeThreadSession(threadId: string): Promise<void> {
     return this.mutateThread(threadId, () => this.closeThreadSessionInternal(threadId));
   }

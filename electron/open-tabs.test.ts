@@ -281,6 +281,24 @@ describe("tabs for deleted threads", () => {
     expect(state.activeThreadId).toBe("real");
   });
 
+  test("deleting the active thread still picks the next tab by recency, not the first tab", async () => {
+    const { openThreadTab, recordThreadSwitch, closeThreadTab } = await import("./open-tabs.ts");
+    live.add("first").add("recent").add("deleted");
+    // New tabs open at the front: the strip reads deleted, first, recent.
+    await openThreadTab("recent");
+    await openThreadTab("first");
+    await openThreadTab("deleted");
+    await recordThreadSwitch("first");
+    await recordThreadSwitch("recent");
+    await recordThreadSwitch("deleted");
+    // threads:delete removes the row before it closes the tab.
+    live.delete("deleted");
+
+    const state = await closeThreadTab("deleted");
+    expect(state.openThreadIds).not.toContain("deleted");
+    expect(state.activeThreadId).toBe("recent");
+  });
+
   test("keeps every tab when the lookup fails", async () => {
     const { openThreadTab, readOpenTabsState, setLiveThreadIdsCheck } =
       await import("./open-tabs.ts");
@@ -299,9 +317,10 @@ describe("tabs for deleted threads", () => {
 });
 
 describe("activateTabAfterClose", () => {
-  function activator(switchThread: (id: string) => Promise<unknown>) {
+  function activator(switchThread: (id: string) => Promise<unknown>, generation = 1) {
     return {
       getState: () => ({ threadId: "closed" }),
+      selectionGeneration: () => generation,
       switchThread: vi.fn(switchThread),
       clearActiveThread: vi.fn(async () => {}),
     };
@@ -315,7 +334,7 @@ describe("activateTabAfterClose", () => {
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      await expect(activateTabAfterClose(manager, next)).resolves.toBeUndefined();
+      await expect(activateTabAfterClose(manager, next, 1)).resolves.toBeUndefined();
       expect(manager.switchThread).toHaveBeenCalledWith("next");
       expect(warn).toHaveBeenCalled();
     } finally {
@@ -326,12 +345,21 @@ describe("activateTabAfterClose", () => {
   test("clears the active thread when no tab is left", async () => {
     const { activateTabAfterClose } = await import("./open-tabs.ts");
     const manager = activator(async () => {});
-    await activateTabAfterClose(manager, {
-      openThreadIds: [],
-      activeThreadId: null,
-      threadSwitchHistory: [],
-    });
+    await activateTabAfterClose(
+      manager,
+      { openThreadIds: [], activeThreadId: null, threadSwitchHistory: [] },
+      1,
+    );
     expect(manager.clearActiveThread).toHaveBeenCalled();
     expect(manager.switchThread).not.toHaveBeenCalled();
+  });
+
+  test("a tab the user picked while the close ran is not overridden", async () => {
+    const { activateTabAfterClose } = await import("./open-tabs.ts");
+    // The close began at generation 1; the user's click moved it to 2.
+    const manager = activator(async () => {}, 2);
+    await activateTabAfterClose(manager, next, 1);
+    expect(manager.switchThread).not.toHaveBeenCalled();
+    expect(manager.clearActiveThread).not.toHaveBeenCalled();
   });
 });

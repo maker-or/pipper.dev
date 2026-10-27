@@ -32,7 +32,13 @@ export function lintWidgetSource(code: string): LintFinding[] {
     const line = index + 1;
     for (const match of text.matchAll(HEX_COLOR)) {
       const before = text.slice(0, match.index);
-      if (/(?:href|xlink:href)\s*=\s*["']$/i.test(before) || /url\(\s*["']?$/i.test(before))
+      // Not colours: fragment links, url(#id) references, and numeric HTML
+      // entities such as &#039; or &#8212;.
+      if (
+        /(?:href|xlink:href)\s*=\s*["']$/i.test(before) ||
+        /url\(\s*["']?$/i.test(before) ||
+        before.endsWith("&")
+      )
         continue;
       add(
         "hardcoded-color",

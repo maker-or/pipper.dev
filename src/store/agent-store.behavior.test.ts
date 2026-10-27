@@ -588,6 +588,29 @@ describe("agent store ACP bridge behavior", () => {
     resolveSwitch?.();
   });
 
+  test("a failed fallback read after a switch releases the pending target", async () => {
+    let calls = 0;
+    const agentApi = {
+      onEvent: vi.fn((_handler: (payload: AcpBridgeEvent) => void) => vi.fn()),
+      // Answers the connect-time read, then fails like a dropped bridge.
+      getState: vi.fn(async () => {
+        calls += 1;
+        if (calls > 1) throw new Error("bridge closed");
+        return sessionState("thread-a");
+      }),
+      getCapabilities: vi.fn(async () => null),
+      // An older bridge: the switch resolves but no session-state arrives.
+      switchThread: vi.fn(async () => {}),
+    };
+    (globalThis as any).window = { omni: { agent: agentApi } };
+
+    const store = await loadStore();
+    await store.getState().connect();
+    await expect(store.getState().switchThread("thread-b")).rejects.toThrow("bridge closed");
+    expect(store.getState().pendingThreadTarget).toBeNull();
+    expect(store.getState().error).toBe("bridge closed");
+  });
+
   test("surfaces switch-thread failures", async () => {
     const agentApi = {
       onEvent: vi.fn((_handler: (payload: AcpBridgeEvent) => void) => vi.fn()),

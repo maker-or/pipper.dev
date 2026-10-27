@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { WarningCircle } from "@phosphor-icons/react";
 import { shapeMap, useShape } from "@/lib/shape-context";
 import { useAgentStore } from "@/store/agent-store";
+import { createWidgetPromptGate } from "@/lib/inline-widgets";
 import type { InlineWidgetDocument, InlineWidgetRef } from "../../contracts/acp.ts";
 
 /**
@@ -43,6 +44,7 @@ export function InlineWidget({
   threadId: string | null;
 }) {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const allowPrompt = useRef(createWidgetPromptGate());
   const [widget, setWidget] = useState<InlineWidgetDocument | null>(null);
   const [status, setStatus] = useState<Status>("loading");
   const [height, setHeight] = useState(LOADING_HEIGHT);
@@ -108,6 +110,9 @@ export function InlineWidget({
       } else if (data.type === "sendPrompt" && typeof data.text === "string") {
         const text = data.text.trim().slice(0, 4000);
         if (!text) return;
+        // The frame's own check runs in code the agent wrote; enforce it here.
+        const interacting = navigator.userActivation?.isActive ?? false;
+        if (!allowPrompt.current(interacting)) return;
         const store = useAgentStore.getState();
         void store.sendPrompt({
           threadId,

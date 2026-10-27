@@ -100,3 +100,19 @@ describe("inline widgets in the timeline", () => {
     ]);
   });
 });
+
+describe("widget prompts", () => {
+  test("need a user interaction, and one interaction sends one prompt", async () => {
+    const { createWidgetPromptGate } = await import("./inline-widgets");
+    let now = 0;
+    const allow = createWidgetPromptGate(() => now, 1000);
+    // A widget posting on load, with nobody touching it.
+    expect(allow(false)).toBe(false);
+    expect(allow(true)).toBe(true);
+    // The same click can't be reused for a burst.
+    now += 200;
+    expect(allow(true)).toBe(false);
+    now += 1000;
+    expect(allow(true)).toBe(true);
+  });
+});

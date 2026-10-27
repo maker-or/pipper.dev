@@ -98,3 +98,27 @@ export function buildMessageBodyBlocks(
   }
   return blocks;
 }
+
+/** Shortest gap between two prompts a widget may send. */
+export const WIDGET_PROMPT_INTERVAL_MS = 1000;
+
+/**
+ * Decides whether a widget's `sendPrompt` message may reach the agent. The
+ * widget's code comes from the agent, so it can post the message itself
+ * without the user doing anything. Accept it only during a real user
+ * interaction (a click or keypress in the frame also activates the host
+ * page), and at most once per interval, so one click can't fire a burst.
+ */
+export function createWidgetPromptGate(
+  now: () => number = Date.now,
+  intervalMs = WIDGET_PROMPT_INTERVAL_MS,
+): (userIsInteracting: boolean) => boolean {
+  let lastSentAt = Number.NEGATIVE_INFINITY;
+  return (userIsInteracting) => {
+    if (!userIsInteracting) return false;
+    const time = now();
+    if (time - lastSentAt < intervalMs) return false;
+    lastSentAt = time;
+    return true;
+  };
+}

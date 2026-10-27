@@ -1175,6 +1175,17 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // Send every click to main at once. Main supersedes the older activation
     // when a newer one arrives (see electron/activation.ts), so a slow thread
     // never holds later clicks back; superseded calls settle quietly here.
+    // A failed switch must release the pending target: while it is set, most
+    // bridge events are ignored. Returns false for a superseded switch.
+    const failed = (err: unknown): boolean => {
+      if (switchId !== latestThreadSwitchId) return false;
+      if (pendingThreadTarget === threadId) pendingThreadTarget = null;
+      set({
+        pendingThreadTarget: null,
+        error: err instanceof Error ? err.message : "Failed to switch thread",
+      });
+      return true;
+    };
     try {
       await withTimeout(
         window.omni.agent.switchThread(threadId),
@@ -1182,13 +1193,8 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         `Switch to ${threadId}`,
       );
     } catch (err) {
-      if (switchId !== latestThreadSwitchId) return;
-      if (pendingThreadTarget === threadId) pendingThreadTarget = null;
-      set({
-        pendingThreadTarget: null,
-        error: err instanceof Error ? err.message : "Failed to switch thread",
-      });
-      throw err;
+      if (failed(err)) throw err;
+      return;
     }
     // A new click can arrive after this thread's snapshot paints but before
     // its IPC promise settles. Only the latest switch may settle the pending
@@ -1198,7 +1204,14 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     // promise resolves. Avoid a second renderer→main→renderer trip. Keep
     // fallback for older ACP bridges that do not emit that snapshot.
     if (get().state?.threadId !== threadId) {
-      const state = preserveOptimisticState(get().state, await window.omni.agent.getState());
+      let fetched: Awaited<ReturnType<typeof window.omni.agent.getState>>;
+      try {
+        fetched = await window.omni.agent.getState();
+      } catch (err) {
+        if (failed(err)) throw err;
+        return;
+      }
+      const state = preserveOptimisticState(get().state, fetched);
       set(() => {
         if (switchId !== latestThreadSwitchId || state.threadId !== threadId) return {};
         discardStreamDeltas();

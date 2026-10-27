@@ -30,6 +30,10 @@ describe("widget source checks", () => {
     ]);
   });
 
+  test("numeric HTML entities are not mistaken for colours", () => {
+    expect(lintWidgetSource("<p>It&#039;s 3&#8212;4 &#123;x&#125;</p>")).toEqual([]);
+  });
+
   test("banned patterns from the guide are caught", () => {
     expect(rules("<html><body>x</body></html>")).toContain("document-wrapper");
     expect(rules('<div style="position: fixed">')).toContain("fixed-position");
@@ -160,6 +164,48 @@ describe("widget preview", () => {
     expect(summary).toContain("[small-text]");
     expect(summary).toContain("[too-tall]");
     expect(summary).toContain("Fix these");
+    previewer.dispose();
+  });
+
+  test("a widget that never finishes rendering doesn't block the next preview", async () => {
+    let created = 0;
+    const host: PageHost = {
+      async createPage(options: { events: PageEvents }) {
+        created++;
+        const page: Partial<BrowserPage> = {
+          closed: false,
+          navigate: async (url) => ({ url, title: "", status: null }),
+          evaluate: async (expression) =>
+            expression.includes("while (true)")
+              ? new Promise(() => undefined)
+              : {
+                  size: { width: 680, height: 40 },
+                  errors: [],
+                  blocked: [],
+                  actions: [],
+                  lint: [],
+                },
+          screenshot: async () => ({ data: "cG5n", mimeType: "image/png" }),
+          close: () => options.events.onClosed(),
+        };
+        return page as BrowserPage;
+      },
+      clearPartition: async () => undefined,
+    };
+    const previewer = new WidgetPreviewer({
+      host,
+      checkUrl: () => ({ allowed: true }),
+      downloadDir: "/tmp/unused",
+      navigationTimeoutMs: 1000,
+      screenshotMaxBytes: 1_000_000,
+      renderTimeoutMs: 50,
+    });
+    const stuck = previewer.preview("<script>while (true) {}</script>");
+    const next = previewer.preview('<div class="ff-card">ok</div>');
+    await expect(stuck).rejects.toThrow(/did not finish rendering/);
+    const result = await next;
+    expect(result.content[0].type === "text" && result.content[0].text).toContain("Rendered");
+    expect(created).toBe(2);
     previewer.dispose();
   });
 

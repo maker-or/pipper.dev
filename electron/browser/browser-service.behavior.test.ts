@@ -92,7 +92,9 @@ class FakePage implements BrowserPage {
   async screenshot() {
     return { data: "cG5n", mimeType: "image/png" as const };
   }
-  async evaluate(): Promise<unknown> {
+  async evaluate(expression?: string): Promise<unknown> {
+    // Widget code that never yields, like `while (true) {}`.
+    if (expression?.includes("__never_returns__")) return new Promise(() => undefined);
     return { ok: true };
   }
   drainConsole() {
@@ -355,6 +357,26 @@ describe("agent browser service", () => {
     expect(next.text).toContain("idle");
   });
 
+  test("a session whose pages already closed still has its storage cleared on release", async () => {
+    let now = 1_000;
+    const host = new FakeHost();
+    const service = new BrowserService({
+      host,
+      limits: { idlePageMs: 100 },
+      baseDir: await mkdtemp(join(tmpdir(), "pipper-browser-test-")),
+      now: () => now,
+    });
+    services.push(service);
+    const { call } = await openSession(service, "s1");
+    await call("browser_open", { url: "https://a.test" });
+    now += 101;
+    service.sweepNow();
+    expect(service.pageCount()).toBe(0);
+
+    service.releaseSessionMcp("s1");
+    await vi.waitFor(() => expect(host.cleared).toHaveLength(1));
+  });
+
   test("a token that never gets a session is released", async () => {
     const { service } = await setup({ limits: { unboundTokenMs: 20 } });
     await service.attachMcpServers([], { mcpCapabilities: { http: true } });
@@ -409,6 +431,22 @@ describe("agent browser service", () => {
     const nextResult = await next;
     expect(host.pages[0].closed).toBe(true);
     expect(nextResult.text).toContain("stopped responding");
+  });
+
+  test("a slow widget preview never gets the agent's browser page closed", async () => {
+    const { host, service } = await setup({
+      limits: { toolTimeoutMs: 40, wedgedPageGraceMs: 40 },
+    });
+    const { call } = await openSession(service, "s1");
+    await call("browser_open", { url: "https://a.test" });
+    const browserPage = host.pages[0];
+
+    const stuck = await call("preview_widget", { widget_code: "<p>__never_returns__</p>" });
+    expect(stuck.isError).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(browserPage.closed).toBe(false);
+    const pages = await call("browser_pages");
+    expect(pages.text).not.toContain("stopped responding");
   });
 
   test("turning the browser off closes pages and refuses further calls", async () => {

@@ -104,14 +104,17 @@ async function findProject(projectId: string): Promise<Project | null> {
  * Only comments still unsent are sent, and they are marked sent before the
  * prompt goes out, so a second click (or "Send now" on a comment a batch is
  * already sending) never sends anything twice. If the prompt can't be
- * dispatched, or the agent's turn fails before it took the comments (it can't
- * start, it needs sign-in), they go back to unsent and `onUndelivered` hears
- * about a turn failure; a dispatch failure is thrown.
+ * dispatched they go back to unsent and the error is thrown.
+ *
+ * A failed turn is different: its promise covers the whole turn, so it can
+ * reject after the agent already took the comments (a timeout, a stop).
+ * Restoring them then could send them twice, so they stay sent and
+ * `onTurnFailed` gets a `markUnsent` the user can choose to run.
  */
 export async function sendFileComments(
   workspace: { projectId: string; worktreePath: string | null },
   comments: readonly FileComment[],
-  options: { onUndelivered?: (error: unknown) => void } = {},
+  options: { onTurnFailed?: (error: unknown, markUnsent: () => void) => void } = {},
 ): Promise<void> {
   const key = previewWorkspaceKey(workspace.projectId, workspace.worktreePath);
   const store = usePreviewStore.getState();
@@ -132,10 +135,7 @@ export async function sendFileComments(
       message: buildFileCommentsPrompt(pending),
       title: "File review comments",
     });
-    turn.catch((error: unknown) => {
-      restore();
-      options.onUndelivered?.(error);
-    });
+    turn.catch((error: unknown) => options.onTurnFailed?.(error, restore));
   } catch (error) {
     restore();
     throw error;

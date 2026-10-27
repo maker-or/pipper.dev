@@ -92,7 +92,14 @@ export function setLiveThreadIdsCheck(check: ((ids: string[]) => Set<string>) | 
   liveThreadIds = check;
 }
 
-function dropDeletedThreads(openThreadIds: string[], history: string[]): [string[], string[]] {
+const KEEP_NONE: ReadonlySet<string> = new Set();
+
+/** `keep`: ids to treat as live even when their thread row is gone. */
+function dropDeletedThreads(
+  openThreadIds: string[],
+  history: string[],
+  keep: ReadonlySet<string>,
+): [string[], string[]] {
   if (!liveThreadIds) return [openThreadIds, history];
   let live: Set<string>;
   try {
@@ -102,13 +109,15 @@ function dropDeletedThreads(openThreadIds: string[], history: string[]): [string
     console.warn("[open-tabs] Could not check which tabs still have threads:", error);
     return [openThreadIds, history];
   }
-  return [openThreadIds.filter((id) => live.has(id)), history.filter((id) => live.has(id))];
+  const kept = (id: string) => live.has(id) || keep.has(id);
+  return [openThreadIds.filter(kept), history.filter(kept)];
 }
 
-function normalize(state: OpenTabsState): OpenTabsState {
+function normalize(state: OpenTabsState, keep: ReadonlySet<string> = KEEP_NONE): OpenTabsState {
   const [openThreadIds, history] = dropDeletedThreads(
     compactIds(state.openThreadIds),
     compactIds(state.threadSwitchHistory).slice(0, MAX_HISTORY),
+    keep,
   );
   return {
     openThreadIds,
@@ -120,12 +129,15 @@ function normalize(state: OpenTabsState): OpenTabsState {
   };
 }
 
-function tabsOf(state: LaunchState): OpenTabsState {
-  return normalize({
-    openThreadIds: state.openThreadIds,
-    activeThreadId: state.activeThreadId ?? state.threadId,
-    threadSwitchHistory: state.threadSwitchHistory,
-  });
+function tabsOf(state: LaunchState, keep: ReadonlySet<string> = KEEP_NONE): OpenTabsState {
+  return normalize(
+    {
+      openThreadIds: state.openThreadIds,
+      activeThreadId: state.activeThreadId ?? state.threadId,
+      threadSwitchHistory: state.threadSwitchHistory,
+    },
+    keep,
+  );
 }
 
 function withTabs(current: LaunchState, next: OpenTabsState): LaunchState {
@@ -153,10 +165,14 @@ export async function readOpenTabsState(): Promise<OpenTabsState> {
  */
 async function mutateOpenTabs(
   update: (current: OpenTabsState) => OpenTabsState,
+  // Tabs being closed stay in `current` even when their thread was already
+  // deleted, so the close still sees whether one was active and picks the
+  // next tab by recency and workspace instead of falling back to the first.
+  closing: ReadonlySet<string> = KEEP_NONE,
 ): Promise<{ previous: OpenTabsState; next: OpenTabsState }> {
   let previous: OpenTabsState | null = null;
   const committed = await mutateLaunchState((current) => {
-    previous = tabsOf(current);
+    previous = tabsOf(current, closing);
     return withTabs(current, update(previous));
   });
   return { previous: previous!, next: tabsOf(committed) };
@@ -189,20 +205,23 @@ export async function closeThreadTab(
   threadId: string,
   isPeer?: (threadId: string) => boolean,
 ): Promise<OpenTabsState> {
-  const { next } = await mutateOpenTabs((current) => {
-    const openThreadIds = current.openThreadIds.filter((id) => id !== threadId);
-    let activeThreadId = current.activeThreadId;
-    if (current.activeThreadId === threadId) {
-      const peerIds = isPeer ? openThreadIds.filter(isPeer) : openThreadIds;
-      activeThreadId = pickNextActiveThreadId(
-        current.openThreadIds,
-        peerIds.length > 0 ? peerIds : openThreadIds,
-        threadId,
-        current.threadSwitchHistory,
-      );
-    }
-    return { ...current, openThreadIds, activeThreadId };
-  });
+  const { next } = await mutateOpenTabs(
+    (current) => {
+      const openThreadIds = current.openThreadIds.filter((id) => id !== threadId);
+      let activeThreadId = current.activeThreadId;
+      if (current.activeThreadId === threadId) {
+        const peerIds = isPeer ? openThreadIds.filter(isPeer) : openThreadIds;
+        activeThreadId = pickNextActiveThreadId(
+          current.openThreadIds,
+          peerIds.length > 0 ? peerIds : openThreadIds,
+          threadId,
+          current.threadSwitchHistory,
+        );
+      }
+      return { ...current, openThreadIds, activeThreadId };
+    },
+    new Set([threadId]),
+  );
   notifyTabEvent("close", threadId, next);
   return next;
 }
@@ -210,6 +229,8 @@ export async function closeThreadTab(
 /** The part of the agent manager that activates a tab after a close. */
 export interface TabActivator {
   getState(): { threadId: string | null };
+  /** Changes whenever a thread selection is requested. */
+  selectionGeneration(): number;
   switchThread(threadId: string): Promise<unknown>;
   clearActiveThread(): Promise<void>;
 }
@@ -219,11 +240,17 @@ export interface TabActivator {
  * already persisted, so a failed activation is logged instead of thrown:
  * throwing would skip the tabs broadcast and leave the closed tab on screen.
  * The renderer selects the new active tab itself and reports any error there.
+ *
+ * `selectionAtClose` is the activator's selection generation when the close
+ * began. If the user picked another tab since, that selection owns the view
+ * and the fallback must not override it.
  */
 export async function activateTabAfterClose(
   activator: TabActivator,
   next: OpenTabsState,
+  selectionAtClose: number,
 ): Promise<void> {
+  if (activator.selectionGeneration() !== selectionAtClose) return;
   try {
     if (!next.activeThreadId) {
       await activator.clearActiveThread();
@@ -259,7 +286,7 @@ export async function removeThreadTabs(threadIds: string[]): Promise<OpenTabsSta
       );
     }
     return { openThreadIds, activeThreadId, threadSwitchHistory };
-  });
+  }, removed);
   for (const id of threadIds) {
     if (previous.openThreadIds.includes(id)) notifyTabEvent("close", id, next);
   }

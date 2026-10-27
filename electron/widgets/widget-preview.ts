@@ -19,6 +19,8 @@ export interface WidgetPreviewOptions {
   downloadDir: string;
   navigationTimeoutMs: number;
   screenshotMaxBytes: number;
+  /** Longest one render may take before its page is replaced. Defaults to navigationTimeoutMs. */
+  renderTimeoutMs?: number;
 }
 
 interface FrameState {
@@ -48,9 +50,39 @@ export class WidgetPreviewer {
   }
 
   preview(code: string, width = DEFAULT_WIDGET_WIDTH): Promise<McpToolResult> {
-    const run = this.queue.then(() => this.render(code, width));
+    const run = this.queue.then(() => this.renderWithin(code, width));
     this.queue = run.catch(() => undefined);
     return run;
+  }
+
+  /**
+   * Previews share one page and one queue, and CDP commands have no timeout
+   * of their own: a widget that never yields (`while (true) {}`) would hold
+   * the queue for every later preview. Bound each render, and replace the
+   * page when one runs over so the next preview starts clean.
+   */
+  private async renderWithin(code: string, width: number): Promise<McpToolResult> {
+    const limitMs = this.options.renderTimeoutMs ?? this.options.navigationTimeoutMs;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const rendering = this.render(code, width);
+    const timedOut = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => {
+        this.page?.close();
+        this.page = null;
+        reject(
+          new Error(
+            `The widget did not finish rendering within ${Math.ceil(limitMs / 1000)}s. Check its scripts for loops that never end.`,
+          ),
+        );
+      }, limitMs);
+    });
+    try {
+      return await Promise.race([rendering, timedOut]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      // The abandoned render fails once its page closes; nobody awaits it.
+      rendering.catch(() => undefined);
+    }
   }
 
   dispose(): void {

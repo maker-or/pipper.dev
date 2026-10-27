@@ -34,6 +34,11 @@ describe("agent browser URL policy", () => {
   test("bare hosts get a sensible scheme", () => {
     expect(normalizeUserUrl("example.com")).toBe("https://example.com");
     expect(normalizeUserUrl("localhost:3000/app")).toBe("http://localhost:3000/app");
+    expect(normalizeUserUrl("devbox:3000")).toBe("http://devbox:3000");
+    expect(normalizeUserUrl("example.com:8080/path")).toBe("http://example.com:8080/path");
+    expect(normalizeUserUrl("example.com:443")).toBe("https://example.com:443");
+    expect(normalizeUserUrl("https://example.com:8080")).toBe("https://example.com:8080");
+    expect(normalizeUserUrl("file:///etc/passwd")).toBe("file:///etc/passwd");
     expect(normalizeUserUrl("127.0.0.1:8080")).toBe("http://127.0.0.1:8080");
     expect(normalizeUserUrl("https://a.test")).toBe("https://a.test");
     expect(normalizeUserUrl("file:///etc/hosts")).toBe("file:///etc/hosts");

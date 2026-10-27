@@ -85,7 +85,13 @@ export function FilePreview({ workspaceKey }: { workspaceKey: string }) {
     setSending(true);
     try {
       await sendFileComments(preview, comments, {
-        onUndelivered: (error) => reportError("The agent didn't get your comments", error),
+        onTurnFailed: (error, markUnsent) =>
+          toast({
+            icon: <WarningIcon className="size-5 text-red-500" />,
+            title: "The agent's turn ended with an error",
+            description: `${error instanceof Error ? error.message : String(error)} Your comments stay marked as sent.`,
+            action: { label: "Mark unsent", onClick: markUnsent },
+          }),
       });
     } catch (error) {
       reportError("Could not send comments", error);
