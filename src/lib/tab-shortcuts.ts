@@ -81,3 +81,22 @@ export function isCloseTabShortcutEvent(event: KeyboardEvent): boolean {
   if (!isPlainModShortcut(event)) return false;
   return event.code === "KeyW" || event.key.toLowerCase() === "w";
 }
+
+export type ActiveTabKind = "preview" | "terminal" | "draft" | "thread";
+
+/**
+ * Which tab ⌘W closes: the one on screen. A draft can sit behind a terminal
+ * or the file preview without being the tab the user is looking at, so the
+ * view mode decides before the draft does.
+ */
+export function activeTabToClose(input: {
+  mode: "agent" | "terminal" | "preview";
+  terminalId: string | null;
+  hasDraft: boolean;
+  threadId: string | null;
+}): ActiveTabKind | null {
+  if (input.mode === "preview") return "preview";
+  if (input.mode === "terminal" && input.terminalId) return "terminal";
+  if (input.hasDraft) return "draft";
+  return input.threadId ? "thread" : null;
+}

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { dirname } from "node:path";
@@ -43,6 +44,7 @@ import {
   type AgentMonitorObserver,
   type LiveConnection,
 } from "./connection-lifecycle.ts";
+import type { BrowserService } from "./browser/browser-service.ts";
 import { listMcpServers, toAcpMcpServers } from "./mcp-servers.ts";
 import { SubagentManager } from "./subagents/subagent-manager.ts";
 import { TerminalManager } from "./terminal-manager.ts";
@@ -348,6 +350,7 @@ export class AgentConnectionManager {
   private lifecycle!: ConnectionLifecycle;
   /** Client-hosted subagent tool: lets any session spawn sibling agent sessions. */
   private readonly subagents: SubagentManager;
+  private readonly browser: BrowserService | null;
   /** Dedup key for the last broadcast running-threads set. */
   private lastRunningThreadsKey = "";
   /** Per tool-call start timestamps for `tool_call_finished` timing, keyed `${sessionId}:${toolCallId}`. */
@@ -390,7 +393,37 @@ export class AgentConnectionManager {
     clientVersion?: string;
     /** Provider catalog cache file; defaults to userData (tests override). */
     catalogPath?: string;
+    /** Headless browser exposed to sessions over MCP; omitted in tests. */
+    browser?: BrowserService | null;
   }) {
+    this.browser = options.browser ?? null;
+    // Downloads from agent pages are approved in the session's thread, like
+    // any other permission an agent asks for.
+    this.browser?.setPermissionRequester(async ({ sessionId, title, detail }) => {
+      const response = await this.permissions.handle(
+        {
+          sessionId,
+          toolCall: {
+            toolCallId: `browser-download-${randomUUID()}`,
+            title,
+            kind: "fetch",
+            status: "pending",
+            rawInput: detail,
+          },
+          options: [
+            { optionId: "allow", name: "Download", kind: "allow_once" },
+            { optionId: "deny", name: "Don't download", kind: "reject_once" },
+          ],
+        },
+        null,
+      );
+      return response.outcome.outcome === "selected" && response.outcome.optionId === "allow";
+    });
+    this.browser?.setWidgetHooks({
+      resolveThread: (sessionId) => this.findThreadBySessionId(sessionId),
+      onWidgetUpdated: ({ widgetId, threadId }) =>
+        this.emit({ type: "widget-updated", widgetId, threadId }),
+    });
     this.catalogs = new ProviderCatalogStore({ path: options.catalogPath });
     this.sendToRenderer =
       options.sendToRenderer.length <= 1
@@ -1600,7 +1633,7 @@ export class AgentConnectionManager {
         this.prompts.rejectQueued(threadId, "agent connection closed");
         this.clearToolCallTiming(runtime.agentSessionId);
         this.terminalManager.releaseSession(runtime.agentSessionId);
-        this.subagents.releaseSessionMcp(runtime.agentSessionId);
+        this.releaseSessionMcp(runtime.agentSessionId);
         this.releaseWorkspaceRoot(runtime.agentSessionId);
         this.endThreadLoad(threadId);
         this.sessions.remove(threadId);
@@ -2035,15 +2068,35 @@ export class AgentConnectionManager {
       cwd,
       depth: 0,
     });
-    return {
+    let browser: { servers: Array<Record<string, unknown>>; token: string | null } = {
       servers: attached.servers,
+      token: null,
+    };
+    try {
+      if (this.browser) {
+        browser = await this.browser.attachMcpServers(attached.servers, live.agentCapabilities);
+      }
+    } catch (error) {
+      // The browser is optional; a session must still start without it.
+      console.warn("[browser] could not attach browser MCP endpoint", error);
+    }
+    return {
+      servers: browser.servers,
       bind: (sessionId) => {
         if (attached.token) this.subagents.bindSession(attached.token, sessionId);
+        if (browser.token) this.browser?.bindSession(browser.token, sessionId);
       },
       release: () => {
         if (attached.token) this.subagents.releaseTokenForSession(attached.token);
+        if (browser.token) this.browser?.releaseTokenForSession(browser.token);
       },
     };
+  }
+
+  /** Release every client-hosted MCP endpoint owned by a closed ACP session. */
+  private releaseSessionMcp(sessionId: string): void {
+    this.subagents.releaseSessionMcp(sessionId);
+    this.browser?.releaseSessionMcp(sessionId);
   }
 
   /**
@@ -2281,7 +2334,7 @@ export class AgentConnectionManager {
       (late) => {
         const sessionId = late?.sessionId ?? knownSessionId;
         if (!sessionId || this.sessions.threadIdForSession(sessionId) != null) return;
-        this.subagents.releaseSessionMcp(sessionId);
+        this.releaseSessionMcp(sessionId);
         void live.agent
           .request(acp.methods.agent.session.close, { sessionId })
           .catch(() => undefined);
@@ -2519,7 +2572,7 @@ export class AgentConnectionManager {
       // not leak: close it instead of binding it to a removed runtime.
       if (this.sessions.get(threadId) !== placeholder) {
         if (this.sessions.threadIdForSession(established.sessionId) == null) {
-          this.subagents.releaseSessionMcp(established.sessionId);
+          this.releaseSessionMcp(established.sessionId);
           void live.agent
             .request(acp.methods.agent.session.close, { sessionId: established.sessionId })
             .catch(() => undefined);
@@ -3076,7 +3129,7 @@ export class AgentConnectionManager {
     this.prompts.rejectQueued(threadId, "thread deleted");
     this.clearToolCallTiming(sessionId);
     this.terminalManager.releaseSession(sessionId);
-    if (sessionId) this.subagents.releaseSessionMcp(sessionId);
+    if (sessionId) this.releaseSessionMcp(sessionId);
     if (owner && sessionId) {
       try {
         await requestWithTimeout(
@@ -3142,6 +3195,11 @@ export class AgentConnectionManager {
     }
   }
 
+  /** Changes whenever a thread selection is requested (see SelectionFence). */
+  selectionGeneration(): number {
+    return this.selection.current;
+  }
+
   async closeThreadSession(threadId: string): Promise<void> {
     return this.mutateThread(threadId, () => this.closeThreadSessionInternal(threadId));
   }
@@ -3155,7 +3213,7 @@ export class AgentConnectionManager {
     this.prompts.rejectQueued(threadId, "thread session closed");
     this.clearToolCallTiming(runtime.agentSessionId);
     this.terminalManager.releaseSession(runtime.agentSessionId);
-    this.subagents.releaseSessionMcp(runtime.agentSessionId);
+    this.releaseSessionMcp(runtime.agentSessionId);
     if (owner) {
       try {
         await requestWithTimeout(
@@ -3614,6 +3672,7 @@ export class AgentConnectionManager {
     this.idleSweepTimer = null;
     this.terminalManager.killAll();
     this.subagents.dispose();
+    this.browser?.dispose();
     const flushed = await waitBounded(
       Promise.all([this.flushAllSnapshots(), this.catalogs.flush()]),
       snapshotFlushMs,
@@ -3647,6 +3706,8 @@ export class AgentConnectionManager {
       toolCallStarts: this.toolCallStarts.size,
       abortGenerations: this.abortGenerations.size,
       subagentMcpEndpoints: this.subagents.endpointCount(),
+      browserMcpEndpoints: this.browser?.endpointCount() ?? 0,
+      browserPages: this.browser?.pageCount() ?? 0,
       snapshotTimers: this.snapshotTimers.size,
       backgroundToolCallTimers: this.backgroundToolCallTimers.size,
       providerLeases: this.providerLeases.size,

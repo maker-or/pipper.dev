@@ -177,7 +177,6 @@ interface AgentState {
 
 let unsubscribeBridge: (() => void) | null = null;
 let latestThreadSwitchId = 0;
-let threadSwitchQueue: Promise<void> = Promise.resolve();
 let pendingThreadTarget: string | null = null;
 let latestRefreshId = 0;
 // Main activation can spend up to 10s on initialize plus three 10s session
@@ -1173,70 +1172,75 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     pendingThreadTarget = threadId;
     set({ error: null, pendingThreadTarget: threadId });
 
-    threadSwitchQueue = threadSwitchQueue
-      .catch(() => undefined)
-      .then(async () => {
-        if (switchId !== latestThreadSwitchId) return;
-
-        await withTimeout(
-          window.omni.agent.switchThread(threadId),
-          threadSwitchTimeoutMs(),
-          `Switch to ${threadId}`,
-        );
-        // A new click can arrive after this thread's snapshot paints but
-        // before its IPC promise settles. Only the latest switch may settle
-        // the pending target or read a fallback snapshot.
-        if (switchId !== latestThreadSwitchId) return;
-        // `agent:switchThread` emits the complete target snapshot before its
-        // IPC promise resolves. Avoid a second renderer→main→renderer trip.
-        // Keep fallback for older ACP bridges that do not emit that snapshot.
-        if (get().state?.threadId !== threadId) {
-          const state = preserveOptimisticState(get().state, await window.omni.agent.getState());
-          set(() => {
-            if (switchId !== latestThreadSwitchId || state.threadId !== threadId) return {};
-            discardStreamDeltas();
-            pendingThreadTarget = null;
-            return withSnapshot({
-              state,
-              threadToolCalls: {
-                ...get().threadToolCalls,
-                [state.threadId ?? "__none__"]: state.toolCalls,
-              },
-              slice: createEmptySessionSlice({
-                entries: state.entries,
-                toolCalls: state.toolCalls,
-                plan: state.plan,
-                usage: state.usage,
-                configOptions: state.configOptions,
-                commands: state.commands,
-                currentModeId: state.currentModeId,
-                isStreaming: state.isStreaming,
-                title: state.title,
-              }),
-              pendingThreadTarget: null,
-              error: null,
-            });
-          });
-        } else {
-          pendingThreadTarget = null;
-          set({ error: null, pendingThreadTarget: null });
-        }
-      })
-      .catch((err) => {
-        set(() => {
-          if (switchId !== latestThreadSwitchId) return {};
-          if (pendingThreadTarget === threadId) {
-            pendingThreadTarget = null;
-          }
-          return {
-            pendingThreadTarget: null,
-            error: err instanceof Error ? err.message : "Failed to switch thread",
-          };
-        });
-        throw err;
+    // Send every click to main at once. Main supersedes the older activation
+    // when a newer one arrives (see electron/activation.ts), so a slow thread
+    // never holds later clicks back; superseded calls settle quietly here.
+    // A failed switch must release the pending target: while it is set, most
+    // bridge events are ignored. Returns false for a superseded switch.
+    const failed = (err: unknown): boolean => {
+      if (switchId !== latestThreadSwitchId) return false;
+      if (pendingThreadTarget === threadId) pendingThreadTarget = null;
+      set({
+        pendingThreadTarget: null,
+        error: err instanceof Error ? err.message : "Failed to switch thread",
       });
-
-    await threadSwitchQueue;
+      return true;
+    };
+    try {
+      await withTimeout(
+        window.omni.agent.switchThread(threadId),
+        threadSwitchTimeoutMs(),
+        `Switch to ${threadId}`,
+      );
+    } catch (err) {
+      if (failed(err)) throw err;
+      return;
+    }
+    // A new click can arrive after this thread's snapshot paints but before
+    // its IPC promise settles. Only the latest switch may settle the pending
+    // target or read a fallback snapshot.
+    if (switchId !== latestThreadSwitchId) return;
+    // `agent:switchThread` emits the complete target snapshot before its IPC
+    // promise resolves. Avoid a second renderer→main→renderer trip. Keep
+    // fallback for older ACP bridges that do not emit that snapshot.
+    if (get().state?.threadId !== threadId) {
+      let fetched: Awaited<ReturnType<typeof window.omni.agent.getState>>;
+      try {
+        fetched = await window.omni.agent.getState();
+      } catch (err) {
+        if (failed(err)) throw err;
+        return;
+      }
+      const state = preserveOptimisticState(get().state, fetched);
+      set(() => {
+        if (switchId !== latestThreadSwitchId || state.threadId !== threadId) return {};
+        discardStreamDeltas();
+        pendingThreadTarget = null;
+        return withSnapshot({
+          state,
+          threadToolCalls: {
+            ...get().threadToolCalls,
+            [state.threadId ?? "__none__"]: state.toolCalls,
+          },
+          slice: createEmptySessionSlice({
+            entries: state.entries,
+            toolCalls: state.toolCalls,
+            plan: state.plan,
+            usage: state.usage,
+            configOptions: state.configOptions,
+            commands: state.commands,
+            currentModeId: state.currentModeId,
+            isStreaming: state.isStreaming,
+            title: state.title,
+          }),
+          pendingThreadTarget: null,
+          error: null,
+        });
+      });
+    } else {
+      pendingThreadTarget = null;
+      set({ error: null, pendingThreadTarget: null });
+    }
   },
 
   createThread: async (projectId, title, afterThreadId, agentId, worktreePath, initialModelId) => {

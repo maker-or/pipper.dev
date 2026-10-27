@@ -47,6 +47,7 @@ async function controlledThreadSwitches() {
   let bridgeHandler: (payload: AcpBridgeEvent) => void = () => {};
   let currentState = sessionState("thread-a");
   const gates = new Map<string, () => void>();
+  const failures = new Map<string, (error: Error) => void>();
   const agentApi = {
     onEvent: vi.fn((handler: (payload: AcpBridgeEvent) => void) => {
       bridgeHandler = handler;
@@ -54,7 +55,13 @@ async function controlledThreadSwitches() {
     }),
     getState: vi.fn(async () => currentState),
     getCapabilities: vi.fn(async () => null),
-    switchThread: vi.fn((id: string) => new Promise<void>((resolve) => gates.set(id, resolve))),
+    switchThread: vi.fn(
+      (id: string) =>
+        new Promise<void>((resolve, reject) => {
+          gates.set(id, resolve);
+          failures.set(id, reject);
+        }),
+    ),
   };
   (globalThis as any).window = { omni: { agent: agentApi } };
   const store = await loadStore();
@@ -67,6 +74,7 @@ async function controlledThreadSwitches() {
       bridgeHandler({ type: "session-state", state: currentState });
     },
     resolve: (id: string) => gates.get(id)?.(),
+    reject: (id: string, error: Error) => failures.get(id)?.(error),
   };
 }
 
@@ -102,6 +110,27 @@ describe("agent store ACP bridge behavior", () => {
     }
   });
 
+  test("a slow switch does not hold back a newer click", async () => {
+    const { store, agentApi, publish, resolve, reject } = await controlledThreadSwitches();
+    const switchingB = store.getState().switchThread("thread-b");
+    await vi.waitFor(() => expect(agentApi.switchThread).toHaveBeenCalledWith("thread-b"));
+
+    // B is still loading. The click on C must reach main right away so main
+    // can supersede B, instead of waiting for B to finish.
+    const switchingC = store.getState().switchThread("thread-c");
+    await vi.waitFor(() => expect(agentApi.switchThread).toHaveBeenCalledWith("thread-c"));
+    publish("thread-c");
+    resolve("thread-c");
+    await switchingC;
+    expect(store.getState().snapshot?.threadId).toBe("thread-c");
+
+    // Main rejects the superseded call; that is not an error for the user.
+    reject("thread-b", new Error("superseded by a newer activation"));
+    await expect(switchingB).resolves.toBeUndefined();
+    expect(store.getState().error).toBeNull();
+    expect(store.getState().pendingThreadTarget).toBeNull();
+  });
+
   test("clicking the displayed thread cancels a pending switch to another thread", async () => {
     const { store, agentApi, publish, resolve } = await controlledThreadSwitches();
     const { selectThread } = await import("../lib/thread-actions");
@@ -117,8 +146,8 @@ describe("agent store ACP bridge behavior", () => {
     } finally {
       resolve("thread-b");
       await switchingB;
-      // Even though A is still displayed, the main process must switch back
-      // to it after the in-flight activation of B finishes.
+      // Even though A is still displayed, the main process must be asked to
+      // switch back to it so it supersedes the in-flight activation of B.
       await vi.waitFor(() => expect(agentApi.switchThread).toHaveBeenCalledWith("thread-a"));
       publish("thread-a");
       resolve("thread-a");
@@ -557,6 +586,29 @@ describe("agent store ACP bridge behavior", () => {
     expect(store.getState().runningThreadIds).toEqual([]);
 
     resolveSwitch?.();
+  });
+
+  test("a failed fallback read after a switch releases the pending target", async () => {
+    let calls = 0;
+    const agentApi = {
+      onEvent: vi.fn((_handler: (payload: AcpBridgeEvent) => void) => vi.fn()),
+      // Answers the connect-time read, then fails like a dropped bridge.
+      getState: vi.fn(async () => {
+        calls += 1;
+        if (calls > 1) throw new Error("bridge closed");
+        return sessionState("thread-a");
+      }),
+      getCapabilities: vi.fn(async () => null),
+      // An older bridge: the switch resolves but no session-state arrives.
+      switchThread: vi.fn(async () => {}),
+    };
+    (globalThis as any).window = { omni: { agent: agentApi } };
+
+    const store = await loadStore();
+    await store.getState().connect();
+    await expect(store.getState().switchThread("thread-b")).rejects.toThrow("bridge closed");
+    expect(store.getState().pendingThreadTarget).toBeNull();
+    expect(store.getState().error).toBe("bridge closed");
   });
 
   test("surfaces switch-thread failures", async () => {

@@ -25,7 +25,7 @@ async function rpc(url: string, body: unknown): Promise<{ status: number; json: 
   return { status: res.status, json: text ? JSON.parse(text) : null };
 }
 
-describe("subagent MCP http server", () => {
+describe("client-hosted MCP http server", () => {
   const server = new McpHttpServer();
 
   afterEach(() => server.close());
@@ -44,6 +44,7 @@ describe("subagent MCP http server", () => {
     expect(init.status).toBe(200);
     expect(init.json.result.protocolVersion).toBe("2025-06-18");
     expect(init.json.result.serverInfo.name).toBe("pipper-subagents");
+    expect(init.json.result.instructions).toBeUndefined();
     expect(init.json.result.capabilities.tools).toBeDefined();
 
     // initialized notification is acknowledged without a body
@@ -105,5 +106,39 @@ describe("subagent MCP http server", () => {
       method: "resources/list",
     });
     expect(res.json.error.code).toBe(-32601);
+  });
+
+  test("each instance identifies itself and passes image results through", async () => {
+    const browser = new McpHttpServer({
+      name: "pipper-browser",
+      version: "1.0.0",
+      instructions: "Use show_widget for visuals.",
+    });
+    try {
+      await browser.start();
+      browser.register("tok1", {
+        listTools: () => [],
+        callTool: async () => ({
+          content: [{ type: "image", data: "aGk=", mimeType: "image/png" }],
+        }),
+      });
+      const url = browser.urlFor("tok1");
+      const init = await rpc(url, { jsonrpc: "2.0", id: 1, method: "initialize", params: {} });
+      expect(init.json.result.serverInfo).toEqual({ name: "pipper-browser", version: "1.0.0" });
+      expect(init.json.result.instructions).toBe("Use show_widget for visuals.");
+      const call = await rpc(url, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "tools/call",
+        params: { name: "browser_screenshot", arguments: {} },
+      });
+      expect(call.json.result.content[0]).toEqual({
+        type: "image",
+        data: "aGk=",
+        mimeType: "image/png",
+      });
+    } finally {
+      browser.close();
+    }
   });
 });

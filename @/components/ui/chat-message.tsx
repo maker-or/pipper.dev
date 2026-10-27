@@ -153,7 +153,12 @@ const ChatMessage = forwardRef<HTMLDivElement, ChatMessageProps>(
                 }
                 className={cn(
                   "max-w-full py-2 text-[14px] whitespace-pre-wrap break-words text-pretty",
-                  isUser ? cn(shape.bg, "px-3.5", !expanded && "line-clamp-3") : "text-foreground",
+                  // The column is `items-start`, so children shrink to their content.
+                  // Assistant bodies span it: inline widgets (iframes) have no
+                  // content width of their own and would collapse otherwise.
+                  isUser
+                    ? cn(shape.bg, "px-3.5", !expanded && "line-clamp-3")
+                    : "w-full text-foreground",
                 )}
               >
                 {children}

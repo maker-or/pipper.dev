@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { FilePreviewInfo, FilePreviewTarget } from "../contracts/file-preview.ts";
 import type { DatabaseCompactionResult, WorkspaceDiskUsageReport } from "../contracts/storage.ts";
 import type { Project, ProjectFileTreeSnapshot } from "../contracts/projects.ts";
 import type { GitHubApi } from "../contracts/github.ts";
@@ -23,6 +24,9 @@ import type {
   AcpAgentInstanceInput,
   AgentAccountSchema,
   AgentProbeResult,
+  BrowserConfig,
+  InlineWidgetDocument,
+  InlineWidgetRef,
   SubagentConfig,
   SubagentRunSnapshot,
 } from "../contracts/acp.ts";
@@ -235,7 +239,11 @@ const api = {
     cancelListFiles: (requestId: string): void => {
       ipcRenderer.send("projects:cancelListFiles", requestId);
     },
-    getFileTree: (): Promise<ProjectFileTreeSnapshot> => ipcRenderer.invoke("projects:getFileTree"),
+    getFileTree: (
+      projectId?: string | null,
+      worktreePath?: string | null,
+    ): Promise<ProjectFileTreeSnapshot> =>
+      ipcRenderer.invoke("projects:getFileTree", projectId ?? null, worktreePath ?? null),
     setActive: (projectId: string): Promise<void> =>
       ipcRenderer.invoke("projects:setActive", projectId),
     onActiveChanged: (callback: (projectId: string) => void) => {
@@ -252,6 +260,14 @@ const api = {
         ipcRenderer.removeListener("projects:listChanged", listener);
       };
     },
+  },
+  files: {
+    stat: (target: FilePreviewTarget): Promise<FilePreviewInfo> =>
+      ipcRenderer.invoke("files:stat", target),
+    reveal: (target: FilePreviewTarget): Promise<void> =>
+      ipcRenderer.invoke("files:reveal", target),
+    openExternal: (target: FilePreviewTarget): Promise<void> =>
+      ipcRenderer.invoke("files:openExternal", target),
   },
   worktrees: {
     getAutoInstall: (): Promise<boolean> => ipcRenderer.invoke("worktrees:getAutoInstall"),
@@ -519,6 +535,18 @@ const api = {
     setConfig: (partial: Partial<SubagentConfig>): Promise<SubagentConfig> =>
       ipcRenderer.invoke("subagents:setConfig", partial),
     listRuns: (): Promise<SubagentRunSnapshot[]> => ipcRenderer.invoke("subagents:listRuns"),
+  },
+  widgets: {
+    getDocument: (
+      ref: InlineWidgetRef,
+      theme: "light" | "dark",
+    ): Promise<InlineWidgetDocument | null> =>
+      ipcRenderer.invoke("widgets:getDocument", ref, theme),
+  },
+  browser: {
+    getConfig: (): Promise<BrowserConfig> => ipcRenderer.invoke("browser:getConfig"),
+    setConfig: (partial: Partial<BrowserConfig>): Promise<BrowserConfig> =>
+      ipcRenderer.invoke("browser:setConfig", partial),
   },
   mcp: {
     list: () => ipcRenderer.invoke("mcp:list"),

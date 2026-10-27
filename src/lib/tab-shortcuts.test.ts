@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  activeTabToClose,
   isCloseTabShortcutEvent,
   isNewTabShortcutEvent,
   isNewTerminalShortcutEvent,
@@ -127,5 +128,22 @@ describe("native tab swipes", () => {
     expect(tabValueAfterSwipe(tabs, "hidden-thread", "right")).toBeNull();
     expect(tabValueAfterSwipe([], "thread-a", "left")).toBeNull();
     expect(tabValueAfterSwipe(["only"], "only", "left")).toBeNull();
+  });
+});
+
+describe("closing the active tab", () => {
+  const base = { terminalId: "term-1", hasDraft: true, threadId: "thread-a" };
+
+  test("closes the tab on screen, even when a draft sits behind it", () => {
+    expect(activeTabToClose({ ...base, mode: "preview" })).toBe("preview");
+    expect(activeTabToClose({ ...base, mode: "terminal" })).toBe("terminal");
+    expect(activeTabToClose({ ...base, mode: "agent" })).toBe("draft");
+  });
+
+  test("closes the thread when no draft is open, and nothing when there is none", () => {
+    expect(activeTabToClose({ ...base, hasDraft: false, mode: "agent" })).toBe("thread");
+    expect(
+      activeTabToClose({ terminalId: null, hasDraft: false, threadId: null, mode: "agent" }),
+    ).toBeNull();
   });
 });

@@ -278,6 +278,29 @@ export function getDb(): DatabaseSync {
   `);
 
   db.exec(`
+    CREATE TABLE IF NOT EXISTS inline_widgets (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT,
+      session_id TEXT,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      code TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_inline_widgets_thread
+      ON inline_widgets(thread_id);
+  `);
+  // Hash of the title and code show_widget was first called with. Some agents
+  // never forward MCP results, so the thread finds the widget from the call's
+  // input instead (see electron/widgets/widget-store.ts).
+  ensureColumn(
+    "inline_widgets",
+    "input_hash",
+    "ALTER TABLE inline_widgets ADD COLUMN input_hash TEXT;",
+  );
+
+  db.exec(`
     CREATE TABLE IF NOT EXISTS auth_users (
       provider TEXT NOT NULL,
       provider_user_id TEXT PRIMARY KEY,

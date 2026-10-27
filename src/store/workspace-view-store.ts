@@ -9,6 +9,8 @@ import type { DraftState } from "../../contracts/composer.ts";
  *   store / open-tabs machinery). When the thread has diffs open it renders
  *   as a 40:60 conversation | diff split; otherwise it fills 100% width.
  * - `terminal` — a single terminal session, filling 100% width.
+ * - `preview` — the active workspace's file preview tab (see preview-store),
+ *   filling 100% width.
  *
  * Agent threads and terminals share one tab strip in the header. Only the
  * mode + which terminal is active live here; the active *thread* identity
@@ -19,7 +21,7 @@ import type { DraftState } from "../../contracts/composer.ts";
  * Chrome (title-bar project name, file tree, etc.) must read draft.projectId
  * rather than ambient activeProject while a draft is active.
  */
-export type WorkspaceMode = "agent" | "terminal";
+export type WorkspaceMode = "agent" | "terminal" | "preview";
 
 export type BeginDraftOptions = {
   /** Soft-default project chip from ambient active project. */
@@ -51,6 +53,7 @@ interface WorkspaceViewState {
   draftCompletionThreadId: string | null;
   showAgent: () => void;
   showTerminal: (sessionId: string) => void;
+  showPreview: () => void;
   setActiveTerminalId: (sessionId: string | null) => void;
   requestThread: (threadId: string | null) => void;
   beginDraft: (options?: BeginDraftOptions) => void;
@@ -74,6 +77,7 @@ export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
 
   showAgent: () => set({ mode: "agent" }),
   showTerminal: (sessionId) => set({ mode: "terminal", activeTerminalId: sessionId }),
+  showPreview: () => set({ mode: "preview" }),
   setActiveTerminalId: (sessionId) => set({ activeTerminalId: sessionId }),
   requestThread: (threadId) => set({ requestedThreadId: threadId }),
 

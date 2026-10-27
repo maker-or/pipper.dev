@@ -382,6 +382,8 @@ export type AcpBridgeEvent =
   | { type: "stop"; sessionId: string; threadId: string | null; stopReason: string }
   /** Thread IDs whose agent is currently streaming, across all open threads. */
   | { type: "running-threads"; threadIds: string[] }
+  /** A widget's code changed (update_widget); frames showing it reload. */
+  | { type: "widget-updated"; widgetId: string; threadId: string | null }
   /** Snapshot of all subagent runs whenever any run changes state. */
   | { type: "subagent-runs"; runs: SubagentRunSnapshot[] }
   /** Provider model catalogs that changed (cached in main; see getModelCatalogs). */
@@ -389,6 +391,55 @@ export type AcpBridgeEvent =
       type: "model-catalogs";
       catalogs: Record<string, Array<{ modelId: string; name: string; provider?: string }>>;
     };
+
+/** A visual an agent showed in a thread with the `show_widget` tool. */
+export interface InlineWidgetRecord {
+  /** `wdg_…`; referenced from the tool result as `pipper-widget:<id>`. */
+  id: string;
+  threadId: string | null;
+  sessionId: string | null;
+  /** snake_case name chosen by the agent; also the download name. */
+  title: string;
+  /** Plain-text fallback for screen readers, exports and failed renders. */
+  summary: string;
+  /** HTML fragment or single <svg>. */
+  code: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * How the thread asks for a widget: by id when the agent forwarded the
+ * show_widget result, otherwise by the call's input.
+ */
+export type InlineWidgetRef =
+  | { id: string }
+  | { threadId: string | null; title: string; code: string };
+
+/** What the renderer loads to display a widget: its sandboxed document. */
+export interface InlineWidgetDocument {
+  id: string;
+  title: string;
+  summary: string;
+  updatedAt: number;
+  /** Complete HTML document for the widget's sandboxed frame. */
+  document: string;
+}
+
+/**
+ * User preferences for the agent browser (headless pages agents drive over
+ * MCP). Persisted as `browser.json` in the app's userData directory.
+ */
+export interface BrowserConfig {
+  /** Offer browser tools to new agent sessions. Off also closes open pages. */
+  enabled: boolean;
+  /** Pages one session may have open at once. */
+  pagesPerSession: number;
+  /** Close a page after this many minutes without a tool call. */
+  idleMinutes: number;
+  /** "ask" prompts in the thread before a page may download a file. */
+  downloads: "ask" | "block";
+}
 
 /**
  * User preferences for the client-hosted subagent tool. Persisted as

@@ -49,6 +49,8 @@ import {
 import { selectThread } from "@/lib/thread-actions";
 import { invalidateProjectFiles, useProjectFileIndex } from "@/lib/project-file-index";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
+import { InlineWidget } from "@/components/inline-widget";
+import { buildMessageBodyBlocks, type MessageBodyBlock } from "@/lib/inline-widgets";
 import { AssistantTraceDeck } from "@/components/ui/assistant-trace-deck";
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator";
 import { AgentSlashCommandMenu } from "@/components/agent-slash-command-menu";
@@ -508,6 +510,7 @@ export function shouldPreserveComposerLiveEdge(
 
 function MessageBody({
   messages,
+  threadId = null,
   isStreaming = false,
   activeMessages = [],
   diffSummary,
@@ -515,6 +518,7 @@ function MessageBody({
   onTraceDeckOpenChange,
 }: {
   messages: MessageLike[];
+  threadId?: string | null;
   isStreaming?: boolean;
   activeMessages?: MessageLike[];
   diffSummary?: DiffTurnSummary;
@@ -524,40 +528,37 @@ function MessageBody({
   const role = messages[0]?.role;
   const assistantContent = useMemo(() => {
     if (role !== "assistant") {
-      return { allTraceParts: [] as any[], textBodyCombined: "" };
+      return { allTraceParts: [] as any[], bodyBlocks: [] as MessageBodyBlock[] };
     }
 
     const allTraceParts: any[] = [];
-    const allTextParts: string[] = [];
+    // Text and shown widgets, in timeline order across the turn's messages.
+    const bodyParts: unknown[] = [];
 
     for (const msg of messages) {
       const content = (msg as unknown as { content?: unknown }).content;
       if (typeof content === "string") {
         const body = stringifyMessageContent(msg);
-        if (body.trim()) allTextParts.push(body);
+        if (body.trim()) bodyParts.push({ type: "text", text: body });
       } else if (Array.isArray(content)) {
-        const textParts = content.filter((part) => part && part.type === "text");
         const traceParts = content.filter(
           (part) => part && (part.type === "thinking" || part.type === "toolCall"),
         );
-
         allTraceParts.push(...traceParts);
-        const textBody = textParts
-          .map((part) => part.text)
-          .filter(Boolean)
-          .join("\n\n");
-        if (textBody.trim()) allTextParts.push(textBody);
+        for (const part of content) {
+          if (part && (part.type === "text" || part.type === "toolCall")) bodyParts.push(part);
+        }
       }
     }
 
     return {
       allTraceParts,
-      textBodyCombined: allTextParts.join("\n\n"),
+      bodyBlocks: buildMessageBodyBlocks(bodyParts, threadId),
     };
-  }, [messages, role]);
+  }, [messages, role, threadId]);
 
   if (role === "assistant") {
-    const { allTraceParts, textBodyCombined } = assistantContent;
+    const { allTraceParts, bodyBlocks } = assistantContent;
 
     return (
       <div className="space-y-3">
@@ -572,13 +573,20 @@ function MessageBody({
           />
         )}
 
-        {textBodyCombined.trim() && (
-          <div
-            data-pipper-id="assistant-markdown"
-            className="prose prose-sm max-w-none prose-neutral dark:prose-invert"
-          >
-            <MarkdownRenderer isStreaming={isStreaming}>{textBodyCombined}</MarkdownRenderer>
-          </div>
+        {bodyBlocks.map((block, index) =>
+          block.kind === "widget" ? (
+            <InlineWidget key={block.key} widgetRef={block.ref} threadId={threadId} />
+          ) : (
+            <div
+              key={`text-${index}`}
+              data-pipper-id="assistant-markdown"
+              className="prose prose-sm max-w-none prose-neutral dark:prose-invert"
+            >
+              <MarkdownRenderer isStreaming={isStreaming && index === bodyBlocks.length - 1}>
+                {block.text}
+              </MarkdownRenderer>
+            </div>
+          ),
         )}
 
         {!isStreaming && diffSummary && <DiffSummaryCard summary={diffSummary} />}
@@ -2543,6 +2551,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                               {hasContent ? (
                                 <MessageBody
                                   messages={messages}
+                                  threadId={snapshot?.threadId ?? null}
                                   isStreaming={isStreaming}
                                   activeMessages={activeMessages}
                                   diffSummary={

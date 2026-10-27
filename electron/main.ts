@@ -6,6 +6,7 @@ import {
   ipcMain,
   dialog,
   powerMonitor,
+  protocol,
   safeStorage,
 } from "electron";
 import { join, dirname, relative, resolve, isAbsolute } from "node:path";
@@ -26,6 +27,13 @@ import {
 } from "./launch-state";
 import { pickWorkspaceThread } from "../contracts/workspace-scope.ts";
 import { createProject, getProject, listProjects } from "./projects";
+import {
+  canOpenExternally,
+  FILE_PREVIEW_SCHEME,
+  FilePreviewService,
+  servePreviewFile,
+} from "./file-preview.ts";
+import type { FilePreviewTarget } from "../contracts/file-preview.ts";
 import { logMain } from "./main-log";
 import {
   continueWorktreeOnNewBranch,
@@ -78,6 +86,7 @@ import {
 } from "./db";
 import { getThread, listThreads, listThreadsByIds, listProjectThreads } from "./threads";
 import type { OpenTabsState } from "../contracts/threads.ts";
+import type { BrowserConfig, InlineWidgetDocument } from "../contracts/acp.ts";
 import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer } from "./mcp-servers";
 import {
   installAgentInstanceProvider,
@@ -93,6 +102,10 @@ import {
   deleteAgentInstance,
 } from "./agent-instances";
 import { AgentManager } from "./agent";
+import { BrowserService } from "./browser/browser-service.ts";
+import { electronPageHost, isAgentBrowserWindow } from "./browser/electron-page.ts";
+import { resolveWidgetDocument } from "./widgets/widget-documents.ts";
+import { sqliteWidgetStore } from "./widgets/widget-store.ts";
 import { RemoteTaskError, getRemoteRequests } from "./remote-requests.ts";
 import { prepareIsolatedAgentTask } from "./isolated-agent-task.ts";
 import { createElectronOsNotifier } from "./os-notifications";
@@ -108,9 +121,12 @@ import {
   removeThreadTabs,
   openThreadTab,
   readOpenTabsState,
+  activateTabAfterClose,
   setActiveThreadTab,
+  setLiveThreadIdsCheck,
   setTabEventObserver,
 } from "./open-tabs";
+import { isActivationSuperseded } from "./activation.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
 import {
   captureAnalytics,
@@ -295,6 +311,43 @@ async function listProjectFileTree(projectPath: string): Promise<ProjectFileTree
 }
 let currentTheme: "light" | "dark" | "system" = "system";
 
+// Read-only project file previews. Must be registered before the app is
+// ready; `standard` + `secure` give it normal URL parsing and a secure
+// origin, and `stream` lets video and audio seek with range requests.
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: FILE_PREVIEW_SCHEME,
+    privileges: { standard: true, secure: true, stream: true, supportFetchAPI: true },
+  },
+]);
+const filePreview = new FilePreviewService({
+  getProjectPath: (projectId) => getProject(projectId)?.path ?? null,
+  listWorktreePaths: async (projectPath) =>
+    (await listWorktrees(projectPath)).map((worktree) => worktree.path),
+});
+
+/** Serve `pipper-file://` requests issued by `files:stat`, never anything else. */
+function registerFilePreviewProtocol(): void {
+  protocol.handle(FILE_PREVIEW_SCHEME, async (request) => {
+    const realPath = await filePreview.resolveRequest(request.url);
+    if (!realPath) return new Response("Not found", { status: 404 });
+    return servePreviewFile(realPath, request.headers.get("range"));
+  });
+}
+
+function filePreviewTarget(value: unknown): FilePreviewTarget {
+  const target = value as Partial<FilePreviewTarget> | null;
+  if (
+    !target ||
+    typeof target.projectId !== "string" ||
+    typeof target.path !== "string" ||
+    (target.worktreePath !== null && typeof target.worktreePath !== "string")
+  ) {
+    throw new Error("Invalid file target.");
+  }
+  return { projectId: target.projectId, worktreePath: target.worktreePath, path: target.path };
+}
+
 const benchmarkEnabled = process.env.PIPPER_BENCHMARK_MODE === "1";
 const isDev = !app.isPackaged && !benchmarkEnabled;
 
@@ -373,6 +426,7 @@ let launchWindow: BrowserWindow | null = null;
 let monitorWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
 let agentManager: AgentManager | null = null;
+let browserService: BrowserService | null = null;
 /**
  * Single source of truth for "can the user currently see the main window".
  * Consumed by the agent bridge (hidden-window delta coalescing) and the OS
@@ -1820,7 +1874,39 @@ function registerIpc(): void {
     projectFileLister.cancel(`${event.sender.id}:${requestId}`);
   });
 
-  ipcMain.handle("projects:getFileTree", async () => {
+  ipcMain.handle(
+    "projects:getFileTree",
+    async (_event, projectId?: string | null, worktreePath?: string | null) => {
+      // A caller that names its workspace (the Files panel, the basic tree)
+      // gets that workspace's files, after checking it belongs to the project.
+      if (projectId) {
+        return listProjectFileTree(
+          await filePreview.workspaceRoot(projectId, worktreePath ?? null),
+        );
+      }
+      return listActiveFileTree();
+    },
+  );
+
+  ipcMain.handle("files:stat", (_event, target: unknown) =>
+    filePreview.stat(filePreviewTarget(target)),
+  );
+  ipcMain.handle("files:reveal", async (_event, target: unknown) => {
+    const { real } = await filePreview.resolve(filePreviewTarget(target));
+    shell.showItemInFolder(real);
+  });
+  ipcMain.handle("files:openExternal", async (_event, target: unknown) => {
+    const { real, kind } = await filePreview.resolve(filePreviewTarget(target));
+    // Only media and document formats: opening a script or executable with
+    // its default app would run it.
+    if (!canOpenExternally(real, kind)) {
+      throw new Error("This file type can only be revealed, not opened.");
+    }
+    const error = await shell.openPath(real);
+    if (error) throw new Error(error);
+  });
+
+  async function listActiveFileTree(): Promise<ProjectFileTreeSnapshot> {
     // Keep the flyout aligned with the currently selected worktree.
     const cwd = await requireAgentManager().getActiveCwd();
     if (cwd && fs.existsSync(cwd)) return listProjectFileTree(cwd);
@@ -1828,7 +1914,7 @@ function registerIpc(): void {
     const project = id ? getProject(id) : null;
     if (!project || !fs.existsSync(project.path)) return { paths: [], gitStatus: [] };
     return listProjectFileTree(project.path);
-  });
+  }
 
   ipcMain.handle(
     "projects:create",
@@ -2491,11 +2577,10 @@ function registerIpc(): void {
     const isPeer = makeWorkspacePeerPredicate(id);
     const manager = requireAgentManager();
     await manager.deleteThread(id);
+    // After deleteThread: its own replacement switch is part of this delete.
+    const selectionAtClose = manager.selectionGeneration();
     const next = await closeThreadTab(id, isPeer);
-    if (next.activeThreadId && manager.getState().threadId !== next.activeThreadId) {
-      await manager.switchThread(next.activeThreadId);
-    }
-    if (!next.activeThreadId) await manager.clearActiveThread();
+    await activateTabAfterClose(manager, next, selectionAtClose);
     broadcastOpenTabsChanged(mainWindow, next);
   });
 
@@ -2511,18 +2596,14 @@ function registerIpc(): void {
   ipcMain.handle("tabs:close", async (_event, threadId: string) => {
     const isPeer = makeWorkspacePeerPredicate(threadId);
     const manager = requireAgentManager();
+    const selectionAtClose = manager.selectionGeneration();
     try {
       await manager.closeThreadSession(threadId);
     } catch (err) {
       console.warn("[IPC] closeThreadSession failed:", err);
     }
     const next = await closeThreadTab(threadId, isPeer);
-    if (next.activeThreadId && manager.getState().threadId !== next.activeThreadId) {
-      await manager.switchThread(next.activeThreadId);
-    }
-    if (!next.activeThreadId) {
-      await manager.clearActiveThread();
-    }
+    await activateTabAfterClose(manager, next, selectionAtClose);
     broadcastOpenTabsChanged(mainWindow, next);
     return next;
   });
@@ -2583,6 +2664,9 @@ function registerIpc(): void {
         success: true,
       });
     } catch (e: any) {
+      // A newer click took over this activation. That is the expected outcome
+      // of clicking quickly through tabs, not a failed switch.
+      if (isActivationSuperseded(e)) return;
       monitorService?.noteSwitchCompleted({
         threadId,
         durationMs: Date.now() - started,
@@ -2744,6 +2828,21 @@ function registerIpc(): void {
     requireAgentManager().setSubagentConfig(partial),
   );
   ipcMain.handle("subagents:listRuns", () => requireAgentManager().getSubagentRuns());
+
+  ipcMain.handle(
+    "widgets:getDocument",
+    (_event, ref: unknown, theme: unknown): InlineWidgetDocument | null =>
+      resolveWidgetDocument(sqliteWidgetStore, ref, theme),
+  );
+
+  ipcMain.handle("browser:getConfig", () => {
+    if (!browserService) throw new Error("Browser service is not ready");
+    return browserService.getConfig();
+  });
+  ipcMain.handle("browser:setConfig", (_event, partial: Partial<BrowserConfig>) => {
+    if (!browserService) throw new Error("Browser service is not ready");
+    return browserService.setConfig(partial);
+  });
 
   ipcMain.handle("mcp:list", () => listMcpServers());
   ipcMain.handle("mcp:create", (_event, input) => createMcpServer(input));
@@ -3116,6 +3215,7 @@ app.whenReady().then(async () => {
   buildAppMenu();
   logStartupMilestone("database:init:start");
   getDb();
+  setLiveThreadIdsCheck((ids) => new Set(listThreadsByIds(ids).map((thread) => thread.id)));
   configureGithubPrSnapshotCache({
     read: getGithubPrSnapshot,
     write: saveGithubPrSnapshot,
@@ -3141,6 +3241,16 @@ app.whenReady().then(async () => {
     });
     notifyAnalyticsIdentity();
   }
+  browserService = new BrowserService({
+    host: electronPageHost,
+    widgetStore: sqliteWidgetStore,
+    // Agents may browse localhost dev servers, but not Pipper's own renderer.
+    appOrigins: () => {
+      const rendererUrl = process.env["ELECTRON_RENDERER_URL"];
+      return rendererUrl ? [rendererUrl] : [];
+    },
+  });
+  void browserService.init();
   agentManager = new AgentManager({
     // Electron resolves this from package.json's `version` field.
     clientVersion: app.getVersion(),
@@ -3160,6 +3270,7 @@ app.whenReady().then(async () => {
     visibility: windowVisibilityGate,
     attention: { isFocused: () => mainWindowFocused },
     notify: osNotifier,
+    browser: browserService,
   });
   // Database maintenance waits for agent turns to finish (see R15).
   applicationStorage.setBusyProbe(() => (agentManager?.getRunningThreadIds().length ?? 0) > 0);
@@ -3294,6 +3405,7 @@ app.whenReady().then(async () => {
     broadcastProgress: (progress) => broadcastToWindows("launcher-update:progress", progress),
   });
   registerIpc();
+  registerFilePreviewProtocol();
 
   logStartupMilestone("launch-state:read:start");
   const state = await readLaunchState();
@@ -3367,6 +3479,18 @@ app.whenReady().then(async () => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+// Hidden agent browser pages are windows too, so window-all-closed never fires
+// while an agent has a page open. Quit when the last *app* window closes.
+app.on("browser-window-created", (_event, window) => {
+  window.once("closed", () => {
+    if (process.platform === "darwin" || isAgentBrowserWindow(window)) return;
+    const appWindows = BrowserWindow.getAllWindows().filter(
+      (candidate) => !candidate.isDestroyed() && !isAgentBrowserWindow(candidate),
+    );
+    if (appWindows.length === 0) app.quit();
+  });
 });
 
 /**

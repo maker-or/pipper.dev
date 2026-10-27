@@ -5,7 +5,12 @@ import { createPortal } from "react-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ChatCircleIcon,
+  FileCodeIcon,
+  FileIcon,
+  FilmStripIcon,
   FolderPlusIcon,
+  ImageIcon,
+  MusicNotesIcon,
   PlusIcon,
   TerminalWindowIcon,
   WarningIcon,
@@ -23,6 +28,8 @@ import { useAgentStore } from "@/store/agent-store";
 import { useWorktreeStore } from "@/store/worktree-store";
 import { makeWorkspaceKey, useTerminalStore } from "@/store/terminal-store";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
+import { usePreviewStore } from "@/store/preview-store";
+import { useShownPreviewWorkspaceKey } from "@/lib/file-preview-actions";
 import { useUiModeStore } from "@/store/ui-mode-store";
 import { useTabGestureStore } from "@/store/tab-gesture-store";
 import { useThreadCompletionStore } from "@/store/thread-completion-store";
@@ -41,6 +48,7 @@ import {
 import type { Thread } from "../../contracts/threads.ts";
 import { isThreadInWorkspace, normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import {
+  activeTabToClose,
   isCloseTabShortcutEvent,
   isNewTabShortcutEvent,
   isNewTerminalShortcutEvent,
@@ -51,6 +59,21 @@ import {
 } from "@/lib/tab-shortcuts";
 
 const TERMINAL_TAB_PREFIX = "terminal:";
+/** The workspace's single file preview tab. */
+const PREVIEW_TAB_VALUE = "__preview__";
+
+const IMAGE_EXTENSION = /\.(png|apng|jpe?g|gif|webp|avif|svg|ico|bmp)$/i;
+const VIDEO_EXTENSION = /\.(mp4|m4v|webm|mov|ogv)$/i;
+const AUDIO_EXTENSION = /\.(mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i;
+const BINARY_EXTENSION = /\.(pdf|zip|gz|tar|dmg|exe|bin|woff2?|ttf|otf)$/i;
+
+function previewTabIcon(path: string) {
+  if (IMAGE_EXTENSION.test(path)) return ImageIcon;
+  if (VIDEO_EXTENSION.test(path)) return FilmStripIcon;
+  if (AUDIO_EXTENSION.test(path)) return MusicNotesIcon;
+  if (BINARY_EXTENSION.test(path)) return FileIcon;
+  return FileCodeIcon;
+}
 
 // Stable component identity — a fresh function reference remounts the icon on
 // every unrelated re-render (e.g. streaming), restarting the CSS pulse.
@@ -96,6 +119,14 @@ export function GlobalTabBar() {
   const mode = useWorkspaceViewStore((state) => state.mode);
   const showAgent = useWorkspaceViewStore((state) => state.showAgent);
   const showTerminal = useWorkspaceViewStore((state) => state.showTerminal);
+  const showPreview = useWorkspaceViewStore((state) => state.showPreview);
+  const previewKey = useShownPreviewWorkspaceKey();
+  // The path shown in this workspace's preview tab, or null when it has none.
+  const previewPath = usePreviewStore((state) => {
+    const preview = previewKey ? state.workspaces[previewKey] : undefined;
+    return preview?.path ?? null;
+  });
+  const closePreview = usePreviewStore((state) => state.close);
   const draft = useWorkspaceViewStore((state) => state.draft);
   const draftCompletionThreadId = useWorkspaceViewStore((state) => state.draftCompletionThreadId);
   const beginDraft = useWorkspaceViewStore((state) => state.beginDraft);
@@ -383,7 +414,8 @@ export function GlobalTabBar() {
           nextThread.project_id === activeProject?.id &&
           isThreadInWorkspace(nextThread, activeWorkspacePath));
       if (nextState.activeThreadId && nextIsVisible) {
-        await handleSelectThread(nextState.activeThreadId, mode !== "terminal");
+        // Only bring the agent view forward when it was the view on screen.
+        await handleSelectThread(nextState.activeThreadId, mode === "agent");
       } else {
         requestThread(null);
         const sessions = useTerminalStore.getState().sessions;
@@ -403,7 +435,9 @@ export function GlobalTabBar() {
             previousActiveProjectId: project?.id ?? null,
             worktreePath,
           });
-          showAgent();
+          // beginDraft shows the agent view; a preview on screen stays there.
+          if (mode === "preview" && previewPath) showPreview();
+          else showAgent();
         }
       }
     } catch (err) {
@@ -463,54 +497,71 @@ export function GlobalTabBar() {
     showTerminal(id);
   };
 
+  /** After closing the visible terminal or preview: the agent thread, or a draft when none is open. */
+  const showAgentOrDraft = () => {
+    const hasOpenThreads = orderedOpenThreads.length > 0;
+    const targetThreadId = snapshotThreadId ?? activeThreadId ?? orderedOpenThreads[0]?.id;
+    if (hasOpenThreads && targetThreadId) {
+      showAgent();
+      return;
+    }
+    const project = activeProject;
+    const worktreePath = project
+      ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
+      : null;
+    beginDraft({
+      projectId: project?.id ?? null,
+      previousActiveProjectId: project?.id ?? null,
+      worktreePath,
+    });
+    showAgent();
+  };
+
   const handleCloseTerminal = (id: string) => {
     const wasViewTerminal = mode === "terminal";
     const wasReferencedTerminal = activeTerminalId === id;
     const next = closeSession(id);
     if (!wasReferencedTerminal) return;
     if (wasViewTerminal) {
-      if (next) {
-        showTerminal(next);
-      } else {
-        const hasOpenThreads = orderedOpenThreads.length > 0;
-        const targetThreadId = snapshotThreadId ?? activeThreadId ?? orderedOpenThreads[0]?.id;
-        if (hasOpenThreads && targetThreadId) {
-          showAgent();
-        } else {
-          const project = activeProject;
-          const worktreePath = project
-            ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
-            : null;
-          beginDraft({
-            projectId: project?.id ?? null,
-            previousActiveProjectId: project?.id ?? null,
-            worktreePath,
-          });
-          showAgent();
-        }
-      }
+      if (next) showTerminal(next);
+      else showAgentOrDraft();
     } else {
       setViewActiveTerminalId(next);
     }
   };
 
+  const handleClosePreview = () => {
+    if (previewKey) closePreview(previewKey);
+    if (useWorkspaceViewStore.getState().mode === "preview") showAgentOrDraft();
+  };
+
+  // A preview tab belongs to one workspace. Switching to a workspace without
+  // one (or closing it elsewhere) must not leave the view on an empty preview.
+  useEffect(() => {
+    if (mode === "preview" && !previewPath) showAgent();
+  }, [mode, previewPath, showAgent]);
+
   // Draft is tab-less: use a sentinel that matches no TabItem so nothing highlights.
   const selectedThreadId = optimisticRequestedThreadId ?? snapshotThreadId ?? activeThreadId ?? "";
   const selectedTabValue =
-    mode === "terminal" && activeTerminalId
-      ? `${TERMINAL_TAB_PREFIX}${activeTerminalId}`
-      : draft
-        ? "__draft__"
-        : selectedThreadId;
+    mode === "preview" && previewPath
+      ? PREVIEW_TAB_VALUE
+      : mode === "terminal" && activeTerminalId
+        ? `${TERMINAL_TAB_PREFIX}${activeTerminalId}`
+        : draft
+          ? "__draft__"
+          : selectedThreadId;
 
   const orderedTabValues = useMemo(
-    () =>
-      tabValuesInBarOrder(
+    () => [
+      ...tabValuesInBarOrder(
         visibleOpenThreads.map((thread) => thread.id),
         visibleTerminalTabs.map((session) => session.id),
         TERMINAL_TAB_PREFIX,
       ),
-    [visibleOpenThreads, visibleTerminalTabs],
+      ...(previewPath ? [PREVIEW_TAB_VALUE] : []),
+    ],
+    [visibleOpenThreads, visibleTerminalTabs, previewPath],
   );
 
   const handleTabChangeRef = useRef<(value: string) => void>(() => {});
@@ -524,6 +575,10 @@ export function GlobalTabBar() {
     beginRendererInteraction("tab-click");
     if (value.startsWith(TERMINAL_TAB_PREFIX)) {
       handleSelectTerminal(value.slice(TERMINAL_TAB_PREFIX.length));
+      return;
+    }
+    if (value === PREVIEW_TAB_VALUE) {
+      showPreview();
       return;
     }
     const highlightPaint = new Promise<number>((resolve) => {
@@ -590,22 +645,27 @@ export function GlobalTabBar() {
     const curTerminalId = useWorkspaceViewStore.getState().activeTerminalId;
     const curThreadId = optimisticRequestedThreadId ?? snapshotThreadId ?? activeThreadId;
 
-    if (currentDraft) {
-      if (currentDraft.dirty) {
-        const ok = confirmDiscardDraft();
-        if (!ok) return;
-      }
-      endDraft();
-      return;
-    }
-
-    if (currentMode === "terminal" && curTerminalId) {
-      handleCloseTerminal(curTerminalId);
-      return;
-    }
-
-    if (curThreadId) {
-      void handleCloseThreadTab(curThreadId);
+    switch (
+      activeTabToClose({
+        mode: currentMode,
+        terminalId: curTerminalId,
+        hasDraft: currentDraft !== null,
+        threadId: curThreadId,
+      })
+    ) {
+      case "preview":
+        handleClosePreview();
+        return;
+      case "terminal":
+        if (curTerminalId) handleCloseTerminal(curTerminalId);
+        return;
+      case "draft":
+        if (currentDraft?.dirty && !confirmDiscardDraft()) return;
+        endDraft();
+        return;
+      case "thread":
+        if (curThreadId) void handleCloseThreadTab(curThreadId);
+        return;
     }
   };
 
@@ -727,6 +787,19 @@ export function GlobalTabBar() {
               data-pipper-id={`terminal-tab-${session.id}`}
             />
           ))}
+          {previewPath && (
+            <TabItem
+              key={PREVIEW_TAB_VALUE}
+              index={visibleOpenThreads.length + visibleTerminalTabs.length}
+              value={PREVIEW_TAB_VALUE}
+              label={previewPath.slice(previewPath.lastIndexOf("/") + 1)}
+              scrollLabelOnHover
+              icon={previewTabIcon(previewPath)}
+              onClose={handleClosePreview}
+              title={previewPath}
+              data-pipper-id="preview-tab"
+            />
+          )}
         </TabsList>
 
         <div className="relative shrink-0" style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
