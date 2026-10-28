@@ -5,7 +5,9 @@ other agents as **tasks**: real Pipper threads, nested under the thread that
 started them, optionally in their own worktree. It replaces the old
 `pipper-subagents` server (`spawn_subagent`).
 
-Status: implemented in `electron/agent-tasks/`.
+Status: implemented in `electron/agent-tasks/`. The proposed capability
+registry (`docs/capabilities/design.md`) rebuilds tasks on shared `threads`
+and `workspaces` capabilities.
 
 ## First principles
 
