@@ -284,6 +284,12 @@ const api = {
       ipcRenderer.on("worktrees:deleted", listener);
       return () => ipcRenderer.removeListener("worktrees:deleted", listener);
     },
+    /** A project's workspaces were created or deleted, by the user or an agent. */
+    onChanged: (callback: (event: { projectId: string }) => void) => {
+      const listener = (_event: unknown, event: { projectId: string }) => callback(event);
+      ipcRenderer.on("worktrees:changed", listener);
+      return () => ipcRenderer.removeListener("worktrees:changed", listener);
+    },
     switch: (input: { projectId: string; path: string }): Promise<Thread> =>
       ipcRenderer.invoke("worktrees:switch", input),
     getSelections: (): Promise<Record<string, string>> =>

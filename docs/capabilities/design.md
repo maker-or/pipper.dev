@@ -6,8 +6,9 @@ Each of those operations is defined once and reachable from both the renderer
 (IPC) and agents (MCP). What agents do shows up through UI Pipper already has:
 nested threads, ACP plans and permission prompts, inline widgets and cards.
 
-Status: proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first
-piece; this design extends them to the rest of Pipper's own state.
+Status: step 1 of _Migration_ is built (`electron/operations/`); the rest is
+proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
+design extends them to the rest of Pipper's own state.
 
 ## What gets a tool
 
@@ -531,7 +532,10 @@ the calling thread by `AgentQuestionCard`. It is marked
 
 - **Impact** is computed by Pipper when the request is made (thread count,
   `git status`, commits not on the upstream), not taken from the agent. If
-  Pipper can't check something it says so.
+  Pipper can't check something it says so. The card itself shows only the
+  title and the buttons; the impact goes back to the agent in the
+  `awaiting_confirmation` result and decides whether a confirm needs a new
+  hold.
 - **The red button**, labelled `Hold to <verb>`: hold for **800 ms** while a
   fill sweeps across; releasing early drains it. Holding Space or Enter works
   the same; key repeat doesn't restart it. A plain click only shows "Press and
@@ -623,9 +627,22 @@ if Pipper adopts Effect more broadly.
 
 ## Migration
 
-1. Add zod, `defineOperation` and provenance. Move workspace
+1. **Built.** Add zod, `defineOperation` and provenance. Move workspace
    operations out of `main.ts`; add `delete_workspace` with the destructive
    card. The renderer keeps calling `window.omni.worktrees.*`.
+   - `electron/operations/define.ts` (tiers, `callAsAgent`, `runAsUser`),
+     `provenance.ts`, `workspaces.ts` (list, create, delete; the delete body
+     moved from `main.ts` unchanged). `create_workspace`, `list_workspaces`
+     and `start_task`'s workspaces run through them.
+   - `create_workspace` is `local`, so it no longer asks even with
+     `startApproval: "ask"`; that setting now covers starting tasks only.
+   - The workspace tools stay behind the Agent tasks setting, as before; they
+     move to the always-on list with the single `pipper` server (step 7).
+   - Confirmations ride on `PermissionCoordinator` with no timeout
+     (`AcpPermissionRequest.confirm`). A user's Stop or a closed session
+     withdraws the card, and the agent gets a "withdrawn" note.
+   - On the phone (remote permissions) the card's options show as plain
+     buttons; the hold applies on the desktop only.
 2. Move thread operations; rename the task tools to thread names (see
    _Tools_) and widen `message_thread`, `get_thread`, `list_threads` and
    `cancel_thread` to any thread; add `delete_thread` and `move_thread` (with a "Move to

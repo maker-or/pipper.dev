@@ -3,6 +3,7 @@ import { app } from "electron";
 import { join } from "node:path";
 import { ensureThreadSnapshotSchema } from "./thread-snapshot-schema.ts";
 import { ensureAgentTaskSchema } from "./agent-tasks/agent-task-store.ts";
+import { ensureProvenanceSchema } from "./operations/provenance.ts";
 
 let db: DatabaseSync | null = null;
 
@@ -215,6 +216,8 @@ export function getDb(): DatabaseSync {
   ensureThreadSnapshotSchema(db);
   // Tasks a thread started through the pipper-agents MCP server.
   ensureAgentTaskSchema(db);
+  // Which thread created which resource (see electron/operations/provenance.ts).
+  ensureProvenanceSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_agent_selections (

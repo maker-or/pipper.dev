@@ -78,7 +78,7 @@ beforeEach(async () => {
   Object.assign(window, {
     omni: {
       projects: { getActive: async () => project, list: async () => [project, otherProject] },
-      worktrees: { list, getSelections, onDeleted: () => () => {} },
+      worktrees: { list, getSelections, onDeleted: () => () => {}, onChanged: () => () => {} },
     },
   });
   useProjectStore.setState({ activeProject: project, isLoading: false, error: null });

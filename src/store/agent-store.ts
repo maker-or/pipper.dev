@@ -11,6 +11,7 @@ import type {
   AgentCapabilities,
   AuthMethod,
   AvailableCommand,
+  DestructiveConfirmation,
   SessionConfigOption,
 } from "../../contracts/acp.ts";
 import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
@@ -86,6 +87,20 @@ function applyThreadTitleUpdate(threadId: string, title: string): void {
   }));
 }
 
+/**
+ * A thread deleted in main by someone other than this renderer (an agent, or a
+ * workspace delete): drop it from the same caches a title update patches, so
+ * the sidebar and lists don't wait for a refresh.
+ */
+function applyThreadDeleted(threadId: string): void {
+  queryClient.setQueriesData<ThreadPage | undefined>({ queryKey: ["project-threads"] }, (current) =>
+    current
+      ? { ...current, threads: current.threads.filter((thread) => thread.id !== threadId) }
+      : current,
+  );
+  useThreadStore.getState().forgetThread(threadId);
+}
+
 /** A question surfaced to the user, mapped from an ACP permission request. */
 export interface UiRequest {
   id: string;
@@ -100,6 +115,8 @@ export interface UiRequest {
    *  Null when the owning session isn't bound to a thread. */
   threadId: string | null;
   optionIds?: string[];
+  /** Set for Pipper's destructive confirmations: draw the hold-to-confirm card. */
+  confirm?: DestructiveConfirmation;
 }
 
 interface AgentState {
@@ -562,6 +579,8 @@ function applyBridgeEvent(
 
   // Catalogs live in the model-catalog store (applied by the bridge listener).
   if (payload.type === "model-catalogs") return {};
+  // Thread lists live in the thread store and queries (bridge listener).
+  if (payload.type === "thread-deleted") return {};
 
   if (
     pendingThreadTarget &&
@@ -686,6 +705,7 @@ function applyBridgeEvent(
         sessionId: payload.request.sessionId,
         threadId: payload.request.threadId ?? null,
         optionIds: options.map((o) => o.optionId),
+        ...(payload.request.confirm ? { confirm: payload.request.confirm } : {}),
       };
       // Enqueue rather than overwrite, so concurrent requests from one session
       // remain answerable. A repeated JSON-RPC id is the only safe dedupe key.
@@ -910,6 +930,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }
         if (payload.type === "title") {
           applyThreadTitleUpdate(payload.threadId, payload.title);
+        }
+        if (payload.type === "thread-deleted") {
+          applyThreadDeleted(payload.threadId);
         }
         if (payload.type === "model-catalogs") {
           const remember = useModelCatalogStore.getState().remember;

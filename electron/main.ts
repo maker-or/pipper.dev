@@ -85,7 +85,14 @@ import {
   saveGithubPrSnapshot,
 } from "./db";
 import { getThread, listThreads, listThreadsByIds, listProjectThreads } from "./threads";
-import type { OpenTabsState } from "../contracts/threads.ts";
+import { runAsUser } from "./operations/define.ts";
+import { ProvenanceStore } from "./operations/provenance.ts";
+import {
+  configureWorkspaceOperations,
+  createWorkspace as createWorkspaceOperation,
+  deleteWorkspace as deleteWorkspaceOperation,
+  listWorkspaces as listWorkspacesOperation,
+} from "./operations/workspaces.ts";
 import type { BrowserConfig, InlineWidgetDocument } from "../contracts/acp.ts";
 import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer } from "./mcp-servers";
 import {
@@ -1952,13 +1959,35 @@ function registerIpc(): void {
     return result.filePaths[0] ?? null;
   });
 
-  ipcMain.handle("worktrees:list", (_event, projectId: string) => {
-    const project = getProject(projectId);
-    if (!project) throw new Error(`Project not found: ${projectId}`);
-    // Include the project root so the title bar can show its real branch
-    // alongside the linked worktrees.
-    return listWorktrees(project.path);
+  configureWorkspaceOperations({
+    listProjects,
+    getProject,
+    listWorktrees,
+    createWorkspace,
+    cancelWorkspaceSetup,
+    removeWorktree,
+    gitStatus: (path) => getWorkspaceGitStatus(path),
+    listThreads,
+    threadTitle: (threadId) => getThread(threadId)?.title ?? null,
+    deleteThread: (threadId) => requireAgentManager().deleteThread(threadId),
+    activeThreadId: () => requireAgentManager().getState().threadId ?? null,
+    switchThread: async (threadId) => {
+      await requireAgentManager().switchThread(threadId);
+    },
+    clearActiveThread: () => requireAgentManager().clearActiveThread(),
+    removeThreadTabs,
+    readOpenTabsState,
+    broadcastTabs: (state) => broadcastOpenTabsChanged(mainWindow, state),
+    broadcastDeleted: (event) => broadcastToWindows("worktrees:deleted", event),
+    broadcastChanged: (event) => broadcastToWindows("worktrees:changed", event),
+    readWorkspaceSelections,
+    updateWorkspaceSelection,
+    provenance: new ProvenanceStore(() => getDb()),
   });
+
+  ipcMain.handle("worktrees:list", (_event, projectId: string) =>
+    runAsUser(listWorkspacesOperation, { project: projectId }),
+  );
   ipcMain.handle("worktrees:getAutoInstall", () => getWorktreeAutoInstall());
   ipcMain.handle("worktrees:setAutoInstall", (_event, enabled: boolean) =>
     setWorktreeAutoInstall(enabled),
@@ -2020,8 +2049,8 @@ function registerIpc(): void {
     // Shared with remote/phone creation: the user's setup policy installs
     // dependencies in the background (installs can take minutes; the create
     // itself stays snappy) and streams progress to the renderer for toasts.
-    const { project, worktree } = await createWorkspace({
-      projectId: input.projectId,
+    const { project, worktree } = await runAsUser(createWorkspaceOperation, {
+      project: input.projectId,
       name: input.name,
       activation: "foreground",
     });
@@ -2224,123 +2253,9 @@ function registerIpc(): void {
     },
   );
 
-  ipcMain.handle("worktrees:delete", async (_event, input: { projectId: string; path: string }) => {
-    const project = getProject(input.projectId);
-    if (!project) throw new Error(`Project not found: ${input.projectId}`);
-    const target = (await listWorktrees(project.path)).find(
-      (worktree) => !worktree.isProjectRoot && samePath(worktree.path, input.path),
-    );
-    if (!target) throw new Error("Workspace is no longer available");
-    const threads = listThreads().filter(
-      (thread) =>
-        thread.project_id === input.projectId &&
-        thread.worktree_path != null &&
-        samePath(thread.worktree_path, target.path),
-    );
-    const manager = requireAgentManager();
-    const deletedThreadIds = new Set(threads.map((thread) => thread.id));
-    const cleanupErrors: unknown[] = [];
-
-    // Stop a queued or running dependency install so it cannot keep writing
-    // into (or later recreate files in) the workspace being removed.
-    await cancelWorkspaceSetup(target.path);
-    // Remove the Git worktree first. If Git refuses because of a lock,
-    // permissions, or a concurrent change, no chats have been deleted yet.
-    const removed = await removeWorktree(project.path, target.path, project.id);
-    // Terminals are owned by renderer workspace buckets. Notify it as soon
-    // as Git removes the worktree, even if later chat cleanup fails.
-    broadcastToWindows("worktrees:deleted", { projectId: project.id, path: target.path });
-
-    // Run every cleanup operation even if one fails. Git has already removed
-    // the workspace, so leaving the remaining tabs or threads untouched would
-    // strand them against a path that no longer exists.
-    //
-    // One persisted write drops every deleted tab: a per-thread close could
-    // fail midway and leave a stale ID in launch state that resurfaces after
-    // restart, bound to a worktree that no longer exists.
-    let tabs: OpenTabsState | null = null;
-    try {
-      tabs = await removeThreadTabs([...deletedThreadIds]);
-    } catch (error) {
-      console.error("[IPC] Failed to persist tab cleanup after worktree removal:", error);
-      cleanupErrors.push(error);
-    }
-
-    const threadResults = await Promise.allSettled(
-      threads.map((thread) => manager.deleteThread(thread.id)),
-    );
-    threadResults.forEach((result, index) => {
-      if (result.status === "rejected") {
-        const threadId = threads[index]?.id ?? "unknown";
-        console.error(
-          `[IPC] Failed to delete thread ${threadId} after worktree removal:`,
-          result.reason,
-        );
-        cleanupErrors.push(result.reason);
-      }
-    });
-
-    try {
-      // Fall back to the project's root checkout. Its path comes from the
-      // live worktree list (the same value a root switch persists), not
-      // `project.path`: for a project registered at a repository subdirectory
-      // the two can differ, and the selection must name a real workspace.
-      const rootWorktree = (await listWorktrees(project.path)).find(
-        (worktree) => worktree.isProjectRoot,
-      );
-      await updateWorkspaceSelection(project.id, rootWorktree?.path ?? project.path);
-    } catch (error) {
-      console.error(
-        `[IPC] Failed to reconcile workspace selection after deleting ${target.path}:`,
-        error,
-      );
-      cleanupErrors.push(error);
-    }
-
-    // When the persisted tab write failed, stale IDs may remain on disk. Still
-    // never broadcast them back to the renderer or reactivate a thread whose
-    // workspace has just been removed — reconcile the in-memory view instead.
-    let reconciledTabs: OpenTabsState | null = tabs;
-    if (!reconciledTabs) {
-      try {
-        const persisted = await readOpenTabsState();
-        const openThreadIds = persisted.openThreadIds.filter((id) => !deletedThreadIds.has(id));
-        reconciledTabs = {
-          openThreadIds,
-          activeThreadId:
-            persisted.activeThreadId && !deletedThreadIds.has(persisted.activeThreadId)
-              ? persisted.activeThreadId
-              : (openThreadIds[0] ?? null),
-          threadSwitchHistory: persisted.threadSwitchHistory.filter(
-            (id) => !deletedThreadIds.has(id),
-          ),
-        };
-      } catch (error) {
-        console.error("[IPC] Failed to read tabs after worktree cleanup:", error);
-        cleanupErrors.push(error);
-      }
-    }
-
-    try {
-      const activeThreadId = reconciledTabs?.activeThreadId ?? manager.getState().threadId ?? null;
-      if (activeThreadId && !deletedThreadIds.has(activeThreadId)) {
-        if (manager.getState().threadId !== activeThreadId) {
-          await manager.switchThread(activeThreadId);
-        }
-      } else {
-        await manager.clearActiveThread();
-      }
-    } catch (error) {
-      console.error("[IPC] Failed to reconcile active thread after worktree cleanup:", error);
-      cleanupErrors.push(error);
-    }
-
-    if (reconciledTabs) broadcastOpenTabsChanged(mainWindow, reconciledTabs);
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, "Workspace removed, but some chat cleanup failed");
-    }
-    return removed;
-  });
+  ipcMain.handle("worktrees:delete", (_event, input: { projectId: string; path: string }) =>
+    runAsUser(deleteWorkspaceOperation, { project: input.projectId, path: input.path }),
+  );
 
   // Links surfaced from the workspace's own PR (CI runs, preview deploys,
   // review comments) live on arbitrary hosts. Scheme-gated only: never file:,

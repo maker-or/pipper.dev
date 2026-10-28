@@ -295,6 +295,22 @@ export interface AcpPermissionRequest {
     name: string;
     kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" | string;
   }>;
+  /**
+   * Set for Pipper's own destructive calls (deleting what the agent doesn't
+   * own): the renderer draws the hold-to-confirm card instead of a plain
+   * choice. The allow option confirms; the reject option declines.
+   */
+  confirm?: DestructiveConfirmation;
+}
+
+/** The hold-to-confirm card's content, computed by Pipper. */
+export interface DestructiveConfirmation {
+  /** "Delete workspace feature-auth". */
+  title: string;
+  /** The button reads "Hold to <verb>". */
+  verb: string;
+  /** What is lost: "3 threads", "uncommitted changes in 4 files", … */
+  impact: string[];
 }
 
 export interface AcpPermissionResponse {
@@ -369,6 +385,8 @@ export type AcpBridgeEvent =
   | { type: "permission-request"; request: AcpPermissionRequest }
   | { type: "permission-resolved"; sessionId: string; requestId?: string | number }
   | { type: "thread-closed"; threadId: string }
+  /** The thread's row is gone (thread-closed only means its session closed). */
+  | { type: "thread-deleted"; threadId: string }
   | {
       type: "connection";
       agentId: string | null;

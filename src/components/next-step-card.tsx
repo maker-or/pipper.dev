@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { useAgentStore } from "@/store/agent-store";
+import { useAgentStore, type UiRequest } from "@/store/agent-store";
 import type { NextStep } from "../../contracts/next-step.ts";
 
 interface NextStepCardProps {
@@ -11,13 +11,29 @@ interface NextStepCardProps {
 }
 
 /**
+ * The question to show, if any. While a confirm card waits in this thread,
+ * it is the question: Pipper rejects a wrap_up that asks then, but a harness
+ * may still report the rejected call as completed, so the card drops the ask
+ * (and its buttons) here as well.
+ */
+export function visibleAsk(
+  step: NextStep,
+  queue: UiRequest[],
+  threadId: string | null,
+): string | null {
+  const confirmPending = queue.some((request) => request.confirm && request.threadId === threadId);
+  return confirmPending ? null : step.ask;
+}
+
+/**
  * The card an agent's `wrap_up` call fills: a recap of where the turn left
  * things and, when the user has a decision to make, one question with buttons
  * that answer it. A button sends its message as the user's reply.
  */
 export function NextStepCard({ step, threadId, answerable }: NextStepCardProps) {
   const [answered, setAnswered] = useState<string | null>(null);
-  const showActions = Boolean(step.ask) && step.actions.length > 0;
+  const ask = useAgentStore((state) => visibleAsk(step, state.uiRequestQueue, threadId));
+  const showActions = Boolean(ask) && step.actions.length > 0;
 
   const answer = (label: string, message: string) => {
     if (!threadId || answered) return;
@@ -39,9 +55,9 @@ export function NextStepCard({ step, threadId, answerable }: NextStepCardProps) 
       aria-label="Next step"
     >
       <p className="leading-6 text-muted-foreground">{step.recap}</p>
-      {step.ask && (
+      {ask && (
         <p className="mt-2 font-medium leading-6 text-foreground" data-pipper-id="next-step-ask">
-          {step.ask}
+          {ask}
         </p>
       )}
       {showActions && (

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
-import { NextStepCard } from "@/components/next-step-card";
+import { NextStepCard, visibleAsk } from "@/components/next-step-card";
+import type { UiRequest } from "@/store/agent-store";
 import type { NextStep } from "../../contracts/next-step.ts";
 
 const STEP: NextStep = {
@@ -44,5 +45,21 @@ describe("NextStepCard", () => {
     const tags = buttonTags(html);
     expect(tags).toHaveLength(2);
     expect(tags.every((tag) => tag.includes(' disabled=""'))).toBe(true);
+  });
+
+  test("while a confirm card waits in the thread, only the recap shows", () => {
+    const confirm: UiRequest = {
+      id: "s1:r1",
+      kind: "select",
+      title: "Permission required",
+      sessionId: "s1",
+      threadId: "t1",
+      confirm: { title: "Delete workspace x", verb: "delete", impact: [] },
+    };
+    expect(visibleAsk(STEP, [confirm], "t1")).toBeNull();
+    expect(visibleAsk(STEP, [confirm], "t2")).toBe("Commit both changes?");
+    expect(visibleAsk(STEP, [{ ...confirm, confirm: undefined }], "t1")).toBe(
+      "Commit both changes?",
+    );
   });
 });

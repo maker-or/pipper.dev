@@ -175,6 +175,7 @@ declare global {
         onDeleted: (
           callback: (workspace: { projectId: string; path: string }) => void,
         ) => () => void;
+        onChanged: (callback: (event: { projectId: string }) => void) => () => void;
         switch: (input: { projectId: string; path: string }) => Promise<Thread>;
         getSelections: () => Promise<Record<string, string>>;
         onSetupProgress: (callback: (progress: WorktreeSetupProgress) => void) => () => void;

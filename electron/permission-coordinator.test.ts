@@ -149,3 +149,40 @@ describe("PermissionCoordinator", () => {
     expect(await coordinator.respondForThread("t1", current.id, "deny")).toBe(false);
   });
 });
+
+describe("destructive confirmations", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const confirm = { title: "Delete workspace x", verb: "delete", impact: ["2 threads"] };
+
+  test("never time out, carry the card's content, and are never answered by policy", async () => {
+    const allow = { outcome: { outcome: "selected", optionId: "allow" } } as const;
+    const { coordinator, events } = makeCoordinator(allow);
+    let settled = false;
+    const promise = coordinator.handle(requestParams(), "r1", confirm).then((response) => {
+      settled = true;
+      return response;
+    });
+
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000);
+    expect(settled).toBe(false);
+    const emitted = events[0] as Extract<AcpBridgeEvent, { type: "permission-request" }>;
+    expect(emitted.request.confirm).toEqual(confirm);
+
+    await coordinator.respond({ sessionId: "s1", requestId: "r1", optionId: "allow" });
+    expect(await promise).toEqual(allow);
+  });
+
+  test("are withdrawn when their session goes away", async () => {
+    const { coordinator } = makeCoordinator();
+    const promise = coordinator.handle(requestParams(), "r1", confirm);
+    coordinator.cancelForSession("s1");
+    expect(await promise).toEqual({ outcome: { outcome: "cancelled" } });
+  });
+});

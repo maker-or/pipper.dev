@@ -28,6 +28,7 @@ const buttonVariants = cva(
         secondary: "text-foreground",
         tertiary: "border border-border text-foreground",
         ghost: "text-muted-foreground hover:text-foreground",
+        destructive: "text-destructive",
       },
       size: {
         sm: "h-7 px-3 text-[12px] gap-1",
@@ -65,6 +66,8 @@ interface ButtonProps
    *  external open piece of UI (a popover, dropdown, etc.) so it reads as
    *  engaged while the menu is showing. */
   active?: boolean;
+  /** 0–1: a darker band filling from the left, e.g. press-and-hold progress. */
+  fill?: number;
 }
 
 const bgVariants: Record<string, string> = {
@@ -72,6 +75,7 @@ const bgVariants: Record<string, string> = {
   secondary: "bg-accent group-hover:bg-accent/80 group-active:bg-accent",
   tertiary: "bg-transparent group-hover:bg-hover group-active:bg-active",
   ghost: "bg-transparent group-hover:bg-hover group-active:bg-active",
+  destructive: "bg-destructive/10 group-hover:bg-destructive/15 group-active:bg-destructive/20",
 };
 
 const activeBgVariants: Record<string, string> = {
@@ -79,6 +83,7 @@ const activeBgVariants: Record<string, string> = {
   secondary: "bg-accent",
   tertiary: "bg-active",
   ghost: "bg-active",
+  destructive: "bg-destructive/20",
 };
 
 const Button = forwardRef<HTMLButtonElement, ButtonProps>(
@@ -92,6 +97,7 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
       leadingIcon: LeadingIcon,
       trailingIcon: TrailingIcon,
       active = false,
+      fill,
       disabled,
       children,
       style,
@@ -136,6 +142,21 @@ const Button = forwardRef<HTMLButtonElement, ButtonProps>(
             bgClass,
           )}
         />
+        {fill !== undefined && (
+          <span
+            aria-hidden
+            data-button-fill
+            className={cn(
+              "absolute inset-0 rounded-[inherit]",
+              variant === "destructive" ? "bg-destructive/25" : "bg-foreground/15",
+            )}
+            // Clip rather than resize: the band keeps the button's rounded left
+            // end and cuts off straight where the progress is.
+            style={{
+              clipPath: `inset(0 ${100 - Math.round(Math.min(1, Math.max(0, fill)) * 100)}% 0 0)`,
+            }}
+          />
+        )}
         <span className="relative inline-flex min-w-0 max-w-full items-center justify-center gap-[inherit]">
           {loading ? (
             <>

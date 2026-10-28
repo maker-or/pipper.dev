@@ -9,11 +9,19 @@ vi.mock("electron", () => ({ app: { getPath: () => "/nonexistent-userdata" } }))
 
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskConfig, AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
+import type { Thread } from "../../contracts/threads.ts";
+import type { Worktree } from "../../contracts/worktrees.ts";
+import type { WorkspaceGitStatus } from "../../contracts/git.ts";
+import type { Confirmation } from "../operations/define.ts";
+import { ProvenanceStore, ensureProvenanceSchema } from "../operations/provenance.ts";
+import { configureWorkspaceOperations, type WorkspaceDeps } from "../operations/workspaces.ts";
+import { pathKey } from "../worktree-manager.ts";
 import { AgentTaskStore, ensureAgentTaskSchema } from "./agent-task-store.ts";
 import {
   AgentTaskService,
   type AgentTaskHost,
   type ApprovalAnswer,
+  type ConfirmationAnswer,
   type TurnOrigin,
 } from "./agent-task-service.ts";
 
@@ -69,6 +77,18 @@ function makeHost() {
   const cancelled: string[] = [];
   const approvals: Array<{ threadId: string; title: string }> = [];
   const workspaces: Array<{ path: string; rolledBack: boolean }> = [];
+  const worktrees: Worktree[] = [
+    { path: PROJECT.path, branch: "main", head: "a1", isProjectRoot: true },
+    { path: "/worktrees/shared-feature", branch: "pipper/shared-feature", head: "b2" },
+  ];
+  const removed: string[] = [];
+  const deletedThreads: string[] = [];
+  const confirmations: Array<{
+    threadId: string;
+    confirmation: Confirmation;
+    answer: (answer: ConfirmationAnswer) => void;
+  }> = [];
+  let gitStatus: Partial<WorkspaceGitStatus> = { staged: 0, unstaged: 0, untracked: 0, ahead: 0 };
   const emitted: AgentTaskSnapshot[][] = [];
   let approvalAnswer: ApprovalAnswer = "once";
   let createThreadError: Error | null = null;
@@ -121,21 +141,6 @@ function makeHost() {
           }
         : null;
     },
-    createWorkspace: async (_projectId, name) => {
-      const workspace = { path: `/worktrees/${name}`, rolledBack: false };
-      workspaces.push(workspace);
-      return {
-        path: workspace.path,
-        branch: `pipper/${name}`,
-        rollback: async () => {
-          workspace.rolledBack = true;
-        },
-      };
-    },
-    listWorkspaces: async () => [
-      { path: PROJECT.path, branch: "main", isProjectRoot: true },
-      { path: "/worktrees/shared-feature", branch: "pipper/shared-feature", isProjectRoot: false },
-    ],
     createThread: async ({ title, cwd }) => {
       if (createThreadError) throw createThreadError;
       return { threadId: addThread(title, cwd).threadId };
@@ -171,13 +176,92 @@ function makeHost() {
       approvals.push({ threadId, title });
       return approvalAnswer;
     },
+    requestConfirmation: (threadId, confirmation) =>
+      new Promise<ConfirmationAnswer>((resolve) => {
+        confirmations.push({ threadId, confirmation, answer: resolve });
+      }),
     headSha: async () => "abc123",
     changedFiles: async () => changed,
     emitTasks: (tasks) => emitted.push(tasks),
   };
 
+  /** The operations' view of the app: these fake threads and worktrees. */
+  const workspaceDeps = (db: DatabaseSync): WorkspaceDeps => ({
+    listProjects: () => [{ id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" }],
+    getProject: (id) =>
+      id === PROJECT.id ? { id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" } : null,
+    listWorktrees: async () => worktrees.map((worktree) => ({ ...worktree })),
+    createWorkspace: async (request) => {
+      const path = `/worktrees/${request.name}`;
+      const workspace = { path, rolledBack: false };
+      workspaces.push(workspace);
+      const worktree: Worktree = { path, branch: `pipper/${request.name}`, head: "c3" };
+      worktrees.push(worktree);
+      return {
+        project: { id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" },
+        worktree,
+        policy: request.setup ?? "source-only",
+        setup: Promise.resolve({ status: "skipped" }),
+        rollback: async () => {
+          workspace.rolledBack = true;
+          worktrees.splice(worktrees.indexOf(worktree), 1);
+        },
+      };
+    },
+    cancelWorkspaceSetup: async () => {},
+    removeWorktree: async (_projectPath, path) => {
+      const index = worktrees.findIndex((worktree) => worktree.path === path);
+      const [target] = worktrees.splice(index, 1);
+      removed.push(path);
+      return target;
+    },
+    gitStatus: async () => ({ branch: "pipper/x", ...gitStatus }) as WorkspaceGitStatus,
+    listThreads: () =>
+      [...threads.values()].map(
+        (thread) =>
+          ({
+            id: thread.threadId,
+            project_id: PROJECT.id,
+            title: thread.title,
+            worktree_path: thread.cwd === PROJECT.path ? null : thread.cwd,
+          }) as Thread,
+      ),
+    threadTitle: (threadId) => threads.get(threadId)?.title ?? null,
+    deleteThread: async (threadId) => {
+      deletedThreads.push(threadId);
+      threads.delete(threadId);
+    },
+    activeThreadId: () => null,
+    switchThread: async () => {},
+    clearActiveThread: async () => {},
+    removeThreadTabs: async () => ({
+      openThreadIds: [],
+      activeThreadId: null,
+      threadSwitchHistory: [],
+    }),
+    readOpenTabsState: async () => ({
+      openThreadIds: [],
+      activeThreadId: null,
+      threadSwitchHistory: [],
+    }),
+    broadcastTabs: () => {},
+    broadcastDeleted: () => {},
+    broadcastChanged: () => {},
+    readWorkspaceSelections: async () => ({}),
+    updateWorkspaceSelection: async () => {},
+    provenance: new ProvenanceStore(() => db),
+  });
+
   return {
     host,
+    workspaceDeps,
+    worktrees,
+    removed,
+    deletedThreads,
+    confirmations,
+    setGitStatus: (next: Partial<WorkspaceGitStatus>) => {
+      gitStatus = { ...gitStatus, ...next };
+    },
     threads,
     sent,
     cancelled,
@@ -213,14 +297,17 @@ function makeHost() {
 const services: AgentTaskService[] = [];
 afterEach(() => {
   for (const service of services.splice(0)) service.dispose();
+  configureWorkspaceOperations(null);
   vi.useRealTimers();
 });
 
 async function setup(config: Partial<AgentTaskConfig> = {}) {
   const db = new DatabaseSync(":memory:");
   ensureAgentTaskSchema(db);
+  ensureProvenanceSchema(db);
   const store = new AgentTaskStore(() => db);
   const fake = makeHost();
+  configureWorkspaceOperations(fake.workspaceDeps(db));
   const baseDir = await mkdtemp(join(tmpdir(), "pipper-agent-tasks-"));
   const service = new AgentTaskService({ host: fake.host, store, baseDir, noteDelayMs: 5 });
   services.push(service);
@@ -831,5 +918,198 @@ describe("wrap_up", () => {
     expect(receipt.outcome).toBe("blocked");
     expect(receipt.recap).toBeUndefined();
     expect(service.snapshots()[0].nextStep).toBeNull();
+  });
+});
+
+describe("delete_workspace", () => {
+  /** Let the confirmation's promise chain run (describe, delete, note). */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  test("a workspace the caller created, with no one else's threads, is deleted at once", async () => {
+    const { fake, call, db } = await setup();
+    const created = await call("create_workspace", { name: "scratch" });
+    const store = new ProvenanceStore(() => db);
+    expect(store.createdBy("workspace", pathKey(created.workspace_path))).toBe("thread-1");
+
+    const result = await call("delete_workspace", { path: created.workspace_path });
+
+    expect(result).toEqual({ status: "deleted", path: created.workspace_path });
+    expect(fake.removed).toEqual([created.workspace_path]);
+    expect(fake.confirmations).toHaveLength(0);
+    expect(store.createdBy("workspace", pathKey(created.workspace_path))).toBeNull();
+  });
+
+  test("a parent deletes its task's worktree, and the task's thread in it, without asking", async () => {
+    const { fake, call } = await setup();
+    const started = await call("start_task", {
+      agent_id: "codex",
+      title: "Spike",
+      task: "Try it.",
+      workspace: "new",
+    });
+    fake.finish(started.thread_id, "Done.");
+
+    const result = await call("delete_workspace", { path: started.workspace_path });
+
+    expect(result.status).toBe("deleted");
+    expect(fake.deletedThreads).toEqual([started.thread_id]);
+    expect(fake.confirmations).toHaveLength(0);
+  });
+
+  test("the user's workspace needs confirming; the card says what is lost, and a confirm deletes it", async () => {
+    const { fake, parent, call } = await setup();
+    fake.addThread("Fix billing", "/worktrees/shared-feature");
+    fake.setGitStatus({ staged: 1, unstaged: 2, untracked: 1, ahead: 2 });
+
+    const result = await call("delete_workspace", { path: "/worktrees/shared-feature" });
+
+    expect(result.status).toBe("awaiting_confirmation");
+    expect(fake.removed).toEqual([]);
+    const [card] = fake.confirmations;
+    expect(card.threadId).toBe(parent.threadId);
+    expect(card.confirmation.title).toBe("Delete workspace pipper/shared-feature");
+    expect(card.confirmation.impact).toEqual([
+      "1 thread, including “Fix billing”",
+      "uncommitted changes in 4 files",
+      "2 commits not pushed on pipper/x",
+    ]);
+
+    card.answer("confirm");
+    await settle();
+
+    expect(fake.removed).toEqual(["/worktrees/shared-feature"]);
+    const note = fake.sent.find((p) => p.threadId === parent.threadId)!;
+    expect(note.message).toMatch(/^\[Pipper\] The user confirmed\. Deleted workspace/);
+  });
+
+  test("a decline deletes nothing and tells the agent not to retry", async () => {
+    const { fake, parent, call } = await setup();
+    await call("delete_workspace", { path: "/worktrees/shared-feature" });
+
+    fake.confirmations[0].answer("deny");
+    await settle();
+
+    expect(fake.removed).toEqual([]);
+    const note = fake.sent.find((p) => p.threadId === parent.threadId)!;
+    expect(note.message).toContain("The user declined: delete workspace");
+    expect(note.message).toContain("Don't retry it.");
+  });
+
+  test("when more would be lost by the time the user confirms, the card asks again", async () => {
+    const { fake, call } = await setup();
+    await call("delete_workspace", { path: "/worktrees/shared-feature" });
+    fake.setGitStatus({ unstaged: 3 });
+
+    fake.confirmations[0].answer("confirm");
+    await settle();
+
+    expect(fake.removed).toEqual([]);
+    expect(fake.confirmations).toHaveLength(2);
+    expect(fake.confirmations[1].confirmation.impact).toContain("uncommitted changes in 3 files");
+    fake.confirmations[1].answer("confirm");
+    await settle();
+    expect(fake.removed).toEqual(["/worktrees/shared-feature"]);
+  });
+
+  test("while the card waits, wrap_up can't ask about it too; once answered it can ask again", async () => {
+    const { fake, parent, call, service } = await setup();
+    const pending = await call("delete_workspace", { path: "/worktrees/shared-feature" });
+    expect(pending.message).toContain("That card ends your turn: don't call wrap_up");
+
+    const doubled = await wrapUpAs(service, parent.sessionId, {
+      recap: "Waiting for you to confirm the delete.",
+      ask: "Confirm the delete?",
+      actions: [{ label: "Delete it" }, { label: "Cancel" }],
+    });
+    expect(doubled.isError).toBe(true);
+    expect(doubled.text).toContain("A confirm card is already waiting");
+    expect(
+      (await wrapUpAs(service, parent.sessionId, { recap: "Waiting for your confirmation." }))
+        .isError,
+    ).toBe(false);
+
+    fake.confirmations[0].answer("deny");
+    await settle();
+    expect(
+      (await wrapUpAs(service, parent.sessionId, { recap: "Kept it.", ask: "Anything else?" }))
+        .isError,
+    ).toBe(false);
+  });
+
+  test("asking again while the card waits reuses it; once answered a new ask gets a new card", async () => {
+    const { fake, call } = await setup();
+    await call("delete_workspace", { path: "/worktrees/shared-feature" });
+
+    const again = await call("delete_workspace", { path: "/worktrees/shared-feature" });
+
+    expect(again.status).toBe("awaiting_confirmation");
+    expect(again.message).toContain("still waiting");
+    expect(fake.confirmations).toHaveLength(1);
+
+    fake.confirmations[0].answer("deny");
+    await settle();
+    await call("delete_workspace", { path: "/worktrees/shared-feature" });
+    expect(fake.confirmations).toHaveLength(2);
+  });
+
+  test("a card withdrawn unanswered deletes nothing and says so", async () => {
+    const { fake, parent, call } = await setup();
+    await call("delete_workspace", { path: "/worktrees/shared-feature" });
+
+    fake.confirmations[0].answer("withdrawn");
+    await settle();
+
+    expect(fake.removed).toEqual([]);
+    const note = fake.sent.find((p) => p.threadId === parent.threadId)!;
+    expect(note.message).toContain("was withdrawn before anyone answered");
+  });
+
+  test("its own workspace, its parent's and the project root can't be deleted at all", async () => {
+    const { fake, call, service } = await setup();
+    const started = await call("start_task", {
+      agent_id: "codex",
+      title: "Child",
+      task: "x",
+      workspace: "/worktrees/shared-feature",
+    });
+    const child = fake.threads.get(started.thread_id)!;
+    const asChild = await (async () => {
+      const attached = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+      service.bindSession(attached.token!, child.sessionId);
+      return async (args: Record<string, unknown>) => {
+        const response = await fetch(attached.servers[0].url as string, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "tools/call",
+            params: { name: "delete_workspace", arguments: args },
+          }),
+        });
+        const { result } = (await response.json()) as {
+          result: { content: Array<{ text: string }> };
+        };
+        return result.content[0].text;
+      };
+    })();
+
+    expect(await asChild({ path: "/worktrees/shared-feature" })).toBe(
+      "You can't delete the workspace your own thread runs in.",
+    );
+    expect((await call("delete_workspace", { path: PROJECT.path })).error).toMatch(
+      /project's root, which can't be deleted/,
+    );
+    expect(fake.confirmations).toHaveLength(0);
+    expect(fake.removed).toEqual([]);
+  });
+
+  test("another project can be named by path", async () => {
+    const { call } = await setup();
+    const listed = await call("list_workspaces", { project: PROJECT.path });
+    expect(listed.map((w: { path: string }) => w.path)).toContain("/worktrees/shared-feature");
+    expect((await call("list_workspaces", { project: "/elsewhere" })).error).toBe(
+      "Project not found: /elsewhere",
+    );
   });
 });

@@ -1,6 +1,8 @@
+import { z } from "zod";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import { NEXT_STEP_LIMITS } from "../../contracts/next-step.ts";
 import type { McpToolDefinition } from "../mcp/mcp-http-server.ts";
+import { toolInputSchema } from "../operations/define.ts";
 
 export const AGENT_TASK_SERVER_NAME = "pipper-agents";
 
@@ -13,6 +15,7 @@ export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "",
   "Ending a turn:",
   "- In every turn where you changed files, ran commands or did multi-step work, call wrap_up once when the work is done, then write your closing message. Skip it for short answers and pure conversation.",
+  "- Also skip it when a Pipper tool returned awaiting_confirmation this turn: the confirm card Pipper shows is the end of the turn, and a recap would only repeat it. Write one short line saying it's waiting for the user, and stop.",
   "- recap: two or three sentences on what is now true, including what is not done or not verified. It is also the thread's status, so it must make sense on its own.",
   "- ask and actions: only when the user has a decision to make or a step to take. One short question, and one or two buttons that answer it, your recommendation first. Leave the question out of your closing message; the card shows it.",
   "- blocked: true when you can't continue without the answer.",
@@ -31,7 +34,8 @@ export const WRAP_UP_TOOL: McpToolDefinition = {
   description:
     "End a turn that did work: fills the next-step card Pipper draws under your reply. Call it " +
     "once, when the turn's work is done, then write your closing message. In a task thread, the " +
-    "recap and ask also go to the agent that started the task.",
+    "recap and ask also go to the agent that started the task. Don't call it in a turn where a " +
+    "Pipper tool returned awaiting_confirmation: the confirm card already ends that turn.",
   inputSchema: {
     type: "object",
     properties: {
@@ -209,23 +213,46 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
       description:
         "Create a new worktree and branch in your project. Returns its path for start_task's " +
         "workspace, so several tasks can share it.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "Short name; letters, digits and dashes." },
-          install_dependencies: { type: "boolean", description: "Default false." },
-        },
-        required: ["name"],
-        additionalProperties: false,
-      },
+      inputSchema: toolInputSchema(CREATE_WORKSPACE_INPUT),
     },
     {
       name: "list_workspaces",
       description: "List your project's worktrees with path and branch.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      inputSchema: toolInputSchema(LIST_WORKSPACES_INPUT),
+    },
+    {
+      name: "delete_workspace",
+      description:
+        "Delete a worktree, its branch if Pipper created it, and every thread in it. Runs at once " +
+        "when you or your tasks created the workspace and its threads. Otherwise it returns " +
+        "awaiting_confirmation: Pipper shows the user a confirm card, deletes it if they " +
+        "confirm, and you get the outcome as a note. That card ends your turn: don't call " +
+        "wrap_up, don't ask about it, and don't call this again for the same workspace while it " +
+        "waits; say in one line that it's waiting for the user. You can't delete the project " +
+        "root or the workspace your own thread runs in.",
+      inputSchema: toolInputSchema(DELETE_WORKSPACE_INPUT),
     },
   ];
 }
+
+const PROJECT_INPUT = z
+  .string()
+  .min(1)
+  .optional()
+  .describe("Project id or absolute path. Default: your thread's project.");
+
+export const LIST_WORKSPACES_INPUT = z.strictObject({ project: PROJECT_INPUT });
+
+export const CREATE_WORKSPACE_INPUT = z.strictObject({
+  name: z.string().trim().min(1).describe("Short name; letters, digits and dashes."),
+  install_dependencies: z.boolean().optional().describe("Default false."),
+  project: PROJECT_INPUT,
+});
+
+export const DELETE_WORKSPACE_INPUT = z.strictObject({
+  path: z.string().min(1).describe("The workspace's path, from list_workspaces."),
+  project: PROJECT_INPUT,
+});
 
 export class ToolInputError extends Error {}
 

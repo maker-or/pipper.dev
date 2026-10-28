@@ -528,6 +528,16 @@ export default function App() {
     });
   }, [uiMode]);
 
+  // Workspaces created or deleted by anyone (an agent included): refresh the
+  // loaded list and the persisted selection, which a delete moves to the root.
+  useEffect(() => {
+    return window.omni.worktrees.onChanged(({ projectId }) => {
+      const store = useWorktreeStore.getState();
+      if (store.projectId === projectId) void store.loadWorktrees(projectId);
+      void store.syncSelections();
+    });
+  }, []);
+
   // Deletion stops its terminals, including sessions in a background bucket.
   useEffect(() => {
     return window.omni.worktrees.onDeleted(({ projectId, path }) => {

@@ -5,6 +5,19 @@ import type * as acp from "@agentclientprotocol/sdk";
 import type { AgentCapabilities } from "@agentclientprotocol/sdk";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import { parseNextStep, type NextStep } from "../../contracts/next-step.ts";
+import {
+  callAsAgent,
+  confirmationGrew,
+  parseWith,
+  type AgentContext,
+  type Confirmation,
+  type Operation,
+} from "../operations/define.ts";
+import {
+  createWorkspace as createWorkspaceOperation,
+  deleteWorkspace as deleteWorkspaceOperation,
+  listWorkspaces as listWorkspacesOperation,
+} from "../operations/workspaces.ts";
 import type {
   AgentTaskConfig,
   AgentTaskOutcome,
@@ -37,6 +50,9 @@ import {
   AGENT_TASK_SERVER_NAME,
   DEFAULT_WAIT_SECONDS,
   MAX_WAIT_SECONDS,
+  CREATE_WORKSPACE_INPUT,
+  DELETE_WORKSPACE_INPUT,
+  LIST_WORKSPACES_INPUT,
   ToolInputError,
   WRAP_UP_TOOL,
   agentTaskToolDefinitions,
@@ -66,6 +82,9 @@ export interface TaskWorkspace {
 
 export type ApprovalAnswer = "once" | "always" | "deny";
 
+/** The user's answer to a destructive call's confirm card. */
+export type ConfirmationAnswer = "confirm" | "deny" | "withdrawn";
+
 /**
  * What the connection manager provides. Kept small so this module never
  * imports the manager and tests can drive tasks with a fake host.
@@ -74,14 +93,6 @@ export interface AgentTaskHost {
   listAgents(): AcpAgentDescriptor[];
   threadIdForSession(sessionId: string): string | null;
   threadInfo(threadId: string): TaskThreadInfo | null;
-  createWorkspace(
-    projectId: string,
-    name: string,
-    installDependencies: boolean,
-  ): Promise<TaskWorkspace>;
-  listWorkspaces(
-    projectId: string,
-  ): Promise<Array<{ path: string; branch: string | null; isProjectRoot: boolean }>>;
   /** Create a background thread bound to `cwd` (a worktree, or the project root). */
   createThread(input: {
     projectId: string;
@@ -105,6 +116,12 @@ export interface AgentTaskHost {
     threadId: string,
     request: { title: string; detail: Record<string, unknown> },
   ): Promise<ApprovalAnswer>;
+  /**
+   * Show the hold-to-confirm card in the thread. Resolves when the user
+   * answers, or "withdrawn" when the card goes away unanswered (the thread's
+   * session closed). Never times out on its own.
+   */
+  requestConfirmation(threadId: string, confirmation: Confirmation): Promise<ConfirmationAnswer>;
   headSha(cwd: string): Promise<string | null>;
   changedFiles(cwd: string, sinceSha: string | null): Promise<string[]>;
   emitTasks(tasks: AgentTaskSnapshot[]): void;
@@ -187,6 +204,10 @@ export class AgentTaskService {
   private readonly stopReasons = new Map<string, "timed_out" | "cancelled">();
   /** The current turn's wrap_up per thread; the last call in a turn wins. */
   private readonly wrapUps = new Map<string, NextStep>();
+  /** Confirm cards waiting for the user, per thread. */
+  private readonly pendingConfirmations = new Map<string, number>();
+  /** What each waiting card is for, so a repeated call reuses it. */
+  private readonly pendingConfirmationKeys = new Set<string>();
   private readonly waiters = new Set<Waiter>();
   /** `${taskId}:${turns}` already returned to the parent by a wait or note. */
   private readonly delivered = new Set<string>();
@@ -468,7 +489,9 @@ export class AgentTaskService {
       case "create_workspace":
         return textResult(await this.createWorkspace(caller, args));
       case "list_workspaces":
-        return textResult(await this.host.listWorkspaces(caller.projectId));
+        return textResult(await this.listWorkspaces(caller, args));
+      case "delete_workspace":
+        return textResult(await this.deleteWorkspace(caller, args));
       default:
         throw new ToolInputError(`unknown tool: ${name}`);
     }
@@ -480,6 +503,15 @@ export class AgentTaskService {
     if (!threadId) throw new Error("Only a Pipper thread can use these tools.");
     const parsed = parseNextStep(args);
     if (!parsed.ok) throw new ToolInputError(`${parsed.error}. Fix it and call wrap_up again.`);
+    // The confirm card already asks; a second question would offer buttons
+    // that only send text back to the agent, which can't confirm anything.
+    if (parsed.value.ask && (this.pendingConfirmations.get(threadId) ?? 0) > 0) {
+      throw new ToolInputError(
+        "A confirm card is already waiting for the user in this thread, and it is the question. " +
+          "Skip wrap_up this turn, or call it again without ask or actions, and don't ask about " +
+          "it in your reply.",
+      );
+    }
     this.wrapUps.set(threadId, parsed.value);
     const lines = [
       "Shown to the user as the next-step card under your reply. Now write your closing message: your answer in full, as the last thing you say this turn.",
@@ -542,7 +574,11 @@ export class AgentTaskService {
     if (workspaceArg === "shared" || workspaceArg === "new") mode = workspaceArg;
     else if (isAbsolute(workspaceArg)) {
       mode = "path";
-      const workspaces = await this.host.listWorkspaces(caller.projectId);
+      const workspaces = await this.runOperation(
+        listWorkspacesOperation,
+        { project: caller.projectId },
+        caller,
+      );
       const match = workspaces.find((w) => resolve(w.path) === resolve(workspaceArg));
       if (!match) {
         throw new ToolInputError(
@@ -586,11 +622,21 @@ export class AgentTaskService {
     try {
       let cwd = mode === "shared" ? caller.cwd : targetPath!;
       if (mode === "new") {
-        workspace = await this.host.createWorkspace(
-          caller.projectId,
-          workspaceName(title),
-          install,
+        const created = await this.runOperation(
+          createWorkspaceOperation,
+          {
+            project: caller.projectId,
+            name: workspaceName(title),
+            setup: install ? "prepared" : "source-only",
+            activation: "background",
+          },
+          caller,
         );
+        workspace = {
+          path: created.worktree.path,
+          branch: created.worktree.branch,
+          rollback: created.rollback,
+        };
         cwd = workspace.path;
         task = this.store.update(task.id, {
           workspacePath: cwd,
@@ -759,18 +805,186 @@ export class AgentTaskService {
     return { task_id: task.id, status: "cancelling" };
   }
 
+  // ---------------------------------------------------------------------------
+  // Workspaces (electron/operations/workspaces.ts)
+  // ---------------------------------------------------------------------------
+
+  private async listWorkspaces(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const input = parseWith(LIST_WORKSPACES_INPUT, args);
+    const worktrees = await this.runOperation(
+      listWorkspacesOperation,
+      { project: input.project ?? caller.projectId },
+      caller,
+    );
+    return worktrees.map((worktree) => ({
+      path: worktree.path,
+      branch: worktree.branch,
+      isProjectRoot: Boolean(worktree.isProjectRoot),
+    }));
+  }
+
   private async createWorkspace(
     caller: TaskThreadInfo,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const name = requireString(args, "name");
-    await this.approve(caller, `Create workspace “${clip(name, 40)}”`, { name });
-    const workspace = await this.host.createWorkspace(
-      caller.projectId,
-      workspaceName(name),
-      args.install_dependencies === true,
+    const input = parseWith(CREATE_WORKSPACE_INPUT, args);
+    const created = await this.runOperation(
+      createWorkspaceOperation,
+      {
+        project: input.project ?? caller.projectId,
+        name: workspaceName(input.name),
+        setup: input.install_dependencies ? "prepared" : "source-only",
+        activation: "background",
+      },
+      caller,
     );
-    return { workspace_path: workspace.path, branch: workspace.branch };
+    return { workspace_path: created.worktree.path, branch: created.worktree.branch };
+  }
+
+  private async deleteWorkspace(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const input = parseWith(DELETE_WORKSPACE_INPUT, args);
+    const key = [
+      caller.threadId,
+      deleteWorkspaceOperation.id,
+      input.project ?? caller.projectId,
+      resolve(input.path),
+    ].join("\u0000");
+    if (this.pendingConfirmationKeys.has(key)) {
+      return {
+        status: "awaiting_confirmation",
+        message:
+          "The confirm card for this is still waiting for the user; Pipper didn't add another. " +
+          "Don't call wrap_up or call this again; say in one line that it's waiting for them.",
+      };
+    }
+    const ctx = this.agentContext(caller.threadId);
+    const outcome = await callAsAgent(
+      deleteWorkspaceOperation,
+      { project: input.project ?? caller.projectId, path: input.path },
+      ctx,
+    );
+    if (outcome.status === "done") {
+      return { status: "deleted", path: outcome.result.path };
+    }
+    this.pendingConfirmationKeys.add(key);
+    this.confirmThenRun(
+      caller.threadId,
+      deleteWorkspaceOperation,
+      outcome.input as Parameters<typeof deleteWorkspaceOperation.run>[0],
+      outcome.confirmation,
+      (result) => `Deleted workspace ${result.path}.`,
+      () => this.pendingConfirmationKeys.delete(key),
+    );
+    return {
+      status: "awaiting_confirmation",
+      message:
+        "Pipper is showing the user a confirm card for this in your thread. That card ends " +
+        "your turn: don't call wrap_up, and don't ask about it yourself. Say in one line that " +
+        "it's waiting for the user, then stop. If they confirm, Pipper deletes the workspace " +
+        "itself, and either way you get the outcome as a note. Don't retry or poll.",
+      confirmation: { title: outcome.confirmation.title, impact: outcome.confirmation.impact },
+    };
+  }
+
+  /** Run an operation as this thread's agent; destructive ones go through deleteWorkspace. */
+  private async runOperation<I, O>(
+    operation: Operation<I, O>,
+    raw: unknown,
+    caller: TaskThreadInfo,
+  ): Promise<O> {
+    const outcome = await callAsAgent(operation, raw, this.agentContext(caller.threadId));
+    if (outcome.status !== "done") throw new Error(`${operation.id} needs confirmation`);
+    return outcome.result;
+  }
+
+  /** Who the caller is: its thread, the threads above it, and what it owns. */
+  private agentContext(threadId: string): AgentContext {
+    const lineage = [threadId];
+    for (let parent = this.parentOf(threadId); parent && lineage.length < 64; ) {
+      if (lineage.includes(parent)) break;
+      lineage.push(parent);
+      parent = this.parentOf(parent);
+    }
+    return {
+      caller: { kind: "agent", threadId },
+      lineage,
+      owns: (candidate) => {
+        for (let current = candidate, steps = 0; current && steps < 64; steps++) {
+          if (current === threadId) return true;
+          current = this.parentOf(current);
+        }
+        return false;
+      },
+    };
+  }
+
+  private parentOf(threadId: string): string | null {
+    return this.store.byChildThread(threadId)?.parentThreadId ?? null;
+  }
+
+  /**
+   * Ask the user with the hold-to-confirm card, then run the operation
+   * ourselves and tell the agent in a note. The agent's call already
+   * returned, so nothing here can run twice. When the impact grew while the
+   * card waited, show the new impact and ask again instead of running.
+   */
+  private confirmThenRun<I, O>(
+    threadId: string,
+    operation: Operation<I, O>,
+    input: I,
+    confirmation: Confirmation,
+    describeResult: (result: O) => string,
+    settled: () => void,
+  ): void {
+    const note = (text: string) => {
+      if (this.disposed || !this.host.threadInfo(threadId)) return;
+      const inFlight = this.host.isTurnInFlight(threadId);
+      void this.deliver(threadId, `[Pipper] ${text}`, inFlight ? "follow_up" : null).catch(
+        (error: unknown) => {
+          console.warn("[agent-tasks] could not deliver a confirmation note:", error);
+        },
+      );
+    };
+    const ask = async (seen: Confirmation): Promise<void> => {
+      this.pendingConfirmations.set(threadId, (this.pendingConfirmations.get(threadId) ?? 0) + 1);
+      let answer: ConfirmationAnswer;
+      try {
+        answer = await this.host.requestConfirmation(threadId, seen);
+      } finally {
+        const left = (this.pendingConfirmations.get(threadId) ?? 1) - 1;
+        if (left > 0) this.pendingConfirmations.set(threadId, left);
+        else this.pendingConfirmations.delete(threadId);
+      }
+      if (answer === "deny") {
+        note(`The user declined: ${lowerFirst(seen.title)}. Don't retry it.`);
+        return;
+      }
+      if (answer === "withdrawn") {
+        note(`Your request to ${lowerFirst(seen.title)} was withdrawn before anyone answered.`);
+        return;
+      }
+      const ctx = this.agentContext(threadId);
+      const now = await operation.describe?.(input, ctx);
+      if (now && confirmationGrew(seen, now)) {
+        await ask(now);
+        return;
+      }
+      const result = await operation.run(input, ctx);
+      note(`The user confirmed. ${describeResult(result)}`);
+    };
+    void ask(confirmation)
+      .catch((error: unknown) => {
+        note(
+          `The user confirmed, but it failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(settled);
   }
 
   // ---------------------------------------------------------------------------
@@ -977,4 +1191,8 @@ export class AgentTaskService {
 function turnOutcome(nextStep: NextStep | null, report: string | null): AgentTaskOutcome {
   if (nextStep) return nextStep.blocked ? "needs_input" : "done";
   return report ? parseOutcome(report) : "done";
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }

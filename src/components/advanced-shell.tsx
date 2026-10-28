@@ -484,6 +484,22 @@ export function AdvancedShell() {
     };
   }, [projects]);
 
+  // Workspaces created or deleted outside this view (an agent, another
+  // window): refetch that project's rows so nothing waits for a reload.
+  useEffect(() => {
+    return window.omni.worktrees.onChanged(({ projectId }) => {
+      void window.omni.worktrees
+        .list(projectId)
+        .then((items) =>
+          setWorktreesByProject((current) => ({
+            ...current,
+            [projectId]: orderWorktreesForDisplay(items),
+          })),
+        )
+        .catch(() => {});
+    });
+  }, []);
+
   useEffect(() => {
     if (!activeProject) return;
     void loadWorktrees(activeProject.id);

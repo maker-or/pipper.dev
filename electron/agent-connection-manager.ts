@@ -34,8 +34,7 @@ import {
 } from "./threads.ts";
 import { commitNavigation, readLaunchState, updateLaunchSelection } from "./launch-state.ts";
 import { normalizeWorkspacePath, pickWorkspaceThread } from "../contracts/workspace-scope.ts";
-import { isLiveWorktree, listWorktrees } from "./worktree-manager.ts";
-import { createWorkspace } from "./workspace-lifecycle.ts";
+import { isLiveWorktree } from "./worktree-manager.ts";
 import { getAgentDescriptor, getDefaultAgentId, listRegisteredAgents } from "./agents/registry.ts";
 import { listAgentInstanceDescriptors, hasAgentInstances } from "./agent-instances.ts";
 import {
@@ -529,28 +528,6 @@ export class AgentConnectionManager {
           cwd: this.sessions.get(threadId)?.cwd ?? thread.worktree_path ?? project.path,
         };
       },
-      createWorkspace: async (projectId, name, installDependencies) => {
-        const created = await createWorkspace({
-          projectId,
-          name,
-          setup: installDependencies ? "prepared" : "source-only",
-          activation: "background",
-        });
-        return {
-          path: created.worktree.path,
-          branch: created.worktree.branch,
-          rollback: created.rollback,
-        };
-      },
-      listWorkspaces: async (projectId) => {
-        const project = getProject(projectId);
-        if (!project) return [];
-        return (await listWorktrees(project.path)).map((worktree) => ({
-          path: worktree.path,
-          branch: worktree.branch,
-          isProjectRoot: Boolean(worktree.isProjectRoot),
-        }));
-      },
       createThread: async ({ projectId, agentId, title, cwd, model }) => {
         const project = getProject(projectId);
         const inWorktree = Boolean(project && cwd !== project.path);
@@ -607,6 +584,31 @@ export class AgentConnectionManager {
         if (response.outcome.outcome !== "selected") return "deny";
         const choice = response.outcome.optionId;
         return choice === "once" || choice === "always" ? choice : "deny";
+      },
+      requestConfirmation: async (threadId, { title, verb, impact }) => {
+        const sessionId =
+          this.sessions.get(threadId)?.agentSessionId ?? getThread(threadId)?.agent_session_id;
+        if (!sessionId) return "withdrawn";
+        const response = await this.permissions.handle(
+          {
+            sessionId,
+            toolCall: {
+              toolCallId: `pipper-confirm-${randomUUID()}`,
+              title,
+              kind: "delete",
+              status: "pending",
+              rawInput: { impact },
+            },
+            options: [
+              { optionId: "confirm", name: capitalize(verb), kind: "allow_once" },
+              { optionId: "deny", name: "Don't allow", kind: "reject_once" },
+            ],
+          },
+          null,
+          { title, verb, impact },
+        );
+        if (response.outcome.outcome !== "selected") return "withdrawn";
+        return response.outcome.optionId === "confirm" ? "confirm" : "deny";
       },
       headSha,
       changedFiles,
@@ -3265,6 +3267,9 @@ export class AgentConnectionManager {
     });
     this.emit({ type: "thread-closed", threadId });
     removeThreadRow(threadId);
+    // Lists and tabs drop it even when someone else (an agent, a workspace
+    // delete) removed it rather than the renderer's own delete action.
+    this.emit({ type: "thread-deleted", threadId });
     this.tasks.onThreadDeleted(threadId);
 
     if (this.activeThreadId !== threadId) return;
@@ -3823,6 +3828,10 @@ export class AgentConnectionManager {
   async compact(_customInstructions?: string): Promise<void> {
     // Dropped explicit UI compact — agent decides when to compact.
   }
+}
+
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 /** Back-compat alias used by main.ts during migration. */
