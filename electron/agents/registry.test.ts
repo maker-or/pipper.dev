@@ -22,7 +22,7 @@ describe("ACP agent registry", () => {
 
     const cursor = BUILTIN_ACP_AGENTS.find((a) => a.id === "cursor-acp")!;
     expect(cursor.command).toBe("agent");
-    expect(cursor.args).toEqual(["acp"]);
+    expect(cursor.args).toEqual(["--yolo", "acp"]);
     expect(cursor.docsUrl).toContain("cursor.com/docs/cli/acp");
 
     const codex = BUILTIN_ACP_AGENTS.find((a) => a.id === "codex-acp")!;

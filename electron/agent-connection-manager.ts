@@ -40,6 +40,7 @@ import { commitNavigation, readLaunchState, updateLaunchSelection } from "./laun
 import { normalizeWorkspacePath, pickWorkspaceThread } from "../contracts/workspace-scope.ts";
 import { isLiveWorktree } from "./worktree-manager.ts";
 import { getAgentDescriptor, getDefaultAgentId, listRegisteredAgents } from "./agents/registry.ts";
+import { fullAccessOption, fullAccessPermissionResponse } from "./agents/full-access.ts";
 import { listAgentInstanceDescriptors, hasAgentInstances } from "./agent-instances.ts";
 import {
   ACP_SWITCH_PHASE_TIMEOUT_MS,
@@ -353,7 +354,8 @@ export class AgentConnectionManager {
   /** Per-session filesystem containment for agent reads/writes/terminals. */
   private readonly workspaceGuard = new WorkspaceGuard();
   private readonly permissions = new PermissionCoordinator({
-    autoResponse: (params) => this.tasks.autoPermissionResponse(params),
+    autoResponse: (params) =>
+      this.tasks.autoPermissionResponse(params) ?? this.fullAccessResponse(params),
     findThreadBySessionId: (sessionId) => this.findThreadBySessionId(sessionId),
     emit: (event) => this.emit(event),
     notifyIfHidden: (notification) => this.notifyIfHidden(notification),
@@ -1826,6 +1828,16 @@ export class AgentConnectionManager {
     }
   }
 
+  /** Allows prompts from harnesses with no auto-approve setting (`agents/full-access.ts`). */
+  private fullAccessResponse(
+    params: acp.RequestPermissionRequest,
+  ): acp.RequestPermissionResponse | null {
+    const threadId = this.findThreadBySessionId(params.sessionId);
+    const runtime = threadId ? this.sessions.get(threadId) : null;
+    const live = runtime ? this.connectionForAgent(runtime.agentId) : null;
+    return live ? fullAccessPermissionResponse(live.driverId, params) : null;
+  }
+
   private findThreadBySessionId(sessionId: string): string | null {
     return this.sessions.threadIdForSession(sessionId);
   }
@@ -2425,7 +2437,11 @@ export class AgentConnectionManager {
       cwd,
       mcpServers: attached.servers as never,
     });
-    let result: { sessionId: string; configOptions?: SessionConfigOption[] | null };
+    let result: {
+      sessionId: string;
+      configOptions?: SessionConfigOption[] | null;
+      modes?: acp.SessionModeState | null;
+    };
     try {
       result = await requestWithTimeout(request, ACP_SWITCH_PHASE_TIMEOUT_MS, "session/new");
     } catch (err) {
@@ -2476,8 +2492,69 @@ export class AgentConnectionManager {
 
     return {
       sessionId: result.sessionId,
-      configOptions,
+      configOptions: await this.applyFullAccess(
+        live,
+        result.sessionId,
+        configOptions,
+        result.modes,
+      ),
     };
+  }
+
+  /**
+   * Switch a session to its harness's full auto-approve setting (see
+   * `agents/full-access.ts`). Best effort: a session that refuses still works,
+   * it just asks before acting.
+   */
+  private async applyFullAccess(
+    live: LiveConnection,
+    sessionId: string,
+    configOptions: SessionConfigOption[],
+    modes: acp.SessionModeState | null | undefined,
+  ): Promise<SessionConfigOption[]> {
+    const target = fullAccessOption(live.driverId);
+    if (!target) return configOptions;
+    const option = configOptions.find((o) => o.id === target.configId);
+    try {
+      if (option) {
+        if (option.currentValue === target.value) return configOptions;
+        const result = await requestWithTimeout(
+          live.agent.request(acp.methods.agent.session.setConfigOption, {
+            sessionId,
+            configId: target.configId,
+            value: target.value,
+          }),
+          ACP_SWITCH_PHASE_TIMEOUT_MS,
+          "session/set_config_option",
+        );
+        const updated = result.configOptions as SessionConfigOption[] | null | undefined;
+        return updated
+          ? this.withModelOption(live, updated)
+          : configOptions.map((o) =>
+              o.id === target.configId
+                ? ({ ...o, currentValue: target.value } as SessionConfigOption)
+                : o,
+            );
+      }
+      // Agents that report ACP modes but no `mode` config option.
+      if (
+        target.configId === "mode" &&
+        modes?.currentModeId !== target.value &&
+        modes?.availableModes.some((mode) => mode.id === target.value)
+      ) {
+        await requestWithTimeout(
+          live.agent.request(acp.methods.agent.session.setMode, {
+            sessionId,
+            modeId: target.value,
+          }),
+          ACP_SWITCH_PHASE_TIMEOUT_MS,
+          "session/set_mode",
+        );
+      }
+    } catch (err) {
+      console.warn(`[agent] ${live.driverId} kept its default permission mode:`, err);
+    }
+    return configOptions;
   }
 
   private async sessionLoad(
@@ -2490,8 +2567,16 @@ export class AgentConnectionManager {
       cwd,
       sessionId,
       mcpServers: attached.servers as never,
-    }) as Promise<{ sessionId?: string; configOptions?: SessionConfigOption[] | null }>;
-    let result: { sessionId?: string; configOptions?: SessionConfigOption[] | null };
+    }) as Promise<{
+      sessionId?: string;
+      configOptions?: SessionConfigOption[] | null;
+      modes?: acp.SessionModeState | null;
+    }>;
+    let result: {
+      sessionId?: string;
+      configOptions?: SessionConfigOption[] | null;
+      modes?: acp.SessionModeState | null;
+    };
     try {
       result = await requestWithTimeout(request, ACP_SWITCH_PHASE_TIMEOUT_MS, "session/load");
     } catch (err) {
@@ -2507,7 +2592,11 @@ export class AgentConnectionManager {
     attached.bind(result?.sessionId ?? sessionId);
     const configOptions = this.withModelOption(live, result?.configOptions ?? []);
     this.recordCatalog(live.agentId, modelOptionsFromConfig(configOptions));
-    return { sessionId: result?.sessionId ?? sessionId, configOptions };
+    const loadedId = result?.sessionId ?? sessionId;
+    return {
+      sessionId: loadedId,
+      configOptions: await this.applyFullAccess(live, loadedId, configOptions, result?.modes),
+    };
   }
 
   private async sessionResume(
@@ -2520,8 +2609,16 @@ export class AgentConnectionManager {
       sessionId: prevSessionId,
       cwd,
       mcpServers: attached.servers as never,
-    } as never) as Promise<{ sessionId?: string; configOptions?: SessionConfigOption[] | null }>;
-    let result: { sessionId?: string; configOptions?: SessionConfigOption[] | null };
+    } as never) as Promise<{
+      sessionId?: string;
+      configOptions?: SessionConfigOption[] | null;
+      modes?: acp.SessionModeState | null;
+    }>;
+    let result: {
+      sessionId?: string;
+      configOptions?: SessionConfigOption[] | null;
+      modes?: acp.SessionModeState | null;
+    };
     try {
       result = await requestWithTimeout(request, ACP_SWITCH_PHASE_TIMEOUT_MS, "session/resume");
     } catch (err) {
@@ -2534,7 +2631,11 @@ export class AgentConnectionManager {
     attached.bind(result?.sessionId ?? prevSessionId);
     const configOptions = this.withModelOption(live, result?.configOptions ?? []);
     this.recordCatalog(live.agentId, modelOptionsFromConfig(configOptions));
-    return { sessionId: result?.sessionId ?? prevSessionId, configOptions };
+    const resumedId = result?.sessionId ?? prevSessionId;
+    return {
+      sessionId: resumedId,
+      configOptions: await this.applyFullAccess(live, resumedId, configOptions, result?.modes),
+    };
   }
 
   /**
