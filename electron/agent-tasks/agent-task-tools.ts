@@ -6,10 +6,6 @@ import { toolInputSchema } from "../operations/define.ts";
 
 export const AGENT_TASK_SERVER_NAME = "pipper-agents";
 
-/** Longest a single wait_for_tasks call blocks; under common MCP client limits. */
-export const MAX_WAIT_SECONDS = 240;
-export const DEFAULT_WAIT_SECONDS = 120;
-
 export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "This client (Pipper) shows a next-step card under your reply, and lets you start other coding agents as tasks.",
   "",
@@ -22,7 +18,7 @@ export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "",
   "Threads (when start_subthread is listed). Every thread is one the user can see and talk to; address them by thread_id.",
   '- Pick the tool by who the work is for. The user asks for a new, separate or another thread ("start a thread for X", "open a thread that does Y"): create_thread, never start_subthread. You hand off part of your own job and need the result back: start_subthread.',
-  "- start_subthread runs another agent on a piece of your job in a thread nested under yours, and returns at once. Keep working, then call wait_for_tasks to collect receipts; if you end your turn instead, Pipper adds a note to your thread when it stops.",
+  "- start_subthread runs another agent on a piece of your job in a thread nested under yours, and returns at once. Keep working, or end your turn: when a subthread stops, Pipper adds a note to your thread with its receipt, after your current turn if one is running. Don't poll; get_thread shows a subthread's status if you need it sooner.",
   "- A subthread shares none of your context. Its brief must say everything: goal, relevant paths, constraints, and what you expect back. Use done_when for checks that define success.",
   '- workspace: "shared" (default) works in your folder; use it for reading, research and small edits. Use "new" when subthreads change files in parallel, so each gets its own worktree and branch.',
   "- A receipt's report comes from the subthread; files_changed and tool_calls come from Pipper. Check the facts before relying on the report.",
@@ -96,22 +92,12 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
     .join("\n");
   return [
     {
-      name: "list_agents",
-      description:
-        "List the coding agents you may start in a subthread, with ids and descriptions.",
-      inputSchema: {
-        type: "object",
-        properties: {},
-        additionalProperties: false,
-      },
-    },
-    {
       name: "start_subthread",
       description:
         "Start another coding agent on a piece of your job in a new thread nested under yours. " +
-        "Returns immediately with thread_id; the subthread runs in the background. Collect the " +
-        "result with wait_for_tasks or get_thread. Not for when the user asks for a new or " +
-        "separate thread: that's create_thread.\n\nAvailable agents:\n" +
+        "Returns immediately with thread_id; the subthread runs in the background. When it " +
+        "stops, Pipper sends your thread a note with its receipt. Not for when the user asks " +
+        "for a new or separate thread: that's create_thread.\n\nAvailable agents:\n" +
         catalog,
       inputSchema: {
         type: "object",
@@ -169,29 +155,6 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
         "at once.\n\nAvailable agents:\n" +
         catalog,
       inputSchema: toolInputSchema(CREATE_THREAD_INPUT),
-    },
-    {
-      name: "wait_for_tasks",
-      description:
-        `Block until subthreads stop (up to ${MAX_WAIT_SECONDS} s) and return their receipts. ` +
-        "Without thread_ids, waits on every running subthread you started. If it times out, " +
-        "they keep running; call it again.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          thread_ids: { type: "array", items: { type: "string" } },
-          until: {
-            type: "string",
-            enum: ["all", "any"],
-            description: "Return when all (default) or any of them stop.",
-          },
-          timeout_seconds: {
-            type: "number",
-            description: `Default ${DEFAULT_WAIT_SECONDS}, max ${MAX_WAIT_SECONDS}.`,
-          },
-        },
-        additionalProperties: false,
-      },
     },
     {
       name: "get_thread",

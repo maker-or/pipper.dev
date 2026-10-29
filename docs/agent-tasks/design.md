@@ -8,6 +8,10 @@ started them, optionally in their own worktree. It replaces the old
 Status: implemented in `electron/agent-tasks/`. The proposed capability
 registry (`docs/capabilities/design.md`) rebuilds tasks on shared `threads`
 and `workspaces` capabilities.
+`wait_for_tasks` and `list_agents` have since been removed: parents learn of
+finished tasks only through notes, and `start_subthread` (formerly
+`start_task`) lists the agents in its description. The tables below describe
+the original design.
 
 ## First principles
 

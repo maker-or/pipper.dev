@@ -1,4 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { app } from "electron";
 import type * as acp from "@agentclientprotocol/sdk";
@@ -15,9 +15,12 @@ import {
 } from "../operations/define.ts";
 import {
   applyPendingMove,
+  createThread as createThreadOperation,
   deleteThread as deleteThreadOperation,
   moveThread as moveThreadOperation,
   onThreadMoved,
+  workspaceNameFor,
+  type CreatedThread,
 } from "../operations/threads.ts";
 import {
   createWorkspace as createWorkspaceOperation,
@@ -56,8 +59,6 @@ import { categorizeIntent } from "../analytics-sanitize.ts";
 import {
   AGENT_TASK_SERVER_INSTRUCTIONS,
   AGENT_TASK_SERVER_NAME,
-  DEFAULT_WAIT_SECONDS,
-  MAX_WAIT_SECONDS,
   CREATE_THREAD_INPUT,
   CREATE_WORKSPACE_INPUT,
   DELETE_WORKSPACE_INPUT,
@@ -88,13 +89,6 @@ export interface TaskThreadInfo {
   cwd: string;
 }
 
-export interface TaskWorkspace {
-  path: string;
-  branch: string | null;
-  /** Remove what this creation made; only while no thread is bound to it. */
-  rollback: () => Promise<void>;
-}
-
 export type ApprovalAnswer = "once" | "always" | "deny";
 
 /** The user's answer to a destructive call's confirm card. */
@@ -122,14 +116,6 @@ export interface AgentTaskHost {
   listThreads(projectId: string): TaskThreadInfo[];
   /** Add the thread's tab without switching to it. */
   openThreadInBackground(threadId: string): Promise<void>;
-  /** Create a background thread bound to `cwd` (a worktree, or the project root). */
-  createThread(input: {
-    projectId: string;
-    agentId: string;
-    title: string;
-    cwd: string;
-    model: string | null;
-  }): Promise<{ threadId: string }>;
   /** Queue a prompt; resolves when that turn settles. */
   sendPrompt(
     threadId: string,
@@ -167,13 +153,6 @@ export interface AgentTaskServiceOptions {
   captureAnalytics?: (name: AnalyticsEventName, properties: AnalyticsProperties) => void;
 }
 
-interface Waiter {
-  parentThreadId: string;
-  taskIds: Set<string>;
-  until: "all" | "any";
-  resolve: () => void;
-}
-
 /** Tool kinds a child may run inside its own workspace without a prompt. */
 const WORKSPACE_SAFE_KINDS: ReadonlySet<string> = new Set(["read", "search", "think", "edit"]);
 const DEFAULT_NOTE_DELAY_MS = 1_500;
@@ -193,15 +172,6 @@ function textResult(value: unknown): McpToolResult {
 function within(root: string, target: string): boolean {
   const rel = relative(resolve(root), resolve(root, target));
   return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
-}
-
-function workspaceName(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  return `${slug || "task"}-${randomBytes(2).toString("hex")}`;
 }
 
 /**
@@ -255,8 +225,7 @@ export class AgentTaskService {
   private readonly pendingConfirmations = new Map<string, number>();
   /** What each waiting card is for, so a repeated call reuses it. */
   private readonly pendingConfirmationKeys = new Set<string>();
-  private readonly waiters = new Set<Waiter>();
-  /** `${taskId}:${turns}` already returned to the parent by a wait or note. */
+  /** `${taskId}:${turns}` already returned to the parent in a note or get_thread. */
   private readonly delivered = new Set<string>();
   private readonly pendingNotes = new Map<string, Set<string>>();
   private readonly noteTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -403,8 +372,6 @@ export class AgentTaskService {
     for (const timer of this.noteTimers.values()) clearTimeout(timer);
     this.turnTimers.clear();
     this.noteTimers.clear();
-    for (const waiter of this.waiters) waiter.resolve();
-    this.waiters.clear();
     this.server.close();
     this.tokens.clear();
     this.sharedTokens.clear();
@@ -515,12 +482,6 @@ export class AgentTaskService {
       this.stopReasons.set(task.id, "cancelled");
       void this.host.cancelTurn(task.childThreadId).catch(() => {});
     }
-    for (const waiter of this.waiters) {
-      if (waiter.parentThreadId === threadId) {
-        this.waiters.delete(waiter);
-        waiter.resolve();
-      }
-    }
     this.alwaysApproved.delete(threadId);
     this.automatedStreaks.delete(threadId);
     this.emit();
@@ -563,14 +524,6 @@ export class AgentTaskService {
     if (!this.config.enabled) throw new Error("Agent tasks are turned off in Settings.");
     const caller = this.caller(sessionId);
     switch (name) {
-      case "list_agents":
-        return textResult(
-          this.availableAgents().map((a) => ({
-            id: a.id,
-            name: a.displayName,
-            description: a.description ?? null,
-          })),
-        );
       case "start_subthread":
         return textResult(
           await this.onceThisTurn(caller, name, args, () => this.startTask(caller, args)),
@@ -579,8 +532,6 @@ export class AgentTaskService {
         return textResult(
           await this.onceThisTurn(caller, name, args, () => this.createUserThread(caller, args)),
         );
-      case "wait_for_tasks":
-        return textResult(await this.waitForTasks(caller, args));
       case "get_thread":
         return textResult(await this.getThread(caller, args));
       case "list_threads":
@@ -687,17 +638,6 @@ export class AgentTaskService {
     return result;
   }
 
-  /** A subthread the caller started, by its thread id. */
-  private ownSubthread(caller: TaskThreadInfo, threadId: string): AgentTaskRow {
-    const task = this.store.byChildThread(threadId);
-    if (!task || task.parentThreadId !== caller.threadId) {
-      throw new ToolInputError(
-        `${threadId} isn't a subthread you started. Call list_threads for the ones you did.`,
-      );
-    }
-    return task;
-  }
-
   private async startTask(
     caller: TaskThreadInfo & { depth: number },
     args: Record<string, unknown>,
@@ -726,26 +666,7 @@ export class AgentTaskService {
         `Unknown or disallowed agent_id "${agentId}". Available: ${agents.map((a) => a.id).join(", ")}`,
       );
     }
-    let mode: AgentTaskWorkspaceMode;
-    let targetPath: string | null = null;
-    if (workspaceArg === "shared" || workspaceArg === "new") mode = workspaceArg;
-    else if (isAbsolute(workspaceArg)) {
-      mode = "path";
-      const workspaces = await this.runOperation(
-        listWorkspacesOperation,
-        { project: caller.projectId },
-        caller,
-      );
-      const match = workspaces.find((w) => resolve(w.path) === resolve(workspaceArg));
-      if (!match) {
-        throw new ToolInputError(
-          `${workspaceArg} is not a worktree of this project. Call list_workspaces or create_workspace.`,
-        );
-      }
-      targetPath = match.path;
-    } else {
-      throw new ToolInputError('workspace must be "shared", "new" or an absolute worktree path.');
-    }
+    const { mode, path: targetPath } = await this.workspaceTarget(caller, workspaceArg);
     this.assertBudget(caller.threadId);
 
     await this.approve(caller, `Start ${this.agentName(agentId)} task “${title}”`, {
@@ -775,43 +696,32 @@ export class AgentTaskService {
     });
     this.emit();
 
-    let workspace: TaskWorkspace | null = null;
     try {
-      let cwd = mode === "shared" ? caller.cwd : targetPath!;
-      if (mode === "new") {
-        const created = await this.runOperation(
-          createWorkspaceOperation,
-          {
-            project: caller.projectId,
-            name: workspaceName(title),
-            setup: install ? "prepared" : "source-only",
-            activation: "background",
-          },
-          caller,
-        );
-        workspace = {
-          path: created.worktree.path,
-          branch: created.worktree.branch,
-          rollback: created.rollback,
-        };
-        cwd = workspace.path;
-        task = this.store.update(task.id, {
-          workspacePath: cwd,
-          branch: workspace.branch,
-          createdWorkspace: true,
-          startSha: await this.host.headSha(cwd),
-        })!;
-      }
-      const { threadId } = await this.host.createThread({
-        projectId: caller.projectId,
-        agentId,
-        title,
-        cwd,
-        model,
-      });
+      const created = await this.runOperation(
+        createThreadOperation,
+        {
+          project: caller.projectId,
+          agent: agentId,
+          title,
+          workspace: mode === "new" ? "new" : targetPath,
+          setup: install ? "prepared" : "source-only",
+          model,
+          activation: "background",
+        },
+        caller,
+      );
+      const threadId = created.thread.id;
       task = this.store.update(task.id, {
         childThreadId: threadId,
         status: "running",
+        workspacePath: created.cwd,
+        ...(created.createdWorkspace
+          ? {
+              branch: created.createdWorkspace.branch,
+              createdWorkspace: true,
+              startSha: await this.host.headSha(created.cwd),
+            }
+          : {}),
       })!;
       this.emit();
       const message = composeBrief({
@@ -819,7 +729,7 @@ export class AgentTaskService {
         parentTitle: caller.title,
         task: brief,
         doneWhen,
-        workspacePath: cwd,
+        workspacePath: created.cwd,
         ownWorkspace: mode === "new",
       });
       void this.host
@@ -827,14 +737,39 @@ export class AgentTaskService {
         .catch((error: unknown) => this.promptFailed(task.id, threadId, error));
       return this.startResult(task);
     } catch (error) {
-      if (workspace && !this.store.get(task.id)?.childThreadId) {
-        await workspace.rollback().catch(() => {});
-      }
       const message = error instanceof Error ? error.message : String(error);
       this.store.update(task.id, { status: "failed", error: message });
       this.emit();
       throw new Error(`The task could not start: ${message}`);
     }
+  }
+
+  /**
+   * Where a new thread runs, checked before any card is shown: "shared" is
+   * the caller's own directory, "new" a worktree made for it, or a path of
+   * this project's.
+   */
+  private async workspaceTarget(
+    caller: TaskThreadInfo,
+    workspace: string,
+  ): Promise<{ mode: AgentTaskWorkspaceMode; path: string | null }> {
+    if (workspace === "shared") return { mode: "shared", path: caller.cwd };
+    if (workspace === "new") return { mode: "new", path: null };
+    if (!isAbsolute(workspace)) {
+      throw new ToolInputError('workspace must be "shared", "new" or an absolute worktree path.');
+    }
+    const workspaces = await this.runOperation(
+      listWorkspacesOperation,
+      { project: caller.projectId },
+      caller,
+    );
+    const match = workspaces.find((w) => resolve(w.path) === resolve(workspace));
+    if (!match) {
+      throw new ToolInputError(
+        `${workspace} is not a worktree of this project. Call list_workspaces or create_workspace.`,
+      );
+    }
+    return { mode: "path", path: match.path };
   }
 
   private startResult(task: AgentTaskRow): Record<string, unknown> {
@@ -844,7 +779,9 @@ export class AgentTaskService {
       workspace: task.workspaceMode,
       workspace_path: task.workspacePath,
       ...(task.branch ? { branch: task.branch } : {}),
-      next: "Keep working, then call wait_for_tasks to collect the receipt.",
+      next:
+        "Keep working, or end your turn. When it stops, Pipper adds a note to your thread " +
+        "with its receipt.",
     };
   }
 
@@ -861,72 +798,6 @@ export class AgentTaskService {
     });
     this.emit();
     if (updated) this.taskSettled(updated);
-  }
-
-  private async waitForTasks(
-    caller: TaskThreadInfo,
-    args: Record<string, unknown>,
-  ): Promise<Record<string, unknown>> {
-    const requested = optionalStringArray(args, "thread_ids");
-    const until = args.until === "any" ? "any" : "all";
-    const seconds =
-      typeof args.timeout_seconds === "number" && Number.isFinite(args.timeout_seconds)
-        ? Math.min(MAX_WAIT_SECONDS, Math.max(1, args.timeout_seconds))
-        : DEFAULT_WAIT_SECONDS;
-    const tasks = requested.length
-      ? requested.map((id) => this.ownSubthread(caller, id))
-      : this.store.listForParent(caller.threadId).filter((task) => isActive(task.status));
-    if (tasks.length === 0) return { threads: [], note: "No running subthreads to wait for." };
-    const ids = new Set(tasks.map((task) => task.id));
-
-    if (!this.waitSatisfied(ids, until)) {
-      await new Promise<void>((resolveWait) => {
-        const waiter: Waiter = {
-          parentThreadId: caller.threadId,
-          taskIds: ids,
-          until,
-          resolve: () => {
-            clearTimeout(timer);
-            this.waiters.delete(waiter);
-            resolveWait();
-          },
-        };
-        const timer = setTimeout(waiter.resolve, seconds * 1000);
-        timer.unref?.();
-        this.waiters.add(waiter);
-      });
-    }
-
-    const receipts = [];
-    let pending = 0;
-    for (const id of ids) {
-      const task = this.store.get(id);
-      if (!task) continue;
-      if (isSettled(task.status)) {
-        this.markDelivered(task);
-        receipts.push(await this.receipt(task));
-      } else {
-        pending++;
-        receipts.push({
-          thread_id: task.childThreadId,
-          title: task.title,
-          status: this.liveStatus(task),
-        });
-      }
-    }
-    return pending > 0
-      ? {
-          threads: receipts,
-          note: `${pending} subthread(s) still running; call wait_for_tasks again.`,
-        }
-      : { threads: receipts };
-  }
-
-  private waitSatisfied(ids: Set<string>, until: "all" | "any"): boolean {
-    const settled = [...ids]
-      .map((id) => this.store.get(id))
-      .map((task) => !task || isSettled(task.status));
-    return until === "all" ? settled.every(Boolean) : settled.some(Boolean);
   }
 
   // ---------------------------------------------------------------------------
@@ -967,57 +838,31 @@ export class AgentTaskService {
       );
     }
     const title = clip(input.title, 80);
-    const workspaceArg = input.workspace ?? "shared";
-    let cwd = caller.cwd;
-    let created: { path: string; rollback: () => Promise<void> } | null = null;
-    if (workspaceArg === "new") {
-      const workspace = await this.runOperation(
-        createWorkspaceOperation,
+    const { mode, path } = await this.workspaceTarget(caller, input.workspace ?? "shared");
+    let created: CreatedThread;
+    try {
+      created = await this.runOperation(
+        createThreadOperation,
         {
           project: caller.projectId,
-          name: workspaceName(title),
+          agent: input.agent_id,
+          title,
+          workspace: mode === "new" ? "new" : path,
           setup: input.install_dependencies ? "prepared" : "source-only",
+          model: input.model ?? null,
           activation: "background",
         },
         caller,
       );
-      // The thread is the user's, so its workspace is too.
-      releaseWorkspaceToUser(workspace.worktree.path);
-      created = { path: workspace.worktree.path, rollback: workspace.rollback };
-      cwd = workspace.worktree.path;
-    } else if (workspaceArg !== "shared") {
-      if (!isAbsolute(workspaceArg)) {
-        throw new ToolInputError('workspace must be "shared", "new" or an absolute worktree path.');
-      }
-      const workspaces = await this.runOperation(
-        listWorkspacesOperation,
-        { project: caller.projectId },
-        caller,
-      );
-      const match = workspaces.find((w) => resolve(w.path) === resolve(workspaceArg));
-      if (!match) {
-        throw new ToolInputError(
-          `${workspaceArg} is not a worktree of this project. Call list_workspaces.`,
-        );
-      }
-      cwd = match.path;
-    }
-
-    let threadId: string;
-    try {
-      ({ threadId } = await this.host.createThread({
-        projectId: caller.projectId,
-        agentId: input.agent_id,
-        title,
-        cwd,
-        model: input.model ?? null,
-      }));
     } catch (error) {
-      await created?.rollback().catch(() => {});
       throw new Error(
         `The thread could not start: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
+    // The thread is the user's, so a workspace made for it is too.
+    if (created.createdWorkspace) releaseWorkspaceToUser(created.createdWorkspace.path);
+    const threadId = created.thread.id;
+    const cwd = created.cwd;
     await this.host.openThreadInBackground(threadId).catch((error: unknown) => {
       console.warn("[agent-tasks] could not open the new thread's tab:", error);
     });
@@ -1271,7 +1116,7 @@ export class AgentTaskService {
       createWorkspaceOperation,
       {
         project: input.project ?? caller.projectId,
-        name: workspaceName(input.name),
+        name: workspaceNameFor(input.name),
         setup: input.install_dependencies ? "prepared" : "source-only",
         activation: "background",
       },
@@ -1441,7 +1286,7 @@ export class AgentTaskService {
     const mine = active.filter((task) => task.parentThreadId === parentThreadId).length;
     if (mine >= this.config.maxRunningPerThread) {
       throw new Error(
-        `This thread already has ${mine} running tasks (limit ${this.config.maxRunningPerThread}). Call wait_for_tasks before starting more.`,
+        `This thread already has ${mine} running tasks (limit ${this.config.maxRunningPerThread}). Wait for one to stop (Pipper adds a note) before starting more.`,
       );
     }
     if (active.length >= this.config.maxRunningTotal) {
@@ -1503,14 +1348,7 @@ export class AgentTaskService {
       ...(startedAt != null ? { execution_duration_ms: Date.now() - startedAt } : {}),
       task_category: categorizeIntent(task.brief),
     });
-    for (const waiter of this.waiters) {
-      if (waiter.taskIds.has(task.id) && this.waitSatisfied(waiter.taskIds, waiter.until)) {
-        waiter.resolve();
-      }
-    }
     if (!this.config.notifyParent || this.disposed) return;
-    // A waiter collecting this task gets the receipt; don't also send a note.
-    if ([...this.waiters].some((waiter) => waiter.taskIds.has(task.id))) return;
     let pending = this.pendingNotes.get(task.parentThreadId);
     if (!pending) {
       pending = new Set();

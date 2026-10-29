@@ -574,20 +574,6 @@ export class AgentConnectionManager {
             cwd: this.sessions.get(thread.id)?.cwd ?? thread.worktree_path ?? project.path,
           }));
       },
-      createThread: async ({ projectId, agentId, title, cwd, model }) => {
-        const project = getProject(projectId);
-        const inWorktree = Boolean(project && cwd !== project.path);
-        const thread = await this.createThread(
-          projectId,
-          title,
-          null,
-          agentId,
-          inWorktree ? cwd : null,
-          model,
-          { background: true, requireWorktree: inWorktree },
-        );
-        return { threadId: thread.id };
-      },
       sendPrompt: (threadId, message, { mode, origin }) =>
         this.sendPrompt(
           {

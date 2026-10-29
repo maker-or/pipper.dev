@@ -95,6 +95,7 @@ import { runAsUser } from "./operations/define.ts";
 import { ProvenanceStore } from "./operations/provenance.ts";
 import {
   configureThreadOperations,
+  createThread as createThreadOperation,
   deleteThread as deleteThreadOperation,
   moveThread as moveThreadOperation,
 } from "./operations/threads.ts";
@@ -2477,7 +2478,7 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "threads:create",
-    (
+    async (
       _event,
       projectId: string,
       title: string | null,
@@ -2485,13 +2486,15 @@ function registerIpc(): void {
       agentId?: string | null,
       worktreePath?: string | null,
     ) => {
-      return requireAgentManager().createThread(
-        projectId,
+      const created = await runAsUser(createThreadOperation, {
+        project: projectId,
+        agent: agentId ?? null,
         title,
-        afterThreadId ?? null,
-        agentId ?? null,
-        worktreePath ?? null,
-      );
+        workspace: worktreePath ?? null,
+        after: afterThreadId ?? null,
+        activation: "foreground",
+      });
+      return created.thread;
     },
   );
 
@@ -2501,6 +2504,18 @@ function registerIpc(): void {
 
   configureThreadOperations({
     getThread,
+    createThread: (input) =>
+      requireAgentManager().createThread(
+        input.projectId,
+        input.title,
+        input.after,
+        input.agentId,
+        input.worktreePath,
+        input.model,
+        // A background (agent) thread must get the worktree it asked for, not
+        // fall back to the root when the worktree is missing.
+        { background: input.background, requireWorktree: input.background && !!input.worktreePath },
+      ),
     getProject,
     listWorktrees,
     threadTitle: (id) => getThread(id)?.title ?? null,
@@ -2643,7 +2658,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(
     "agent:createThread",
-    (
+    async (
       _event,
       projectId: string,
       title: string | null,
@@ -2653,14 +2668,16 @@ function registerIpc(): void {
       initialModelId?: string | null,
     ) => {
       try {
-        return requireAgentManager().createThread(
-          projectId,
+        const created = await runAsUser(createThreadOperation, {
+          project: projectId,
+          agent: agentId ?? null,
           title,
-          afterThreadId ?? null,
-          agentId ?? null,
-          worktreePath ?? null,
-          initialModelId ?? null,
-        );
+          workspace: worktreePath ?? null,
+          model: initialModelId ?? null,
+          after: afterThreadId ?? null,
+          activation: "foreground",
+        });
+        return created.thread;
       } catch (e: any) {
         console.error("[IPC] agent:createThread error:", e);
         throw e;

@@ -170,10 +170,6 @@ function makeHost() {
         agentId: thread.agentId,
         cwd: thread.cwd,
       })),
-    createThread: async ({ title, cwd, agentId }) => {
-      if (createThreadError) throw createThreadError;
-      return { threadId: addThread(title, cwd, agentId).threadId };
-    },
     sendPrompt: async (threadId, message, { mode, origin }) => {
       sent.push({ threadId, message, mode, origin });
       const thread = threads.get(threadId);
@@ -225,18 +221,28 @@ function makeHost() {
   let callingSession: string | null | undefined;
   const backgroundTabs: string[] = [];
   /** The thread operations' view of the app: these fake threads. */
+  const threadRow = (id: string): Thread | null => {
+    const thread = threads.get(id);
+    return thread
+      ? ({
+          id: thread.threadId,
+          project_id: PROJECT.id,
+          agent_id: thread.agentId,
+          title: thread.title,
+          worktree_path: thread.cwd === PROJECT.path ? null : thread.cwd,
+        } as Thread)
+      : null;
+  };
   const threadDeps = (): ThreadDeps => ({
-    getThread: (id) => {
-      const thread = threads.get(id);
-      return thread
-        ? ({
-            id: thread.threadId,
-            project_id: PROJECT.id,
-            agent_id: thread.agentId,
-            title: thread.title,
-            worktree_path: thread.cwd === PROJECT.path ? null : thread.cwd,
-          } as Thread)
-        : null;
+    getThread: threadRow,
+    createThread: async ({ title, worktreePath, agentId }) => {
+      if (createThreadError) throw createThreadError;
+      const thread = addThread(
+        title ?? "Untitled",
+        worktreePath ?? PROJECT.path,
+        agentId ?? "claude",
+      );
+      return threadRow(thread.threadId)!;
     },
     getProject: (id) =>
       id === PROJECT.id ? { id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" } : null,
@@ -496,24 +502,17 @@ describe("starting tasks", () => {
     expect(parent.inFlight).toBe(false);
   });
 
-  test("wait_for_tasks returns a receipt with the report, declared outcome and Pipper's facts", async () => {
+  test("get_thread gives the parent a receipt with the report, declared outcome and Pipper's facts", async () => {
     const { fake, call } = await setup();
     const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Audit",
       task: "Audit.",
     });
-
-    const waiting = call("wait_for_tasks", {
-      thread_ids: [started.thread_id],
-      timeout_seconds: 5,
-    });
-    await new Promise((resolve) => setTimeout(resolve, 20));
     fake.finish(started.thread_id, "Found 3 call sites in src/auth.\nSTATUS: blocked");
-    const result = await waiting;
 
-    expect(result.note).toBeUndefined();
-    const [receipt] = result.threads;
+    const receipt = await call("get_thread", { thread_id: started.thread_id });
+
     expect(receipt).toMatchObject({
       thread_id: started.thread_id,
       status: "idle",
@@ -524,7 +523,7 @@ describe("starting tasks", () => {
     expect(receipt.report).toContain("Found 3 call sites");
   });
 
-  test("a wait that times out says the tasks are still running", async () => {
+  test("get_thread shows a subthread that is still working as running, without waiting", async () => {
     const { call } = await setup();
     const started = await call("start_subthread", {
       agent_id: "codex",
@@ -532,16 +531,30 @@ describe("starting tasks", () => {
       task: "Slow.",
     });
 
-    const result = await call("wait_for_tasks", {
-      thread_ids: [started.thread_id],
-      timeout_seconds: 1,
-    });
+    const result = await call("get_thread", { thread_id: started.thread_id });
 
-    expect(result.threads[0]).toMatchObject({
-      thread_id: started.thread_id,
-      status: "running",
+    expect(result).toMatchObject({ thread_id: started.thread_id, status: "running" });
+  });
+
+  test("wait_for_tasks and list_agents are gone; start_subthread lists the agents", async () => {
+    const { service, parent } = await setup();
+    const attached = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+    service.bindSession(attached.token!, parent.sessionId);
+    const response = await fetch(attached.servers[0].url as string, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
-    expect(result.note).toMatch(/still running/);
+    const { result } = (await response.json()) as {
+      result: { tools: Array<{ name: string; description: string }> };
+    };
+    const names = result.tools.map((tool) => tool.name);
+
+    expect(names).not.toContain("wait_for_tasks");
+    expect(names).not.toContain("list_agents");
+    const start = result.tools.find((tool) => tool.name === "start_subthread")!;
+    expect(start.description).toMatch(/Available agents:\n- codex/);
+    expect(start.description).toMatch(/Pipper sends your thread a note/);
   });
 
   test("a retried start with the same request_key returns the first task", async () => {
@@ -694,23 +707,6 @@ describe("reporting back to the parent", () => {
     expect(notes.map((n) => n.mode)).toEqual([null, "follow_up"]);
   });
 
-  test("a task collected by wait_for_tasks gets no note", async () => {
-    const { fake, parent, call } = await setup();
-    const started = await call("start_subthread", {
-      agent_id: "codex",
-      title: "A",
-      task: "A.",
-    });
-
-    const waiting = call("wait_for_tasks", { timeout_seconds: 5 });
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    fake.finish(started.thread_id, "Done.");
-    await waiting;
-    await settleNotes();
-
-    expect(fake.sent.filter((p) => p.threadId === parent.threadId)).toHaveLength(0);
-  });
-
   test("notes pause after too many automated parent turns in a row, until the user speaks", async () => {
     const { fake, parent, call } = await setup({ maxAutomatedTurns: 1 });
     const first = await call("start_subthread", {
@@ -802,7 +798,7 @@ describe("budgets", () => {
       task: "2",
     });
 
-    expect(result.error).toMatch(/already has 1 running tasks \(limit 1\)\. Call wait_for_tasks/);
+    expect(result.error).toMatch(/already has 1 running tasks \(limit 1\)\. Wait for one to stop/);
   });
 
   test("a task thread can't start tasks beyond the depth limit", async () => {

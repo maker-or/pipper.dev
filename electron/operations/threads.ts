@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { basename } from "node:path";
 import { z } from "zod";
 import type { Project } from "../../contracts/projects.ts";
@@ -5,16 +6,31 @@ import type { Thread, ThreadMoveResult } from "../../contracts/threads.ts";
 import type { Worktree } from "../../contracts/worktrees.ts";
 import { samePath } from "../worktree-manager.ts";
 import { defineOperation, OperationInputError } from "./define.ts";
+import { createWorkspace } from "./workspaces.ts";
 
 /**
- * Thread operations that change Pipper's own state: delete a thread, and move
- * one to another workspace. The IPC handlers (`threads:delete`,
- * `threads:move`) and the agent tools (`delete_thread`, `move_thread`) both
- * run these. See docs/capabilities/design.md.
+ * Thread operations that change Pipper's own state: create a thread, delete
+ * one, and move one to another workspace. The IPC handlers (`threads:create`,
+ * `threads:delete`, `threads:move`) and the agent tools (`start_subthread`
+ * and `create_thread`, `delete_thread`, `move_thread`) all run these. See
+ * docs/capabilities/design.md.
  */
 
 export interface ThreadDeps {
   getThread(id: string): Thread | null;
+  /**
+   * Create the thread row and its tab. `background` leaves the selection and
+   * the active tab alone; `after` places the tab after that thread's.
+   */
+  createThread(input: {
+    projectId: string;
+    agentId: string | null;
+    title: string | null;
+    worktreePath: string | null;
+    model: string | null;
+    after: string | null;
+    background: boolean;
+  }): Promise<Thread>;
   getProject(id: string): Project | null;
   listWorktrees(projectPath: string): Promise<Worktree[]>;
   threadTitle(id: string): string | null;
@@ -75,6 +91,107 @@ function titleOf(thread: Thread): string {
 }
 
 const threadRef = z.string().min(1).describe("A thread_id from list_threads or get_thread.");
+
+/** A new workspace's name: the thread's title as a slug, plus a short suffix. */
+export function workspaceNameFor(title: string | null): string {
+  const slug = (title ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32);
+  return `${slug || "thread"}-${randomBytes(2).toString("hex")}`;
+}
+
+export interface CreatedThread {
+  thread: Thread;
+  /** The directory the thread runs in. */
+  cwd: string;
+  /** The worktree it runs in, or null for the project root. */
+  worktreePath: string | null;
+  /** Set when this call created the thread's workspace. */
+  createdWorkspace: { path: string; branch: string | null } | null;
+}
+
+export const createThread = defineOperation({
+  id: "threads.create",
+  tier: "local",
+  input: z.object({
+    project: z.string().min(1),
+    agent: z.string().nullable().optional(),
+    title: z.string().nullable().optional(),
+    workspace: z
+      .string()
+      .min(1)
+      .nullable()
+      .optional()
+      .describe('"new" for a new worktree, a workspace path, or null for the project root.'),
+    setup: z.enum(["prepared", "source-only"]).optional(),
+    model: z.string().nullable().optional(),
+    after: z.string().nullable().optional(),
+    activation: z.enum(["foreground", "background"]),
+  }),
+
+  async run(input, ctx): Promise<CreatedThread> {
+    const d = requireDeps();
+    const project = d.getProject(input.project);
+    if (!project) throw new OperationInputError(`Project not found: ${input.project}`);
+    const title = input.title?.trim() || null;
+
+    let worktreePath: string | null = null;
+    let created: Awaited<ReturnType<typeof createWorkspace.run>> | null = null;
+    if (input.workspace === "new") {
+      created = await createWorkspace.run(
+        {
+          project: project.id,
+          name: workspaceNameFor(title),
+          setup: input.setup,
+          activation: "background",
+        },
+        ctx,
+      );
+      worktreePath = created.worktree.path;
+    } else if (input.workspace && !samePath(input.workspace, project.path)) {
+      if (ctx.caller.kind === "agent") {
+        const match = (await d.listWorktrees(project.path)).find((worktree) =>
+          samePath(worktree.path, input.workspace!),
+        );
+        if (!match) {
+          throw new OperationInputError(
+            `${input.workspace} is not a workspace of this project. Call list_workspaces.`,
+          );
+        }
+        worktreePath = match.isProjectRoot ? null : match.path;
+      } else {
+        // The user picked it in Pipper's own UI.
+        worktreePath = input.workspace;
+      }
+    }
+
+    let thread: Thread;
+    try {
+      thread = await d.createThread({
+        projectId: project.id,
+        agentId: input.agent || null,
+        title,
+        worktreePath,
+        model: input.model || null,
+        after: input.after || null,
+        background: input.activation === "background",
+      });
+    } catch (error) {
+      await created?.rollback().catch(() => {});
+      throw error;
+    }
+    return {
+      thread,
+      cwd: worktreePath ?? project.path,
+      worktreePath,
+      createdWorkspace: created
+        ? { path: created.worktree.path, branch: created.worktree.branch ?? null }
+        : null,
+    };
+  },
+});
 
 export const deleteThread = defineOperation({
   id: "threads.delete",

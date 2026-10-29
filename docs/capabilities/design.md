@@ -6,8 +6,8 @@ Each of those operations is defined once and reachable from both the renderer
 (IPC) and agents (MCP). What agents do shows up through UI Pipper already has:
 nested threads, ACP plans and permission prompts, inline widgets and cards.
 
-Status: steps 1 and 2 of _Migration_ are built (`electron/operations/`); the
-rest is proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
+Status: steps 1 and 2 of _Migration_ are built (`electron/operations/`), and
+part of step 3; the rest is proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
 design extends them to the rest of Pipper's own state.
 
 ## What gets a tool
@@ -652,8 +652,7 @@ if Pipper adopts Effect more broadly.
      The other thread tools stay in the task service, addressed by
      `thread_id`.
    - `start_task` is `start_subthread` already; its description is rebuilt in
-     step 3. `wait_for_tasks` and `list_agents` stay until step 3 drops them;
-     `wait_for_tasks` takes `thread_ids`.
+     step 3, which also drops `wait_for_tasks` and `list_agents`.
    - A subthread's brief names its parent's `thread_id`. Messages carry a
      Pipper-written sender line. The loop guard exempts a parent messaging its
      own subthread, whose every turn is automated; budgets bound that instead.
@@ -687,11 +686,25 @@ if Pipper adopts Effect more broadly.
    and `list_agents`; parents learn of finished children only through notes.
    Build `start_subthread`'s description from agents, models and the routing
    guide; validate `model`; record agent and model in the receipt.
-   - **Built early:** `create_thread` for `initiation: "user_asked"`. It opens
-     a background tab, has no parent link, depth limit or receipt, and is
+   - **Built:** `create_thread` for `initiation: "user_asked"`. It opens a
+     background tab, has no parent link, depth limit or receipt, and is
      refused in a turn another thread started. A `"new"` workspace it creates
-     belongs to the user. Still to come with this step: `"propose"` cards,
-     `notify_creator`, and building it on a shared `threads.create`.
+     belongs to the user. The turn that started a thread links to it.
+   - **Built:** `threads.create` in `electron/operations/threads.ts`. It
+     resolves the workspace (`"new"` through `workspaces.create`, a path, or
+     the root), creates the thread, and rolls back a new workspace if that
+     fails. `start_subthread`, `create_thread` and the renderer's
+     `threads:create` and `agent:createThread` all run it. It is narrower
+     than the sketch above: what differs between the presets (the task row
+     and brief, the background tab, who owns a new workspace) stays in the
+     task service.
+   - **Built:** `wait_for_tasks` and `list_agents` are gone. A parent hears of
+     a finished subthread only through the note Pipper adds to its thread,
+     and `get_thread` shows status on demand. `start_subthread`'s
+     description lists the agents.
+   - Still to come with this step: `"propose"` cards, the routing guide and
+     `model` check, the subthread UI and the `subagent-*` renames.
+     `notify_creator` waits until it proves needed.
 4. Settings with per-setting tiers, `get_settings` / `update_settings`.
 5. Connectors: `add_connector`, the sign-in card, session reload at turn end.
 6. Remote access: `show_remote_pairing` and the pairing card.

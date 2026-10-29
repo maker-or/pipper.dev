@@ -60,7 +60,9 @@ describe("orchestration prompt", () => {
     const prompt = composeOrchestrationPrompt(draft, AGENTS, 4);
 
     expect(prompt).toContain("start_subthread");
-    expect(prompt).toContain("wait_for_tasks");
+    // Receipts arrive as notes; there is no tool to wait on.
+    expect(prompt).toContain("end your turn and pick up from the notes");
+    expect(prompt).not.toContain("wait_for_tasks");
     expect(prompt).toContain("Migrate the settings page to the new design system");
     // The user's parallel pick is a hard cap on how many auto-mode starts.
     expect(prompt).toMatch(/at most 4/);
