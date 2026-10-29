@@ -14,7 +14,12 @@ import type {
   WorkspaceGitActionResult,
   WorkspaceGitStatus,
 } from "../../contracts/git.ts";
-import type { OpenTabsState, Thread, ThreadPage } from "../../contracts/threads.ts";
+import type {
+  OpenTabsState,
+  Thread,
+  ThreadMoveResult,
+  ThreadPage,
+} from "../../contracts/threads.ts";
 import type {
   AcpAgentDescriptor,
   AcpAgentInstance,
@@ -237,6 +242,7 @@ declare global {
         ) => () => void;
       };
       threads: {
+        move: (input: { threadId: string; workspace: string }) => Promise<ThreadMoveResult>;
         list: () => Promise<Thread[]>;
         listByIds: (ids: string[]) => Promise<Thread[]>;
         listProject: (input: {

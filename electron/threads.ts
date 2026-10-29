@@ -124,6 +124,11 @@ export function updateThreadAgentSessionId(id: string, agentSessionId: string): 
   db.prepare("UPDATE threads SET agent_session_id = ? WHERE id = ?").run(agentSessionId, id);
 }
 
+/** Bind a thread to a worktree, or to the project root with null. */
+export function updateThreadWorktreePath(id: string, worktreePath: string | null): void {
+  getDb().prepare("UPDATE threads SET worktree_path = ? WHERE id = ?").run(worktreePath, id);
+}
+
 export function updateThreadTitle(id: string, title: string | null): void {
   const db = getDb();
   const stmt = db.prepare("UPDATE threads SET title = ? WHERE id = ?");

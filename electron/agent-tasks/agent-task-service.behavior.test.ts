@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type * as acp from "@agentclientprotocol/sdk";
 
-vi.mock("electron", () => ({ app: { getPath: () => "/nonexistent-userdata" } }));
+vi.mock("electron", () => ({
+  app: { getPath: () => "/nonexistent-userdata" },
+}));
 
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskConfig, AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
@@ -15,6 +17,7 @@ import type { WorkspaceGitStatus } from "../../contracts/git.ts";
 import type { Confirmation } from "../operations/define.ts";
 import { ProvenanceStore, ensureProvenanceSchema } from "../operations/provenance.ts";
 import { configureWorkspaceOperations, type WorkspaceDeps } from "../operations/workspaces.ts";
+import { configureThreadOperations, type ThreadDeps } from "../operations/threads.ts";
 import { pathKey } from "../worktree-manager.ts";
 import { AgentTaskStore, ensureAgentTaskSchema } from "./agent-task-store.ts";
 import {
@@ -52,6 +55,7 @@ interface FakeThread {
   threadId: string;
   sessionId: string;
   title: string;
+  agentId: string;
   cwd: string;
   inFlight: boolean;
   lastText: string;
@@ -79,7 +83,11 @@ function makeHost() {
   const workspaces: Array<{ path: string; rolledBack: boolean }> = [];
   const worktrees: Worktree[] = [
     { path: PROJECT.path, branch: "main", head: "a1", isProjectRoot: true },
-    { path: "/worktrees/shared-feature", branch: "pipper/shared-feature", head: "b2" },
+    {
+      path: "/worktrees/shared-feature",
+      branch: "pipper/shared-feature",
+      head: "b2",
+    },
   ];
   const removed: string[] = [];
   const deletedThreads: string[] = [];
@@ -88,7 +96,12 @@ function makeHost() {
     confirmation: Confirmation;
     answer: (answer: ConfirmationAnswer) => void;
   }> = [];
-  let gitStatus: Partial<WorkspaceGitStatus> = { staged: 0, unstaged: 0, untracked: 0, ahead: 0 };
+  let gitStatus: Partial<WorkspaceGitStatus> = {
+    staged: 0,
+    unstaged: 0,
+    untracked: 0,
+    ahead: 0,
+  };
   const emitted: AgentTaskSnapshot[][] = [];
   let approvalAnswer: ApprovalAnswer = "once";
   let createThreadError: Error | null = null;
@@ -98,12 +111,13 @@ function makeHost() {
   /** Threads whose in-flight check reads stale (a turn starts right after it). */
   const staleInFlight = new Set<string>();
 
-  const addThread = (title: string, cwd: string): FakeThread => {
+  const addThread = (title: string, cwd: string, agentId = "claude"): FakeThread => {
     counter += 1;
     const thread: FakeThread = {
       threadId: `thread-${counter}`,
       sessionId: `session-${counter}`,
       title,
+      agentId,
       cwd,
       inFlight: false,
       lastText: "",
@@ -129,6 +143,8 @@ function makeHost() {
     listAgents: () => AGENTS,
     threadIdForSession: (sessionId) =>
       [...threads.values()].find((t) => t.sessionId === sessionId)?.threadId ?? null,
+    sessionForToolCall: async (sessionIds) =>
+      callingSession === undefined ? (sessionIds[0] ?? null) : callingSession,
     threadInfo: (threadId) => {
       const thread = threads.get(threadId);
       return thread
@@ -137,13 +153,26 @@ function makeHost() {
             projectId: PROJECT.id,
             projectPath: PROJECT.path,
             title: thread.title,
+            agentId: thread.agentId,
             cwd: thread.cwd,
           }
         : null;
     },
-    createThread: async ({ title, cwd }) => {
+    openThreadInBackground: async (threadId) => {
+      backgroundTabs.push(threadId);
+    },
+    listThreads: () =>
+      [...threads.values()].reverse().map((thread) => ({
+        threadId: thread.threadId,
+        projectId: PROJECT.id,
+        projectPath: PROJECT.path,
+        title: thread.title,
+        agentId: thread.agentId,
+        cwd: thread.cwd,
+      })),
+    createThread: async ({ title, cwd, agentId }) => {
       if (createThreadError) throw createThreadError;
-      return { threadId: addThread(title, cwd).threadId };
+      return { threadId: addThread(title, cwd, agentId).threadId };
     },
     sendPrompt: async (threadId, message, { mode, origin }) => {
       sent.push({ threadId, message, mode, origin });
@@ -169,7 +198,13 @@ function makeHost() {
       !staleInFlight.has(threadId) && Boolean(threads.get(threadId)?.inFlight),
     lastTurn: (threadId) => {
       const thread = threads.get(threadId);
-      return thread ? { text: thread.lastText, toolCalls: { edit: 2, read: 1 } } : null;
+      return thread
+        ? {
+            text: thread.lastText,
+            toolCalls: { edit: 2, read: 1 },
+            nextStep: null,
+          }
+        : null;
     },
     hasPendingPermission: (threadId) => Boolean(threads.get(threadId)?.pendingPermission),
     requestApproval: async (threadId, { title }) => {
@@ -185,6 +220,46 @@ function makeHost() {
     emitTasks: (tasks) => emitted.push(tasks),
   };
 
+  const reloaded: string[] = [];
+  /** What sessionForToolCall answers for a shared endpoint; undefined = the first. */
+  let callingSession: string | null | undefined;
+  const backgroundTabs: string[] = [];
+  /** The thread operations' view of the app: these fake threads. */
+  const threadDeps = (): ThreadDeps => ({
+    getThread: (id) => {
+      const thread = threads.get(id);
+      return thread
+        ? ({
+            id: thread.threadId,
+            project_id: PROJECT.id,
+            agent_id: thread.agentId,
+            title: thread.title,
+            worktree_path: thread.cwd === PROJECT.path ? null : thread.cwd,
+          } as Thread)
+        : null;
+    },
+    getProject: (id) =>
+      id === PROJECT.id ? { id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" } : null,
+    listWorktrees: async () => worktrees.map((worktree) => ({ ...worktree })),
+    threadTitle: (id) => threads.get(id)?.title ?? null,
+    isTurnInFlight: (id) => Boolean(threads.get(id)?.inFlight),
+    deleteThread: async (id) => {
+      deletedThreads.push(id);
+      threads.delete(id);
+      service.onThreadDeleted(id);
+    },
+    setThreadWorkspace: (id, worktreePath) => {
+      const thread = threads.get(id);
+      if (thread) thread.cwd = worktreePath ?? PROJECT.path;
+    },
+    reloadThreadSession: async (id) => {
+      reloaded.push(id);
+    },
+    threadChanged: () => {},
+    uncommittedFiles: async () => leftBehind,
+  });
+  let leftBehind: string[] = [];
+
   /** The operations' view of the app: these fake threads and worktrees. */
   const workspaceDeps = (db: DatabaseSync): WorkspaceDeps => ({
     listProjects: () => [{ id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" }],
@@ -195,7 +270,11 @@ function makeHost() {
       const path = `/worktrees/${request.name}`;
       const workspace = { path, rolledBack: false };
       workspaces.push(workspace);
-      const worktree: Worktree = { path, branch: `pipper/${request.name}`, head: "c3" };
+      const worktree: Worktree = {
+        path,
+        branch: `pipper/${request.name}`,
+        head: "c3",
+      };
       worktrees.push(worktree);
       return {
         project: { id: PROJECT.id, path: PROJECT.path, name: "repo", icon: "" },
@@ -255,6 +334,15 @@ function makeHost() {
   return {
     host,
     workspaceDeps,
+    threadDeps,
+    reloaded,
+    backgroundTabs,
+    setCallingSession: (sessionId: string | null) => {
+      callingSession = sessionId;
+    },
+    setLeftBehind: (files: string[]) => {
+      leftBehind = files;
+    },
     worktrees,
     removed,
     deletedThreads,
@@ -298,6 +386,7 @@ const services: AgentTaskService[] = [];
 afterEach(() => {
   for (const service of services.splice(0)) service.dispose();
   configureWorkspaceOperations(null);
+  configureThreadOperations(null);
   vi.useRealTimers();
 });
 
@@ -308,14 +397,22 @@ async function setup(config: Partial<AgentTaskConfig> = {}) {
   const store = new AgentTaskStore(() => db);
   const fake = makeHost();
   configureWorkspaceOperations(fake.workspaceDeps(db));
+  configureThreadOperations(fake.threadDeps());
   const baseDir = await mkdtemp(join(tmpdir(), "pipper-agent-tasks-"));
-  const service = new AgentTaskService({ host: fake.host, store, baseDir, noteDelayMs: 5 });
+  const service = new AgentTaskService({
+    host: fake.host,
+    store,
+    baseDir,
+    noteDelayMs: 5,
+  });
   services.push(service);
   fake.bind(service);
   await service.init();
   await service.setConfig({ startApproval: "allow", ...config });
   const parent = fake.addThread("Build the feature", PROJECT.path);
-  const attached = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+  const attached = await service.attachMcpServers([], {
+    mcpCapabilities: { http: true },
+  });
   service.bindSession(attached.token!, parent.sessionId);
   const url = attached.servers[0].url as string;
 
@@ -341,7 +438,9 @@ async function setup(config: Partial<AgentTaskConfig> = {}) {
 
   /** A second endpoint bound to another thread, e.g. a task calling the tools itself. */
   const endpointFor = async (sessionId: string) => {
-    const other = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+    const other = await service.attachMcpServers([], {
+      mcpCapabilities: { http: true },
+    });
     service.bindSession(other.token!, sessionId);
     const otherUrl = other.servers[0].url as string;
     return async (name: string, args: Record<string, unknown> = {}) => {
@@ -373,7 +472,7 @@ describe("starting tasks", () => {
   test("start_task opens a child thread, sends the brief and returns before the task finishes", async () => {
     const { fake, parent, call } = await setup();
 
-    const started = await call("start_task", {
+    const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Audit auth",
       task: "Find every place the session cookie is read.",
@@ -399,17 +498,23 @@ describe("starting tasks", () => {
 
   test("wait_for_tasks returns a receipt with the report, declared outcome and Pipper's facts", async () => {
     const { fake, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Audit", task: "Audit." });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Audit",
+      task: "Audit.",
+    });
 
-    const waiting = call("wait_for_tasks", { task_ids: [started.task_id], timeout_seconds: 5 });
+    const waiting = call("wait_for_tasks", {
+      thread_ids: [started.thread_id],
+      timeout_seconds: 5,
+    });
     await new Promise((resolve) => setTimeout(resolve, 20));
     fake.finish(started.thread_id, "Found 3 call sites in src/auth.\nSTATUS: blocked");
     const result = await waiting;
 
     expect(result.note).toBeUndefined();
-    const [receipt] = result.tasks;
+    const [receipt] = result.threads;
     expect(receipt).toMatchObject({
-      task_id: started.task_id,
       thread_id: started.thread_id,
       status: "idle",
       outcome: "blocked",
@@ -421,40 +526,70 @@ describe("starting tasks", () => {
 
   test("a wait that times out says the tasks are still running", async () => {
     const { call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Slow", task: "Slow." });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Slow",
+      task: "Slow.",
+    });
 
     const result = await call("wait_for_tasks", {
-      task_ids: [started.task_id],
+      thread_ids: [started.thread_id],
       timeout_seconds: 1,
     });
 
-    expect(result.tasks[0]).toMatchObject({ task_id: started.task_id, status: "running" });
+    expect(result.threads[0]).toMatchObject({
+      thread_id: started.thread_id,
+      status: "running",
+    });
     expect(result.note).toMatch(/still running/);
   });
 
   test("a retried start with the same request_key returns the first task", async () => {
     const { fake, call } = await setup();
-    const args = { agent_id: "codex", title: "Once", task: "Once.", request_key: "k1" };
+    const args = {
+      agent_id: "codex",
+      title: "Once",
+      task: "Once.",
+      request_key: "k1",
+    };
 
-    const first = await call("start_task", args);
-    const second = await call("start_task", args);
+    const first = await call("start_subthread", args);
+    const second = await call("start_subthread", args);
 
-    expect(second.task_id).toBe(first.task_id);
+    expect(second.thread_id).toBe(first.thread_id);
     expect(fake.sent.filter((p) => p.origin === "agent-task")).toHaveLength(1);
   });
 
   test("unknown agents, empty briefs and bad workspaces are refused with what to do", async () => {
     const { fake, call } = await setup();
 
-    expect((await call("start_task", { agent_id: "nope", title: "x", task: "x" })).error).toMatch(
-      /Available: codex, claude/,
-    );
-    expect((await call("start_task", { agent_id: "codex", title: "x", task: " " })).error).toMatch(
-      /task is required/,
-    );
     expect(
-      (await call("start_task", { agent_id: "codex", title: "x", task: "x", workspace: "/etc" }))
-        .error,
+      (
+        await call("start_subthread", {
+          agent_id: "nope",
+          title: "x",
+          task: "x",
+        })
+      ).error,
+    ).toMatch(/Available: codex, claude/);
+    expect(
+      (
+        await call("start_subthread", {
+          agent_id: "codex",
+          title: "x",
+          task: " ",
+        })
+      ).error,
+    ).toMatch(/task is required/);
+    expect(
+      (
+        await call("start_subthread", {
+          agent_id: "codex",
+          title: "x",
+          task: "x",
+          workspace: "/etc",
+        })
+      ).error,
     ).toMatch(/list_workspaces/);
     expect(fake.threads.size).toBe(1);
   });
@@ -465,14 +600,14 @@ describe("workspaces", () => {
     const { fake, call } = await setup();
     fake.setChangedFiles(["src/auth.ts", "src/auth.test.ts"]);
 
-    const started = await call("start_task", {
+    const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Fix auth",
       task: "Fix it.",
       workspace: "new",
     });
     fake.finish(started.thread_id, "Fixed.\nSTATUS: done");
-    const receipt = await call("get_task", { task_id: started.task_id });
+    const receipt = await call("get_thread", { thread_id: started.thread_id });
 
     expect(started.workspace).toBe("new");
     expect(started.workspace_path).toMatch(/^\/worktrees\/fix-auth-/);
@@ -485,7 +620,7 @@ describe("workspaces", () => {
   test("a worktree path from list_workspaces is accepted and shared", async () => {
     const { fake, call } = await setup();
 
-    const started = await call("start_task", {
+    const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Share",
       task: "Share.",
@@ -500,7 +635,7 @@ describe("workspaces", () => {
     const { fake, call, service } = await setup();
     fake.failCreateThread(new Error("agent not signed in"));
 
-    const result = await call("start_task", {
+    const result = await call("start_subthread", {
       agent_id: "codex",
       title: "Broken",
       task: "x",
@@ -509,15 +644,26 @@ describe("workspaces", () => {
 
     expect(result.error).toMatch(/could not start: agent not signed in/);
     expect(fake.workspaces[0].rolledBack).toBe(true);
-    expect(service.snapshots()[0]).toMatchObject({ status: "failed", childThreadId: null });
+    expect(service.snapshots()[0]).toMatchObject({
+      status: "failed",
+      childThreadId: null,
+    });
   });
 });
 
 describe("reporting back to the parent", () => {
   test("tasks that stop while nobody waits are batched into one note in the parent thread", async () => {
     const { fake, parent, call } = await setup();
-    const a = await call("start_task", { agent_id: "codex", title: "A", task: "A." });
-    const b = await call("start_task", { agent_id: "claude", title: "B", task: "B." });
+    const a = await call("start_subthread", {
+      agent_id: "codex",
+      title: "A",
+      task: "A.",
+    });
+    const b = await call("start_subthread", {
+      agent_id: "claude",
+      title: "B",
+      task: "B.",
+    });
 
     fake.finish(a.thread_id, "A is done.");
     fake.finish(b.thread_id, "B needs a decision.\nSTATUS: needs_input");
@@ -526,14 +672,18 @@ describe("reporting back to the parent", () => {
     const notes = fake.sent.filter((p) => p.threadId === parent.threadId);
     expect(notes).toHaveLength(1);
     expect(notes[0].origin).toBe("agent-task");
-    expect(notes[0].message).toContain("2 tasks you started have stopped");
-    expect(notes[0].message).toContain(`A (task_id ${a.task_id}, codex): done`);
-    expect(notes[0].message).toContain(`B (task_id ${b.task_id}, claude): needs_input`);
+    expect(notes[0].message).toContain("2 subthreads you started have stopped");
+    expect(notes[0].message).toContain(`A (thread_id ${a.thread_id}, codex): done`);
+    expect(notes[0].message).toContain(`B (thread_id ${b.thread_id}, claude): needs_input`);
   });
 
   test("a note that races a user turn is queued as a follow-up, not dropped", async () => {
     const { fake, parent, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "A", task: "A." });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "A",
+      task: "A.",
+    });
     fake.userTurn(parent.threadId);
     fake.staleInFlight.add(parent.threadId);
 
@@ -546,7 +696,11 @@ describe("reporting back to the parent", () => {
 
   test("a task collected by wait_for_tasks gets no note", async () => {
     const { fake, parent, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "A", task: "A." });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "A",
+      task: "A.",
+    });
 
     const waiting = call("wait_for_tasks", { timeout_seconds: 5 });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -559,8 +713,16 @@ describe("reporting back to the parent", () => {
 
   test("notes pause after too many automated parent turns in a row, until the user speaks", async () => {
     const { fake, parent, call } = await setup({ maxAutomatedTurns: 1 });
-    const first = await call("start_task", { agent_id: "codex", title: "One", task: "1" });
-    const second = await call("start_task", { agent_id: "codex", title: "Two", task: "2" });
+    const first = await call("start_subthread", {
+      agent_id: "codex",
+      title: "One",
+      task: "1",
+    });
+    const second = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Two",
+      task: "2",
+    });
 
     fake.finish(first.thread_id, "one");
     await settleNotes();
@@ -573,7 +735,10 @@ describe("reporting back to the parent", () => {
     // The user speaks; a later stop notifies again.
     fake.userTurn(parent.threadId);
     fake.finish(parent.threadId, "user turn done");
-    await call("message_task", { task_id: second.task_id, message: "again" });
+    await call("message_thread", {
+      thread_id: second.thread_id,
+      message: "again",
+    });
     fake.finish(second.thread_id, "two again");
     await settleNotes();
     expect(fake.sent.filter((p) => p.threadId === parent.threadId)).toHaveLength(2);
@@ -582,10 +747,16 @@ describe("reporting back to the parent", () => {
 
 describe("approvals", () => {
   test('with "ask", a declined start creates nothing and tells the agent not to retry', async () => {
-    const { fake, parent, call, service } = await setup({ startApproval: "ask" });
+    const { fake, parent, call, service } = await setup({
+      startApproval: "ask",
+    });
     fake.setApproval("deny");
 
-    const result = await call("start_task", { agent_id: "codex", title: "No", task: "x" });
+    const result = await call("start_subthread", {
+      agent_id: "codex",
+      title: "No",
+      task: "x",
+    });
 
     expect(result.error).toMatch(/declined/);
     expect(fake.approvals).toEqual([{ threadId: parent.threadId, title: "Start Codex task “No”" }]);
@@ -597,20 +768,24 @@ describe("approvals", () => {
     const { fake, call } = await setup({ startApproval: "ask" });
     fake.setApproval("always");
 
-    await call("start_task", { agent_id: "codex", title: "1", task: "1" });
-    await call("start_task", { agent_id: "codex", title: "2", task: "2" });
+    await call("start_subthread", { agent_id: "codex", title: "1", task: "1" });
+    await call("start_subthread", { agent_id: "codex", title: "2", task: "2" });
 
     expect(fake.approvals).toHaveLength(1);
   });
 
   test("a turn started by a note always asks before starting more work", async () => {
     const { fake, parent, call } = await setup({ startApproval: "allow" });
-    const started = await call("start_task", { agent_id: "codex", title: "1", task: "1" });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "1",
+      task: "1",
+    });
     fake.finish(started.thread_id, "done");
     await settleNotes();
     expect(fake.threads.get(parent.threadId)!.inFlight).toBe(true); // the note's turn
 
-    await call("start_task", { agent_id: "codex", title: "2", task: "2" });
+    await call("start_subthread", { agent_id: "codex", title: "2", task: "2" });
 
     expect(fake.approvals).toHaveLength(1);
   });
@@ -619,19 +794,27 @@ describe("approvals", () => {
 describe("budgets", () => {
   test("the per-thread running limit is enforced with an actionable error", async () => {
     const { call } = await setup({ maxRunningPerThread: 1 });
-    await call("start_task", { agent_id: "codex", title: "1", task: "1" });
+    await call("start_subthread", { agent_id: "codex", title: "1", task: "1" });
 
-    const result = await call("start_task", { agent_id: "codex", title: "2", task: "2" });
+    const result = await call("start_subthread", {
+      agent_id: "codex",
+      title: "2",
+      task: "2",
+    });
 
     expect(result.error).toMatch(/already has 1 running tasks \(limit 1\)\. Call wait_for_tasks/);
   });
 
   test("a task thread can't start tasks beyond the depth limit", async () => {
     const { fake, call, endpointFor } = await setup({ maxDepth: 1 });
-    const started = await call("start_task", { agent_id: "codex", title: "Child", task: "x" });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Child",
+      task: "x",
+    });
     const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
 
-    const result = await childCall("start_task", {
+    const result = await childCall("start_subthread", {
       agent_id: "codex",
       title: "Grandchild",
       task: "y",
@@ -647,8 +830,13 @@ describe("budgets", () => {
     const call = (service as any).callTool.bind(service);
     const token = [...(service as any).tokens.keys()][0];
     const started = JSON.parse(
-      (await call(token, "start_task", { agent_id: "codex", title: "Slow", task: "x" })).content[0]
-        .text,
+      (
+        await call(token, "start_subthread", {
+          agent_id: "codex",
+          title: "Slow",
+          task: "x",
+        })
+      ).content[0].text,
     );
     expect(parent).toBeTruthy();
 
@@ -656,7 +844,7 @@ describe("budgets", () => {
     await Promise.resolve();
 
     expect(fake.cancelled).toContain(started.thread_id);
-    expect(store.get(started.task_id)).toMatchObject({
+    expect(store.byChildThread(started.thread_id)).toMatchObject({
       status: "timed_out",
       error: "The turn ran past its time budget.",
     });
@@ -666,16 +854,25 @@ describe("budgets", () => {
 describe("conversations and control", () => {
   test("message_task on an idle task starts another turn and the receipt follows it", async () => {
     const { fake, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Q", task: "x" });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Q",
+      task: "x",
+    });
     fake.finish(started.thread_id, "Which database?\nSTATUS: needs_input");
-    expect((await call("get_task", { task_id: started.task_id })).outcome).toBe("needs_input");
+    expect((await call("get_thread", { thread_id: started.thread_id })).outcome).toBe(
+      "needs_input",
+    );
 
-    const sent = await call("message_task", { task_id: started.task_id, message: "Postgres." });
+    const sent = await call("message_thread", {
+      thread_id: started.thread_id,
+      message: "Postgres.",
+    });
     expect(sent.delivered).toBe("started a new turn");
-    expect((await call("get_task", { task_id: started.task_id })).status).toBe("running");
+    expect((await call("get_thread", { thread_id: started.thread_id })).status).toBe("running");
     fake.finish(started.thread_id, "Migrated to Postgres.");
 
-    expect(await call("get_task", { task_id: started.task_id })).toMatchObject({
+    expect(await call("get_thread", { thread_id: started.thread_id })).toMatchObject({
       status: "idle",
       outcome: "done",
       turns: 2,
@@ -684,45 +881,83 @@ describe("conversations and control", () => {
 
   test("cancel_task stops the turn and the task reads as cancelled", async () => {
     const { fake, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Stop", task: "x" });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Stop",
+      task: "x",
+    });
 
-    await call("cancel_task", { task_id: started.task_id });
+    await call("cancel_thread", { thread_id: started.thread_id });
 
     expect(fake.cancelled).toEqual([started.thread_id]);
-    expect((await call("get_task", { task_id: started.task_id })).status).toBe("cancelled");
+    expect((await call("get_thread", { thread_id: started.thread_id })).status).toBe("cancelled");
   });
 
   test("a task blocked on a permission prompt reads as waiting_for_permission", async () => {
     const { fake, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Perm", task: "x" });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Perm",
+      task: "x",
+    });
     fake.threads.get(started.thread_id)!.pendingPermission = true;
 
-    expect((await call("list_tasks"))[0].status).toBe("waiting_for_permission");
+    expect((await call("list_threads"))[0].status).toBe("waiting_for_permission");
   });
 
-  test("a thread can only read and control tasks it started", async () => {
-    const { fake, call, endpointFor } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Mine", task: "x" });
+  test("any thread can read another's status; only its parent gets the receipt", async () => {
+    const { fake, parent, call, endpointFor } = await setup();
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Mine",
+      task: "x",
+    });
     const stranger = fake.addThread("Someone else", PROJECT.path);
     const strangerCall = await endpointFor(stranger.sessionId);
 
-    expect((await strangerCall("get_task", { task_id: started.task_id })).error).toMatch(
-      /No task .* was started from this thread/,
+    const seen = await strangerCall("get_thread", {
+      thread_id: started.thread_id,
+    });
+    expect(seen).toMatchObject({
+      thread_id: started.thread_id,
+      title: "Mine",
+      agent_id: "codex",
+      status: "running",
+      parent_thread_id: parent.threadId,
+    });
+    expect(seen.report).toBeUndefined();
+    expect(await strangerCall("list_threads")).toEqual([]);
+    const everyone = (await strangerCall("list_threads", {
+      scope: "project",
+    })) as Array<{
+      thread_id: string;
+    }>;
+    expect(everyone.map((t) => t.thread_id)).toEqual(
+      expect.arrayContaining([parent.threadId, started.thread_id, stranger.threadId]),
     );
-    expect(await strangerCall("list_tasks")).toEqual([]);
   });
 
   test("deleting the parent stops its running tasks; deleting a child settles its task", async () => {
     const { fake, parent, call, service, store } = await setup();
-    const a = await call("start_task", { agent_id: "codex", title: "A", task: "a" });
-    const b = await call("start_task", { agent_id: "codex", title: "B", task: "b" });
+    const a = await call("start_subthread", {
+      agent_id: "codex",
+      title: "A",
+      task: "a",
+    });
+    const b = await call("start_subthread", {
+      agent_id: "codex",
+      title: "B",
+      task: "b",
+    });
 
     service.onThreadDeleted(b.thread_id);
-    expect(store.get(b.task_id)).toMatchObject({ status: "cancelled" });
+    expect(store.byChildThread(b.thread_id)).toMatchObject({
+      status: "cancelled",
+    });
 
     service.onThreadDeleted(parent.threadId);
     expect(fake.cancelled).toContain(a.thread_id);
-    expect(store.get(a.task_id)!.status).toBe("cancelled");
+    expect(store.byChildThread(a.thread_id)!.status).toBe("cancelled");
   });
 });
 
@@ -746,7 +981,7 @@ describe("child permissions", () => {
 
   test("edits inside the task's workspace are allowed once; everything else asks the user", async () => {
     const { fake, call, service } = await setup();
-    const started = await call("start_task", {
+    const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Edit",
       task: "x",
@@ -774,8 +1009,14 @@ describe("child permissions", () => {
   });
 
   test('with childPermissions "ask", and for threads that aren\'t tasks, nothing is auto-answered', async () => {
-    const { fake, parent, call, service } = await setup({ childPermissions: "ask" });
-    const started = await call("start_task", { agent_id: "codex", title: "Edit", task: "x" });
+    const { fake, parent, call, service } = await setup({
+      childPermissions: "ask",
+    });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Edit",
+      task: "x",
+    });
     const child = fake.threads.get(started.thread_id)!;
 
     expect(
@@ -791,7 +1032,11 @@ describe("child permissions", () => {
 describe("restart", () => {
   test("tasks a previous process left running come back as interrupted", async () => {
     const { store, call, db } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Long", task: "x" });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Long",
+      task: "x",
+    });
 
     const fake = makeHost();
     const revived = new AgentTaskService({
@@ -803,7 +1048,7 @@ describe("restart", () => {
     fake.bind(revived);
     await revived.init();
 
-    expect(store.get(started.task_id)!.status).toBe("interrupted");
+    expect(store.byChildThread(started.thread_id)!.status).toBe("interrupted");
     expect(fake.emitted.at(-1)!.map((t) => t.status)).toEqual(["interrupted"]);
   });
 });
@@ -814,7 +1059,9 @@ async function wrapUpAs(
   sessionId: string,
   args: Record<string, unknown>,
 ): Promise<{ text: string; isError: boolean }> {
-  const attached = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+  const attached = await service.attachMcpServers([], {
+    mcpCapabilities: { http: true },
+  });
   service.bindSession(attached.token!, sessionId);
   const response = await fetch(attached.servers[0].url as string, {
     method: "POST",
@@ -835,17 +1082,23 @@ async function wrapUpAs(
 describe("wrap_up", () => {
   test("is listed alone when agent tasks are turned off, and still works", async () => {
     const { service, parent } = await setup({ enabled: false });
-    const attached = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+    const attached = await service.attachMcpServers([], {
+      mcpCapabilities: { http: true },
+    });
     expect(attached.token).not.toBeNull();
     const response = await fetch(attached.servers[0].url as string, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
     });
-    const { result } = (await response.json()) as { result: { tools: Array<{ name: string }> } };
+    const { result } = (await response.json()) as {
+      result: { tools: Array<{ name: string }> };
+    };
     expect(result.tools.map((tool) => tool.name)).toEqual(["wrap_up"]);
 
-    const done = await wrapUpAs(service, parent.sessionId, { recap: "Fixed the bug." });
+    const done = await wrapUpAs(service, parent.sessionId, {
+      recap: "Fixed the bug.",
+    });
     expect(done.isError).toBe(false);
     expect(done.text).toContain("closing message");
   });
@@ -868,7 +1121,11 @@ describe("wrap_up", () => {
 
   test("a task's wrap_up sets its outcome and goes to the parent in the receipt and note", async () => {
     const { service, fake, parent, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "Pick a DB", task: "." });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Pick a DB",
+      task: ".",
+    });
     const child = fake.threads.get(started.thread_id)!;
 
     await wrapUpAs(service, child.sessionId, {
@@ -884,7 +1141,7 @@ describe("wrap_up", () => {
     fake.finish(started.thread_id, "Long report.\nSTATUS: done");
     await settleNotes();
 
-    const receipt = await call("get_task", { task_id: started.task_id });
+    const receipt = await call("get_thread", { thread_id: started.thread_id });
     expect(receipt).toMatchObject({
       outcome: "needs_input",
       recap: "Benchmarked SQLite and Postgres; both fit.",
@@ -895,14 +1152,18 @@ describe("wrap_up", () => {
     const note = fake.sent.find((p) => p.threadId === parent.threadId)!;
     expect(note.message).toContain("Benchmarked SQLite and Postgres; both fit.");
     expect(note.message).toContain("Asks: Which database should I wire in?");
-    const snapshot = service.snapshots().find((task) => task.taskId === started.task_id)!;
+    const snapshot = service.snapshots().find((task) => task.childThreadId === started.thread_id)!;
     expect(snapshot.reportPreview).toBe("Benchmarked SQLite and Postgres; both fit.");
     expect(snapshot.nextStep?.blocked).toBe(true);
   });
 
   test("a later turn without wrap_up drops the earlier card and falls back to STATUS", async () => {
     const { service, fake, call } = await setup();
-    const started = await call("start_task", { agent_id: "codex", title: "A", task: "." });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "A",
+      task: ".",
+    });
     const child = fake.threads.get(started.thread_id)!;
     await wrapUpAs(service, child.sessionId, {
       recap: "Need a name.",
@@ -911,10 +1172,13 @@ describe("wrap_up", () => {
     });
     fake.finish(started.thread_id, "Asked.");
 
-    await call("message_task", { task_id: started.task_id, message: "Call it foo." });
+    await call("message_thread", {
+      thread_id: started.thread_id,
+      message: "Call it foo.",
+    });
     fake.finish(started.thread_id, "Renamed.\nSTATUS: blocked");
 
-    const receipt = await call("get_task", { task_id: started.task_id });
+    const receipt = await call("get_thread", { thread_id: started.thread_id });
     expect(receipt.outcome).toBe("blocked");
     expect(receipt.recap).toBeUndefined();
     expect(service.snapshots()[0].nextStep).toBeNull();
@@ -931,7 +1195,9 @@ describe("delete_workspace", () => {
     const store = new ProvenanceStore(() => db);
     expect(store.createdBy("workspace", pathKey(created.workspace_path))).toBe("thread-1");
 
-    const result = await call("delete_workspace", { path: created.workspace_path });
+    const result = await call("delete_workspace", {
+      path: created.workspace_path,
+    });
 
     expect(result).toEqual({ status: "deleted", path: created.workspace_path });
     expect(fake.removed).toEqual([created.workspace_path]);
@@ -941,7 +1207,7 @@ describe("delete_workspace", () => {
 
   test("a parent deletes its task's worktree, and the task's thread in it, without asking", async () => {
     const { fake, call } = await setup();
-    const started = await call("start_task", {
+    const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Spike",
       task: "Try it.",
@@ -949,7 +1215,9 @@ describe("delete_workspace", () => {
     });
     fake.finish(started.thread_id, "Done.");
 
-    const result = await call("delete_workspace", { path: started.workspace_path });
+    const result = await call("delete_workspace", {
+      path: started.workspace_path,
+    });
 
     expect(result.status).toBe("deleted");
     expect(fake.deletedThreads).toEqual([started.thread_id]);
@@ -961,7 +1229,9 @@ describe("delete_workspace", () => {
     fake.addThread("Fix billing", "/worktrees/shared-feature");
     fake.setGitStatus({ staged: 1, unstaged: 2, untracked: 1, ahead: 2 });
 
-    const result = await call("delete_workspace", { path: "/worktrees/shared-feature" });
+    const result = await call("delete_workspace", {
+      path: "/worktrees/shared-feature",
+    });
 
     expect(result.status).toBe("awaiting_confirmation");
     expect(fake.removed).toEqual([]);
@@ -1013,7 +1283,9 @@ describe("delete_workspace", () => {
 
   test("while the card waits, wrap_up can't ask about it too; once answered it can ask again", async () => {
     const { fake, parent, call, service } = await setup();
-    const pending = await call("delete_workspace", { path: "/worktrees/shared-feature" });
+    const pending = await call("delete_workspace", {
+      path: "/worktrees/shared-feature",
+    });
     expect(pending.message).toContain("That card ends your turn: don't call wrap_up");
 
     const doubled = await wrapUpAs(service, parent.sessionId, {
@@ -1024,15 +1296,22 @@ describe("delete_workspace", () => {
     expect(doubled.isError).toBe(true);
     expect(doubled.text).toContain("A confirm card is already waiting");
     expect(
-      (await wrapUpAs(service, parent.sessionId, { recap: "Waiting for your confirmation." }))
-        .isError,
+      (
+        await wrapUpAs(service, parent.sessionId, {
+          recap: "Waiting for your confirmation.",
+        })
+      ).isError,
     ).toBe(false);
 
     fake.confirmations[0].answer("deny");
     await settle();
     expect(
-      (await wrapUpAs(service, parent.sessionId, { recap: "Kept it.", ask: "Anything else?" }))
-        .isError,
+      (
+        await wrapUpAs(service, parent.sessionId, {
+          recap: "Kept it.",
+          ask: "Anything else?",
+        })
+      ).isError,
     ).toBe(false);
   });
 
@@ -1040,7 +1319,9 @@ describe("delete_workspace", () => {
     const { fake, call } = await setup();
     await call("delete_workspace", { path: "/worktrees/shared-feature" });
 
-    const again = await call("delete_workspace", { path: "/worktrees/shared-feature" });
+    const again = await call("delete_workspace", {
+      path: "/worktrees/shared-feature",
+    });
 
     expect(again.status).toBe("awaiting_confirmation");
     expect(again.message).toContain("still waiting");
@@ -1066,7 +1347,7 @@ describe("delete_workspace", () => {
 
   test("its own workspace, its parent's and the project root can't be deleted at all", async () => {
     const { fake, call, service } = await setup();
-    const started = await call("start_task", {
+    const started = await call("start_subthread", {
       agent_id: "codex",
       title: "Child",
       task: "x",
@@ -1074,7 +1355,9 @@ describe("delete_workspace", () => {
     });
     const child = fake.threads.get(started.thread_id)!;
     const asChild = await (async () => {
-      const attached = await service.attachMcpServers([], { mcpCapabilities: { http: true } });
+      const attached = await service.attachMcpServers([], {
+        mcpCapabilities: { http: true },
+      });
       service.bindSession(attached.token!, child.sessionId);
       return async (args: Record<string, unknown>) => {
         const response = await fetch(attached.servers[0].url as string, {
@@ -1111,5 +1394,399 @@ describe("delete_workspace", () => {
     expect((await call("list_workspaces", { project: "/elsewhere" })).error).toBe(
       "Project not found: /elsewhere",
     );
+  });
+});
+
+describe("threads", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  test("a subthread's brief names its parent, and its message reaches the parent signed by Pipper", async () => {
+    const { fake, parent, call, endpointFor } = await setup();
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Pick",
+      task: "x",
+    });
+    const brief = fake.sent.find((p) => p.threadId === started.thread_id)!;
+    expect(brief.message).toContain(`(thread_id ${parent.threadId})`);
+
+    const child = fake.threads.get(started.thread_id)!;
+    const childCall = await endpointFor(child.sessionId);
+    const sent = await childCall("message_thread", {
+      thread_id: parent.threadId,
+      message: "SQLite or Postgres?",
+    });
+
+    expect(sent).toMatchObject({
+      thread_id: parent.threadId,
+      delivered: "started a new turn",
+    });
+    const received = fake.sent.find((p) => p.threadId === parent.threadId)!;
+    expect(received.message).toBe(
+      `[Message from “Pick” (Codex), thread_id ${started.thread_id}]\n\nSQLite or Postgres?`,
+    );
+    expect(
+      (
+        await childCall("message_thread", {
+          thread_id: child.threadId,
+          message: "hi",
+        })
+      ).error,
+    ).toMatch(/your own thread/);
+  });
+
+  test("threads that keep waking each other wait for the user", async () => {
+    const { fake, call } = await setup({ maxAutomatedTurns: 1 });
+    const other = fake.addThread("Other", PROJECT.path);
+
+    await call("message_thread", { thread_id: other.threadId, message: "one" });
+    fake.finish(other.threadId, "ok");
+    const again = await call("message_thread", {
+      thread_id: other.threadId,
+      message: "two",
+    });
+
+    expect(again.error).toMatch(/waits for the user/);
+  });
+
+  test("cancel_thread stops any thread's turn, but not the caller's own", async () => {
+    const { fake, parent, call } = await setup();
+    const other = fake.addThread("Other", PROJECT.path);
+    fake.userTurn(other.threadId);
+
+    expect(await call("cancel_thread", { thread_id: other.threadId })).toEqual({
+      thread_id: other.threadId,
+      status: "cancelling",
+    });
+    expect(fake.cancelled).toEqual([other.threadId]);
+    expect((await call("cancel_thread", { thread_id: parent.threadId })).error).toMatch(
+      /your own thread/,
+    );
+  });
+
+  test("delete_thread: a subthread goes at once, the user's thread needs the card", async () => {
+    const { fake, parent, call } = await setup();
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Mine",
+      task: "x",
+    });
+    fake.finish(started.thread_id, "Done.");
+
+    expect(await call("delete_thread", { thread_id: started.thread_id })).toMatchObject({
+      status: "deleted",
+      title: "Mine",
+    });
+    expect(fake.deletedThreads).toEqual([started.thread_id]);
+
+    const users = fake.addThread("User's work", PROJECT.path);
+    const pending = await call("delete_thread", { thread_id: users.threadId });
+    expect(pending.status).toBe("awaiting_confirmation");
+    expect(fake.confirmations[0].confirmation.title).toBe("Delete thread “User's work”");
+    expect((await call("delete_thread", { thread_id: users.threadId })).message).toContain(
+      "still waiting",
+    );
+    expect(fake.confirmations).toHaveLength(1);
+
+    fake.confirmations[0].answer("confirm");
+    await settle();
+    expect(fake.deletedThreads).toEqual([started.thread_id, users.threadId]);
+    const notes = fake.sent.filter((p) => p.threadId === parent.threadId);
+    expect(notes.some((p) => p.message.includes("Deleted thread “User's work”."))).toBe(true);
+  });
+
+  test("delete_thread refuses the caller's own thread and the thread that started it", async () => {
+    const { fake, parent, call, endpointFor } = await setup();
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Kid",
+      task: "x",
+    });
+    const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
+
+    expect((await call("delete_thread", { thread_id: parent.threadId })).error).toBe(
+      "You can't delete your own thread.",
+    );
+    expect((await childCall("delete_thread", { thread_id: parent.threadId })).error).toBe(
+      "You can't delete a thread that started you.",
+    );
+    expect(fake.confirmations).toHaveLength(0);
+  });
+
+  test("move_thread on the caller's own running thread lands when its turn ends", async () => {
+    const { fake, parent, call, service } = await setup();
+    fake.setLeftBehind(["src/a.ts"]);
+    parent.inFlight = true;
+
+    const moved = await call("move_thread", {
+      workspace: "/worktrees/shared-feature",
+    });
+
+    expect(moved).toMatchObject({
+      status: "after_turn",
+      workspace_path: "/worktrees/shared-feature",
+      left_behind: ["src/a.ts"],
+    });
+    expect(moved.message).toContain("From your next turn you work in /worktrees/shared-feature");
+    expect(parent.cwd).toBe(PROJECT.path);
+
+    parent.inFlight = false;
+    service.onTurnSettled(parent.threadId, { stopReason: "end_turn" });
+    await settle();
+    expect(parent.cwd).toBe("/worktrees/shared-feature");
+    expect(fake.reloaded).toEqual([parent.threadId]);
+  });
+
+  test("an idle subthread moves at once and its receipt follows", async () => {
+    const { fake, call } = await setup();
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Kid",
+      task: "x",
+    });
+    fake.finish(started.thread_id, "Done.");
+
+    const moved = await call("move_thread", {
+      thread_id: started.thread_id,
+      workspace: "/worktrees/shared-feature",
+    });
+
+    expect(moved.status).toBe("moved");
+    expect((await call("get_thread", { thread_id: started.thread_id })).workspace_path).toBe(
+      "/worktrees/shared-feature",
+    );
+  });
+
+  test("move_thread refuses someone else's thread and unknown workspaces; moving back cancels", async () => {
+    const { fake, parent, call, service } = await setup();
+    const other = fake.addThread("Other", PROJECT.path);
+    expect(
+      (
+        await call("move_thread", {
+          thread_id: other.threadId,
+          workspace: PROJECT.path,
+        })
+      ).error,
+    ).toMatch(/only move your own thread/);
+    expect((await call("move_thread", { workspace: "/nowhere" })).error).toMatch(
+      /not a workspace of this thread's project/,
+    );
+
+    parent.inFlight = true;
+    await call("move_thread", { workspace: "/worktrees/shared-feature" });
+    expect((await call("move_thread", { workspace: PROJECT.path })).status).toBe("unchanged");
+    parent.inFlight = false;
+    service.onTurnSettled(parent.threadId, { stopReason: "end_turn" });
+    await settle();
+    expect(parent.cwd).toBe(PROJECT.path);
+    expect(fake.reloaded).toEqual([]);
+  });
+});
+
+describe("create_thread", () => {
+  test("starts a top-level thread for the user in a background tab, with no depth limit", async () => {
+    const { fake, call, endpointFor, service } = await setup({ maxDepth: 1 });
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Kid",
+      task: "x",
+    });
+    fake.finish(started.thread_id, "Done.");
+    // The user types into the subthread (depth 1, the limit) and asks for a new thread.
+    fake.userTurn(started.thread_id);
+    const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
+
+    const created = await childCall("create_thread", {
+      agent_id: "claude",
+      title: "Explore the codebase",
+      task: "Map the repository.",
+    });
+
+    expect(created).toMatchObject({
+      status: "started",
+      title: "Explore the codebase",
+    });
+    expect(fake.backgroundTabs).toEqual([created.thread_id]);
+    const brief = fake.sent.find((p) => p.threadId === created.thread_id)!;
+    expect(brief.message).toContain(`[Started by “Kid” (Codex), thread_id ${started.thread_id}`);
+    expect(brief.message).toContain("Map the repository.");
+    // Not a subthread: no receipt, not nested, not in the caller's list.
+    expect(await childCall("list_threads")).toEqual([]);
+    expect(service.snapshots().some((task) => task.childThreadId === created.thread_id)).toBe(
+      false,
+    );
+  });
+
+  test("a turn another thread started can't open threads for the user", async () => {
+    const { fake, call, endpointFor } = await setup();
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Kid",
+      task: "x",
+    });
+    const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
+
+    const refused = await childCall("create_thread", {
+      agent_id: "claude",
+      title: "T",
+      task: "x",
+    });
+
+    expect(refused.error).toMatch(/Only start a new thread when the user asked/);
+    expect(fake.backgroundTabs).toEqual([]);
+  });
+
+  test("its new workspace belongs to the user, so deleting it needs confirming", async () => {
+    const { fake, call } = await setup();
+    const created = await call("create_thread", {
+      agent_id: "claude",
+      title: "Own branch",
+      task: "x",
+      workspace: "new",
+    });
+    fake.finish(created.thread_id, "Started.");
+
+    const pending = await call("delete_workspace", {
+      path: created.workspace_path,
+    });
+
+    expect(pending.status).toBe("awaiting_confirmation");
+    expect(fake.removed).toEqual([]);
+  });
+});
+
+describe("an endpoint shared by a directory's sessions (OpenCode)", () => {
+  const SHARE = "connection-1\0/repo";
+  const http = { mcpCapabilities: { http: true } };
+
+  test("only a directory's first session is given the server; the token goes with the last", async () => {
+    const { service } = await setup();
+    const before = service.endpointCount();
+    const first = await service.attachMcpServers([], http, SHARE);
+    service.bindSession(first.token!, "s-a");
+    const second = await service.attachMcpServers([], http, SHARE);
+    service.bindSession(second.token!, "s-b");
+
+    expect(first.servers).toHaveLength(1);
+    // OpenCode would re-add it and close the first session's connection.
+    expect(second.servers).toEqual([]);
+    expect(second.token).toBe(first.token);
+    expect(service.endpointCount()).toBe(before + 1);
+
+    service.releaseSessionMcp("s-a");
+    expect(service.endpointCount()).toBe(before + 1);
+    service.releaseSessionMcp("s-b");
+    expect(service.endpointCount()).toBe(before);
+  });
+
+  test("a probe session that never binds doesn't take the shared endpoint down", async () => {
+    const { service } = await setup();
+    const live = await service.attachMcpServers([], http, SHARE);
+    service.bindSession(live.token!, "s-a");
+    const probe = await service.attachMcpServers([], http, SHARE);
+    service.releaseTokenForSession(probe.token!);
+
+    expect(service.endpointCount()).toBeGreaterThan(0);
+    const again = await service.attachMcpServers([], http, SHARE);
+    expect(again.token).toBe(live.token);
+  });
+
+  test("a call is attributed to the session whose agent made it, not the newest one", async () => {
+    const { fake, parent, call, service } = await setup({ maxDepth: 1 });
+    // The parent's user turn starts a subthread in the same folder; both share an endpoint.
+    fake.userTurn(parent.threadId);
+    const started = await call("start_subthread", {
+      agent_id: "codex",
+      title: "Kid",
+      task: "x",
+    });
+    const attached = await service.attachMcpServers([], http, SHARE);
+    service.bindSession(attached.token!, parent.sessionId);
+    // The subthread's session registered last, as it does in OpenCode.
+    service.bindSession(attached.token!, fake.threads.get(started.thread_id)!.sessionId);
+    const shared = attached.servers[0].url as string;
+    fake.setCallingSession(parent.sessionId);
+
+    const response = await fetch(shared, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: {
+          name: "create_thread",
+          arguments: { agent_id: "claude", title: "T", task: "x" },
+        },
+      }),
+    });
+    const { result } = (await response.json()) as {
+      result: { content: Array<{ text: string }>; isError?: boolean };
+    };
+
+    expect(result.isError).toBeFalsy();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      status: "started",
+    });
+  });
+
+  test("an ambiguous caller is refused with a retry hint, not guessed", async () => {
+    const { fake, parent, service } = await setup();
+    const attached = await service.attachMcpServers([], http, SHARE);
+    service.bindSession(attached.token!, parent.sessionId);
+    service.bindSession(attached.token!, "s-other");
+    fake.setCallingSession(null);
+
+    const response = await fetch(attached.servers[0].url as string, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "tools/call",
+        params: { name: "list_threads", arguments: {} },
+      }),
+    });
+    const { result } = (await response.json()) as {
+      result: { content: Array<{ text: string }>; isError?: boolean };
+    };
+
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toMatch(/couldn't tell which thread made this call/);
+  });
+});
+
+describe("a retried thread-starting call", () => {
+  test("create_thread with the same title in one turn returns the first thread", async () => {
+    const { fake, parent, call } = await setup();
+    fake.userTurn(parent.threadId);
+    const first = await call("create_thread", { agent_id: "codex", title: "Explore", task: "x" });
+    // The reply was lost; the agent retries, even with another agent.
+    const retry = await call("create_thread", { agent_id: "claude", title: "Explore ", task: "x" });
+
+    expect(retry).toMatchObject({ status: "already_started", thread_id: first.thread_id });
+    expect(fake.backgroundTabs).toEqual([first.thread_id]);
+  });
+
+  test("a new turn may start a thread with the same title again", async () => {
+    const { fake, parent, call } = await setup();
+    fake.userTurn(parent.threadId);
+    const first = await call("create_thread", { agent_id: "codex", title: "Explore", task: "x" });
+    fake.finish(parent.threadId, "Started.");
+    fake.userTurn(parent.threadId);
+    const again = await call("create_thread", { agent_id: "codex", title: "Explore", task: "x" });
+
+    expect(again.status).toBe("started");
+    expect(again.thread_id).not.toBe(first.thread_id);
+  });
+
+  test("start_subthread is deduplicated the same way", async () => {
+    const { fake, parent, call, service } = await setup();
+    fake.userTurn(parent.threadId);
+    const first = await call("start_subthread", { agent_id: "codex", title: "Kid", task: "x" });
+    const retry = await call("start_subthread", { agent_id: "codex", title: "Kid", task: "x" });
+
+    expect(retry).toMatchObject({ status: "already_started", thread_id: first.thread_id });
+    expect(service.snapshots()).toHaveLength(1);
   });
 });

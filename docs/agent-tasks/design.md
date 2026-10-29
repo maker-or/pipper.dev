@@ -47,6 +47,12 @@ without HTTP MCP.
 
 ## Tools
 
+Renamed in step 2 of `docs/capabilities/design.md`: `start_task` is
+`start_subthread`, and `get_task`, `list_tasks`, `message_task` and
+`cancel_task` are `get_thread`, `list_threads`, `message_thread` and
+`cancel_thread`, addressed by `thread_id` and open to any thread. The table
+below keeps the original names.
+
 | Tool               | Does                                                                   |
 | ------------------ | ---------------------------------------------------------------------- |
 | `list_agents`      | Agents the user allows as tasks: id, name, description                 |

@@ -6,8 +6,8 @@ Each of those operations is defined once and reachable from both the renderer
 (IPC) and agents (MCP). What agents do shows up through UI Pipper already has:
 nested threads, ACP plans and permission prompts, inline widgets and cards.
 
-Status: step 1 of _Migration_ is built (`electron/operations/`); the rest is
-proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
+Status: steps 1 and 2 of _Migration_ are built (`electron/operations/`); the
+rest is proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
 design extends them to the rest of Pipper's own state.
 
 ## What gets a tool
@@ -643,10 +643,43 @@ if Pipper adopts Effect more broadly.
      withdraws the card, and the agent gets a "withdrawn" note.
    - On the phone (remote permissions) the card's options show as plain
      buttons; the hold applies on the desktop only.
-2. Move thread operations; rename the task tools to thread names (see
-   _Tools_) and widen `message_thread`, `get_thread`, `list_threads` and
+2. **Built.** Move thread operations; rename the task tools to thread names
+   (see _Tools_) and widen `message_thread`, `get_thread`, `list_threads` and
    `cancel_thread` to any thread; add `delete_thread` and `move_thread` (with a "Move to
    workspace" action on threads in the UI, through the same operation).
+   - `electron/operations/threads.ts` holds `threads.delete` and
+     `threads.move`; `threads:delete` and the new `threads:move` IPC run them.
+     The other thread tools stay in the task service, addressed by
+     `thread_id`.
+   - `start_task` is `start_subthread` already; its description is rebuilt in
+     step 3. `wait_for_tasks` and `list_agents` stay until step 3 drops them;
+     `wait_for_tasks` takes `thread_ids`.
+   - A subthread's brief names its parent's `thread_id`. Messages carry a
+     Pipper-written sender line. The loop guard exempts a parent messaging its
+     own subthread, whose every turn is automated; budgets bound that instead.
+   - `get_thread` reads any thread; only the parent gets a subthread's
+     receipt.
+   - A move lands when the thread's turn settles: the row changes, a
+     `thread-updated` event refreshes the renderer's caches, the selection
+     follows if the thread is on screen, and the session reopens in the new
+     directory (`reloadThreadSession`; load, then resume, then a fresh
+     session). The UI action is a right-click menu on thread tabs.
+   - Not built yet: the warning before moving a thread whose harness can't
+     load sessions (needs the per-harness profile) and the hint after a
+     silent `cd`.
+   - **OpenCode keeps MCP servers per directory, not per session.** Every
+     session it opens re-adds the servers it's given, and re-adding one
+     replaces the directory's client under that name. That closes any call in
+     flight ("Connection closed") and sends every session's calls through the
+     newest token. So for OpenCode, `pipper-agents` and `pipper-browser` use
+     one token per connection and directory. Only the directory's first live
+     session is given the servers, and each call is matched to its session by
+     the tool call that session's agent reported over ACP. Browser sessions
+     still keep their own pages and storage. `sharesMcpServersPerDirectory`
+     in `tool-call-match.ts` is the first per-harness profile entry.
+   - A lost reply makes agents retry. `create_thread` and `start_subthread`
+     return the first result for the same title within one turn, rather than
+     starting a second thread.
 3. Rebuild the task service on `threads.create`, with `start_subthread` and
    `create_thread` as presets, promotion, proposal cards and the subthread
    UI (inline card, breadcrumb, badge, summary strip). Rename the remaining
@@ -654,6 +687,11 @@ if Pipper adopts Effect more broadly.
    and `list_agents`; parents learn of finished children only through notes.
    Build `start_subthread`'s description from agents, models and the routing
    guide; validate `model`; record agent and model in the receipt.
+   - **Built early:** `create_thread` for `initiation: "user_asked"`. It opens
+     a background tab, has no parent link, depth limit or receipt, and is
+     refused in a turn another thread started. A `"new"` workspace it creates
+     belongs to the user. Still to come with this step: `"propose"` cards,
+     `notify_creator`, and building it on a shared `threads.create`.
 4. Settings with per-setting tiers, `get_settings` / `update_settings`.
 5. Connectors: `add_connector`, the sign-in card, session reload at turn end.
 6. Remote access: `show_remote_pairing` and the pairing card.

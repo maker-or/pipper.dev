@@ -14,9 +14,17 @@ import {
   type Operation,
 } from "../operations/define.ts";
 import {
+  applyPendingMove,
+  deleteThread as deleteThreadOperation,
+  moveThread as moveThreadOperation,
+  onThreadMoved,
+} from "../operations/threads.ts";
+import {
   createWorkspace as createWorkspaceOperation,
   deleteWorkspace as deleteWorkspaceOperation,
   listWorkspaces as listWorkspacesOperation,
+  releaseWorkspaceToUser,
+  resolveProject,
 } from "../operations/workspaces.ts";
 import type {
   AgentTaskConfig,
@@ -50,9 +58,15 @@ import {
   AGENT_TASK_SERVER_NAME,
   DEFAULT_WAIT_SECONDS,
   MAX_WAIT_SECONDS,
+  CREATE_THREAD_INPUT,
   CREATE_WORKSPACE_INPUT,
   DELETE_WORKSPACE_INPUT,
+  GET_THREAD_INPUT,
+  LIST_THREADS_INPUT,
   LIST_WORKSPACES_INPUT,
+  MESSAGE_THREAD_INPUT,
+  MOVE_THREAD_INPUT,
+  THREAD_ID_INPUT,
   ToolInputError,
   WRAP_UP_TOOL,
   agentTaskToolDefinitions,
@@ -69,6 +83,7 @@ export interface TaskThreadInfo {
   projectId: string;
   projectPath: string;
   title: string | null;
+  agentId: string;
   /** Folder the thread's session works in. */
   cwd: string;
 }
@@ -92,7 +107,21 @@ export type ConfirmationAnswer = "confirm" | "deny" | "withdrawn";
 export interface AgentTaskHost {
   listAgents(): AcpAgentDescriptor[];
   threadIdForSession(sessionId: string): string | null;
+  /**
+   * Of several sessions sharing one endpoint, the one making this tool call:
+   * matched against the tool calls each session's agent reported over ACP.
+   * Null when none can be told apart.
+   */
+  sessionForToolCall(
+    sessionIds: string[],
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<string | null>;
   threadInfo(threadId: string): TaskThreadInfo | null;
+  /** Every thread in a project, newest first. */
+  listThreads(projectId: string): TaskThreadInfo[];
+  /** Add the thread's tab without switching to it. */
+  openThreadInBackground(threadId: string): Promise<void>;
   /** Create a background thread bound to `cwd` (a worktree, or the project root). */
   createThread(input: {
     projectId: string;
@@ -153,7 +182,10 @@ const MAX_DELIVERED_KEYS = 2_000;
 function textResult(value: unknown): McpToolResult {
   return {
     content: [
-      { type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) },
+      {
+        type: "text",
+        text: typeof value === "string" ? value : JSON.stringify(value, null, 2),
+      },
     ],
   };
 }
@@ -190,8 +222,23 @@ export class AgentTaskService {
     instructions: AGENT_TASK_SERVER_INSTRUCTIONS,
   });
   private started: Promise<string> | null = null;
-  /** Endpoint token → the ACP session it was bound to. */
-  private readonly tokens = new Map<string, { sessionId: string | null }>();
+  /**
+   * Endpoint token → the ACP sessions bound to it, and attachments not yet
+   * bound or released. One session per token, except for harnesses that keep
+   * MCP servers per directory: their sessions in one directory share a token.
+   */
+  private readonly tokens = new Map<
+    string,
+    { sessions: Set<string>; pending: number; shareKey: string | null }
+  >();
+  /** Share key (connection + directory) → its shared token. */
+  private readonly sharedTokens = new Map<string, string>();
+  /**
+   * Threads a caller started in its current turn, by tool and title. A reply
+   * lost to a dropped connection makes agents retry; the retry gets the first
+   * result instead of a second thread.
+   */
+  private readonly startedThisTurn = new Map<string, Map<string, Record<string, unknown>>>();
   /** Parent threads whose user chose "always allow" this run. */
   private readonly alwaysApproved = new Set<string>();
   /** Origin of each thread's current turn. */
@@ -221,7 +268,16 @@ export class AgentTaskService {
     this.baseDir = options.baseDir;
     this.noteDelayMs = options.noteDelayMs ?? DEFAULT_NOTE_DELAY_MS;
     this.captureAnalytics = options.captureAnalytics;
+    // A moved subthread works in its new folder; its receipt says so.
+    this.stopListeningForMoves = onThreadMoved(({ threadId, cwd }) => {
+      const task = this.store.byChildThread(threadId);
+      if (!task) return;
+      this.store.update(task.id, { workspacePath: cwd });
+      this.emit();
+    });
   }
+
+  private readonly stopListeningForMoves: () => void;
 
   /** Load settings and mark tasks a previous process left running as interrupted. */
   async init(): Promise<void> {
@@ -257,18 +313,40 @@ export class AgentTaskService {
   // MCP endpoint lifecycle (same contract as the browser service)
   // ---------------------------------------------------------------------------
 
+  /**
+   * `shareKey` is for harnesses that register MCP servers per directory, not
+   * per session (OpenCode). Every session it opens re-adds the servers it is
+   * given, and re-adding one replaces the directory's client under that name,
+   * closing its connection mid-call (even with identical config). So sessions
+   * with one share key get one token, and only the first is given the server:
+   * later sessions in that directory already see it. Callers are told apart
+   * by their reported tool calls.
+   */
   async attachMcpServers(
     baseServers: Array<Record<string, unknown>>,
     caps: AgentCapabilities,
-  ): Promise<{ servers: Array<Record<string, unknown>>; token: string | null }> {
+    shareKey: string | null = null,
+  ): Promise<{
+    servers: Array<Record<string, unknown>>;
+    token: string | null;
+  }> {
     // Always attached: wrap_up serves every thread, task tools or not.
     if (this.disposed) {
       return { servers: baseServers, token: null };
     }
     const shimPath = await this.ensureStarted();
-    const token = randomUUID();
-    this.tokens.set(token, { sessionId: null });
-    this.server.register(token, this.endpointFor(token));
+    let token = shareKey ? this.sharedTokens.get(shareKey) : undefined;
+    const existing = token ? this.tokens.get(token) : undefined;
+    if (token && existing) {
+      existing.pending += 1;
+      // Already registered in this directory by a live session.
+      if (existing.sessions.size > 0) return { servers: baseServers, token };
+    } else {
+      token = randomUUID();
+      this.tokens.set(token, { sessions: new Set(), pending: 1, shareKey });
+      if (shareKey) this.sharedTokens.set(shareKey, token);
+      this.server.register(token, this.endpointFor(token));
+    }
     const url = this.server.urlFor(token);
     const entry: Record<string, unknown> = caps.mcpCapabilities?.http
       ? // `headers` is required by the ACP HttpMcpServer schema.
@@ -285,18 +363,33 @@ export class AgentTaskService {
 
   bindSession(token: string, sessionId: string): void {
     const context = this.tokens.get(token);
-    if (context) context.sessionId = sessionId;
+    if (!context) return;
+    context.pending = Math.max(0, context.pending - 1);
+    context.sessions.add(sessionId);
   }
 
+  /** Drop an attachment that never got a session (failed or probe sessions). */
   releaseTokenForSession(token: string): void {
-    this.tokens.delete(token);
-    this.server.unregister(token);
+    const context = this.tokens.get(token);
+    if (!context) return;
+    context.pending = Math.max(0, context.pending - 1);
+    this.dropIfUnused(token);
   }
 
   releaseSessionMcp(sessionId: string): void {
     for (const [token, context] of this.tokens) {
-      if (context.sessionId === sessionId) this.releaseTokenForSession(token);
+      if (context.sessions.delete(sessionId)) this.dropIfUnused(token);
     }
+  }
+
+  private dropIfUnused(token: string): void {
+    const context = this.tokens.get(token);
+    if (!context || context.pending > 0 || context.sessions.size > 0) return;
+    this.tokens.delete(token);
+    if (context.shareKey && this.sharedTokens.get(context.shareKey) === token) {
+      this.sharedTokens.delete(context.shareKey);
+    }
+    this.server.unregister(token);
   }
 
   endpointCount(): number {
@@ -305,6 +398,7 @@ export class AgentTaskService {
 
   dispose(): void {
     this.disposed = true;
+    this.stopListeningForMoves();
     for (const timer of this.turnTimers.values()) clearTimeout(timer);
     for (const timer of this.noteTimers.values()) clearTimeout(timer);
     this.turnTimers.clear();
@@ -313,6 +407,7 @@ export class AgentTaskService {
     this.waiters.clear();
     this.server.close();
     this.tokens.clear();
+    this.sharedTokens.clear();
     this.started = null;
   }
 
@@ -348,6 +443,7 @@ export class AgentTaskService {
 
   onTurnStarted(threadId: string, origin: TurnOrigin): void {
     this.turnOrigins.set(threadId, origin);
+    this.startedThisTurn.delete(threadId);
     this.wrapUps.delete(threadId);
     this.automatedStreaks.set(
       threadId,
@@ -366,6 +462,13 @@ export class AgentTaskService {
 
   onTurnSettled(threadId: string, result: { stopReason?: string | null; error?: string | null }) {
     this.turnOrigins.delete(threadId);
+    // A move that waited for this turn lands now (after the manager's own
+    // bookkeeping for the settle has run).
+    setTimeout(() => {
+      void applyPendingMove(threadId).catch((error: unknown) => {
+        console.error("[agent-tasks] could not apply a thread move:", error);
+      });
+    }, 0);
     const nextStep = this.wrapUps.get(threadId) ?? null;
     this.wrapUps.delete(threadId);
     const task = this.store.byChildThread(threadId);
@@ -434,7 +537,10 @@ export class AgentTaskService {
     const threadId = this.host.threadIdForSession(params.sessionId);
     const task = threadId ? this.store.byChildThread(threadId) : null;
     if (!task?.workspacePath) return null;
-    const call = params.toolCall as { kind?: string | null; locations?: Array<{ path: string }> };
+    const call = params.toolCall as {
+      kind?: string | null;
+      locations?: Array<{ path: string }>;
+    };
     if (!call.kind || !WORKSPACE_SAFE_KINDS.has(call.kind)) return null;
     const locations = call.locations ?? [];
     if (call.kind !== "think" && locations.length === 0) return null;
@@ -452,9 +558,10 @@ export class AgentTaskService {
     name: string,
     args: Record<string, unknown>,
   ): Promise<McpToolResult> {
-    if (name === "wrap_up") return this.wrapUp(token, args);
+    const sessionId = await this.callingSession(token, name, args);
+    if (name === "wrap_up") return this.wrapUp(sessionId, args);
     if (!this.config.enabled) throw new Error("Agent tasks are turned off in Settings.");
-    const caller = this.caller(token);
+    const caller = this.caller(sessionId);
     switch (name) {
       case "list_agents":
         return textResult(
@@ -464,28 +571,28 @@ export class AgentTaskService {
             description: a.description ?? null,
           })),
         );
-      case "start_task":
-        return textResult(await this.startTask(caller, args));
+      case "start_subthread":
+        return textResult(
+          await this.onceThisTurn(caller, name, args, () => this.startTask(caller, args)),
+        );
+      case "create_thread":
+        return textResult(
+          await this.onceThisTurn(caller, name, args, () => this.createUserThread(caller, args)),
+        );
       case "wait_for_tasks":
         return textResult(await this.waitForTasks(caller, args));
-      case "get_task":
-        return textResult(await this.receipt(this.ownTask(caller, requireString(args, "task_id"))));
-      case "list_tasks":
-        return textResult(
-          this.store.listForParent(caller.threadId).map((task) => ({
-            task_id: task.id,
-            thread_id: task.childThreadId,
-            title: task.title,
-            agent_id: task.agentId,
-            status: this.liveStatus(task),
-            outcome: task.outcome,
-            turns: task.turns,
-          })),
-        );
-      case "message_task":
-        return textResult(await this.messageTask(caller, args));
-      case "cancel_task":
-        return textResult(await this.cancelTask(caller, requireString(args, "task_id")));
+      case "get_thread":
+        return textResult(await this.getThread(caller, args));
+      case "list_threads":
+        return textResult(this.listThreads(caller, args));
+      case "message_thread":
+        return textResult(await this.messageThread(caller, args));
+      case "cancel_thread":
+        return textResult(await this.cancelThread(caller, args));
+      case "delete_thread":
+        return textResult(await this.deleteThread(caller, args));
+      case "move_thread":
+        return textResult(await this.moveThread(caller, args));
       case "create_workspace":
         return textResult(await this.createWorkspace(caller, args));
       case "list_workspaces":
@@ -497,8 +604,25 @@ export class AgentTaskService {
     }
   }
 
-  private wrapUp(token: string, args: Record<string, unknown>): McpToolResult {
-    const sessionId = this.tokens.get(token)?.sessionId;
+  /** The session behind a call; for a shared token, the one whose agent made it. */
+  private async callingSession(
+    token: string,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<string | null> {
+    const sessions = [...(this.tokens.get(token)?.sessions ?? [])];
+    if (sessions.length <= 1) return sessions[0] ?? null;
+    const sessionId = await this.host.sessionForToolCall(sessions, name, args);
+    if (!sessionId) {
+      throw new Error(
+        "Pipper couldn't tell which thread made this call, because several threads in this " +
+          "folder share the connection. Call the tool again.",
+      );
+    }
+    return sessionId;
+  }
+
+  private wrapUp(sessionId: string | null, args: Record<string, unknown>): McpToolResult {
     const threadId = sessionId ? this.host.threadIdForSession(sessionId) : null;
     if (!threadId) throw new Error("Only a Pipper thread can use these tools.");
     const parsed = parseNextStep(args);
@@ -525,18 +649,51 @@ export class AgentTaskService {
     return { content: [{ type: "text", text: lines.join(" ") }] };
   }
 
-  private caller(token: string): TaskThreadInfo & { depth: number } {
-    const sessionId = this.tokens.get(token)?.sessionId;
+  private caller(sessionId: string | null): TaskThreadInfo & { depth: number } {
     const threadId = sessionId ? this.host.threadIdForSession(sessionId) : null;
     const info = threadId ? this.host.threadInfo(threadId) : null;
     if (!info) throw new Error("Only a Pipper thread can use these tools.");
-    return { ...info, depth: this.store.byChildThread(info.threadId)?.depth ?? 0 };
+    return {
+      ...info,
+      depth: this.store.byChildThread(info.threadId)?.depth ?? 0,
+    };
   }
 
-  private ownTask(caller: TaskThreadInfo, taskId: string): AgentTaskRow {
-    const task = this.store.get(taskId);
+  /** Run a thread-starting call once per caller, turn, tool and title. */
+  private async onceThisTurn(
+    caller: TaskThreadInfo,
+    tool: string,
+    args: Record<string, unknown>,
+    start: () => Promise<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
+    const title = typeof args.title === "string" ? args.title.trim().toLowerCase() : "";
+    const key = `${tool}:${title}`;
+    const earlier = title ? this.startedThisTurn.get(caller.threadId)?.get(key) : undefined;
+    if (earlier) {
+      return {
+        ...earlier,
+        status: "already_started",
+        next:
+          "You already started this thread in this turn; its first reply may not have reached " +
+          "you. It is running, so don't start it again. Tell the user it has started.",
+      };
+    }
+    const result = await start();
+    if (title) {
+      const started = this.startedThisTurn.get(caller.threadId) ?? new Map();
+      started.set(key, result);
+      this.startedThisTurn.set(caller.threadId, started);
+    }
+    return result;
+  }
+
+  /** A subthread the caller started, by its thread id. */
+  private ownSubthread(caller: TaskThreadInfo, threadId: string): AgentTaskRow {
+    const task = this.store.byChildThread(threadId);
     if (!task || task.parentThreadId !== caller.threadId) {
-      throw new ToolInputError(`No task ${taskId} was started from this thread. Call list_tasks.`);
+      throw new ToolInputError(
+        `${threadId} isn't a subthread you started. Call list_threads for the ones you did.`,
+      );
     }
     return task;
   }
@@ -652,9 +809,13 @@ export class AgentTaskService {
         cwd,
         model,
       });
-      task = this.store.update(task.id, { childThreadId: threadId, status: "running" })!;
+      task = this.store.update(task.id, {
+        childThreadId: threadId,
+        status: "running",
+      })!;
       this.emit();
       const message = composeBrief({
+        parentThreadId: caller.threadId,
         parentTitle: caller.title,
         task: brief,
         doneWhen,
@@ -678,7 +839,6 @@ export class AgentTaskService {
 
   private startResult(task: AgentTaskRow): Record<string, unknown> {
     return {
-      task_id: task.id,
       thread_id: task.childThreadId,
       status: this.liveStatus(task),
       workspace: task.workspaceMode,
@@ -707,16 +867,16 @@ export class AgentTaskService {
     caller: TaskThreadInfo,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const requested = optionalStringArray(args, "task_ids");
+    const requested = optionalStringArray(args, "thread_ids");
     const until = args.until === "any" ? "any" : "all";
     const seconds =
       typeof args.timeout_seconds === "number" && Number.isFinite(args.timeout_seconds)
         ? Math.min(MAX_WAIT_SECONDS, Math.max(1, args.timeout_seconds))
         : DEFAULT_WAIT_SECONDS;
     const tasks = requested.length
-      ? requested.map((id) => this.ownTask(caller, id))
+      ? requested.map((id) => this.ownSubthread(caller, id))
       : this.store.listForParent(caller.threadId).filter((task) => isActive(task.status));
-    if (tasks.length === 0) return { tasks: [], note: "No running tasks to wait for." };
+    if (tasks.length === 0) return { threads: [], note: "No running subthreads to wait for." };
     const ids = new Set(tasks.map((task) => task.id));
 
     if (!this.waitSatisfied(ids, until)) {
@@ -747,12 +907,19 @@ export class AgentTaskService {
         receipts.push(await this.receipt(task));
       } else {
         pending++;
-        receipts.push({ task_id: task.id, title: task.title, status: this.liveStatus(task) });
+        receipts.push({
+          thread_id: task.childThreadId,
+          title: task.title,
+          status: this.liveStatus(task),
+        });
       }
     }
     return pending > 0
-      ? { tasks: receipts, note: `${pending} task(s) still running; call wait_for_tasks again.` }
-      : { tasks: receipts };
+      ? {
+          threads: receipts,
+          note: `${pending} subthread(s) still running; call wait_for_tasks again.`,
+        }
+      : { threads: receipts };
   }
 
   private waitSatisfied(ids: Set<string>, until: "all" | "any"): boolean {
@@ -762,47 +929,316 @@ export class AgentTaskService {
     return until === "all" ? settled.every(Boolean) : settled.some(Boolean);
   }
 
-  private async messageTask(
+  // ---------------------------------------------------------------------------
+  // Threads
+  // ---------------------------------------------------------------------------
+
+  private requireThreadInfo(threadId: string): TaskThreadInfo {
+    const info = this.host.threadInfo(threadId);
+    if (!info) throw new ToolInputError(`No thread ${threadId}. Call list_threads.`);
+    return info;
+  }
+
+  private threadStatus(threadId: string): string {
+    if (!this.host.isTurnInFlight(threadId)) return "idle";
+    return this.host.hasPendingPermission(threadId) ? "waiting_for_permission" : "running";
+  }
+
+  /**
+   * A top-level thread for the user: no parent link, no depth limit, no
+   * receipt. Only for a request the user made in this turn; a turn another
+   * thread started can't open tabs on the user's behalf.
+   */
+  private async createUserThread(
     caller: TaskThreadInfo,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const task = this.ownTask(caller, requireString(args, "task_id"));
-    const message = requireString(args, "message");
-    const steer = args.mode === "steer";
-    if (!task.childThreadId) throw new Error("This task has no thread; start a new task.");
-    if (task.status === "starting")
-      throw new Error("The task is still starting; try again shortly.");
-    // Messaging a running task adds no work in parallel; restarting an idle one does.
-    if (!isActive(task.status)) this.assertBudget(caller.threadId);
-    const inFlight = this.host.isTurnInFlight(task.childThreadId);
-    const childThreadId = task.childThreadId;
-    void this.deliver(
-      childThreadId,
-      message,
-      inFlight ? (steer ? "steer" : "follow_up") : null,
-    ).catch((error: unknown) => this.promptFailed(task.id, childThreadId, error));
+    const input = parseWith(CREATE_THREAD_INPUT, args);
+    if (this.turnOrigins.get(caller.threadId) === "agent-task") {
+      throw new Error(
+        "Only start a new thread when the user asked for one in their own message; this turn " +
+          "was started by another thread. Use start_subthread, or ask the user.",
+      );
+    }
+    const agents = this.availableAgents();
+    if (!agents.some((agent) => agent.id === input.agent_id)) {
+      throw new ToolInputError(
+        `Unknown or disallowed agent_id "${input.agent_id}". Available: ${agents.map((a) => a.id).join(", ")}`,
+      );
+    }
+    const title = clip(input.title, 80);
+    const workspaceArg = input.workspace ?? "shared";
+    let cwd = caller.cwd;
+    let created: { path: string; rollback: () => Promise<void> } | null = null;
+    if (workspaceArg === "new") {
+      const workspace = await this.runOperation(
+        createWorkspaceOperation,
+        {
+          project: caller.projectId,
+          name: workspaceName(title),
+          setup: input.install_dependencies ? "prepared" : "source-only",
+          activation: "background",
+        },
+        caller,
+      );
+      // The thread is the user's, so its workspace is too.
+      releaseWorkspaceToUser(workspace.worktree.path);
+      created = { path: workspace.worktree.path, rollback: workspace.rollback };
+      cwd = workspace.worktree.path;
+    } else if (workspaceArg !== "shared") {
+      if (!isAbsolute(workspaceArg)) {
+        throw new ToolInputError('workspace must be "shared", "new" or an absolute worktree path.');
+      }
+      const workspaces = await this.runOperation(
+        listWorkspacesOperation,
+        { project: caller.projectId },
+        caller,
+      );
+      const match = workspaces.find((w) => resolve(w.path) === resolve(workspaceArg));
+      if (!match) {
+        throw new ToolInputError(
+          `${workspaceArg} is not a worktree of this project. Call list_workspaces.`,
+        );
+      }
+      cwd = match.path;
+    }
+
+    let threadId: string;
+    try {
+      ({ threadId } = await this.host.createThread({
+        projectId: caller.projectId,
+        agentId: input.agent_id,
+        title,
+        cwd,
+        model: input.model ?? null,
+      }));
+    } catch (error) {
+      await created?.rollback().catch(() => {});
+      throw new Error(
+        `The thread could not start: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    await this.host.openThreadInBackground(threadId).catch((error: unknown) => {
+      console.warn("[agent-tasks] could not open the new thread's tab:", error);
+    });
+    const sender = `“${caller.title ?? "Untitled"}” (${this.agentName(caller.agentId)}), thread_id ${caller.threadId}`;
+    const brief = `[Started by ${sender} because the user asked for a separate thread. You work for the user now; the thread that started you won't follow up.]\n\n${input.task}`;
+    void this.deliver(threadId, brief, null).catch((error: unknown) => {
+      console.warn("[agent-tasks] could not send the new thread its brief:", error);
+    });
     return {
-      task_id: task.id,
+      status: "started",
+      thread_id: threadId,
+      title,
+      agent_id: input.agent_id,
+      workspace_path: cwd,
+      next:
+        "It runs in its own tab and belongs to the user; you get no report from it. Pipper " +
+        "shows the user a link to it under your reply, so don't paste its id. Tell the user it " +
+        "has started, and carry on.",
+    };
+  }
+
+  private async getThread(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { thread_id: threadId } = parseWith(GET_THREAD_INPUT, args);
+    const info = this.requireThreadInfo(threadId);
+    const task = this.store.byChildThread(threadId);
+    const family = {
+      parent_thread_id: task?.parentThreadId ?? null,
+      children: this.store
+        .listForParent(threadId)
+        .map((child) => child.childThreadId)
+        .filter((id): id is string => Boolean(id)),
+    };
+    if (task && task.parentThreadId === caller.threadId) {
+      return { ...(await this.receipt(task)), ...family };
+    }
+    const summary = this.host.lastTurn(threadId);
+    const nextStep = summary?.nextStep ?? task?.nextStep ?? null;
+    return {
+      thread_id: threadId,
+      title: info.title,
+      agent_id: info.agentId,
+      project_id: info.projectId,
+      workspace_path: info.cwd,
+      status: this.threadStatus(threadId),
+      ...family,
+      last_turn: summary?.text ? clip(summary.text, MAX_REPORT_CHARS) : null,
+      ...(nextStep
+        ? {
+            recap: nextStep.recap,
+            ...(nextStep.ask ? { ask: nextStep.ask } : {}),
+          }
+        : {}),
+    };
+  }
+
+  private listThreads(caller: TaskThreadInfo, args: Record<string, unknown>): unknown {
+    const input = parseWith(LIST_THREADS_INPUT, args);
+    if (input.scope !== "project") {
+      return this.store.listForParent(caller.threadId).map((task) => ({
+        thread_id: task.childThreadId,
+        title: task.title,
+        agent_id: task.agentId,
+        status: this.liveStatus(task),
+        outcome: task.outcome,
+        turns: task.turns,
+      }));
+    }
+    const projectId = input.project ? resolveProject(input.project).id : caller.projectId;
+    return this.host
+      .listThreads(projectId)
+      .slice(0, MAX_LISTED_THREADS)
+      .map((info) => ({
+        thread_id: info.threadId,
+        title: info.title,
+        agent_id: info.agentId,
+        workspace_path: info.cwd,
+        status: this.threadStatus(info.threadId),
+        parent_thread_id: this.store.byChildThread(info.threadId)?.parentThreadId ?? null,
+        ...(info.threadId === caller.threadId ? { you: true } : {}),
+      }));
+  }
+
+  private async messageThread(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const input = parseWith(MESSAGE_THREAD_INPUT, args);
+    const threadId = input.thread_id;
+    if (threadId === caller.threadId) {
+      throw new ToolInputError("That's your own thread; just keep working.");
+    }
+    const target = this.requireThreadInfo(threadId);
+    const task = this.store.byChildThread(threadId);
+    if (task?.status === "starting") {
+      throw new Error("That subthread is still starting; try again shortly.");
+    }
+    const ownSubthread = task?.parentThreadId === caller.threadId;
+    // Waking an idle subthread adds work in parallel; messaging a running one doesn't.
+    if (task && ownSubthread && !isActive(task.status)) this.assertBudget(caller.threadId);
+    const inFlight = this.host.isTurnInFlight(threadId);
+    // Loop guard: threads that keep waking each other wait for the user. A
+    // parent driving its own subthread is bounded by the subthread budgets
+    // instead (every subthread turn is automated).
+    if (
+      !ownSubthread &&
+      !inFlight &&
+      (this.automatedStreaks.get(threadId) ?? 0) >= this.config.maxAutomatedTurns
+    ) {
+      throw new Error(
+        `"${target.title ?? threadId}" has run ${this.config.maxAutomatedTurns} turns in a row ` +
+          "for other threads; it waits for the user before taking more messages.",
+      );
+    }
+    const sender = `“${caller.title ?? "Untitled"}” (${this.agentName(caller.agentId)}), thread_id ${caller.threadId}`;
+    const text = `[Message from ${sender}]\n\n${input.message}`;
+    const steer = input.mode === "steer";
+    void this.deliver(threadId, text, inFlight ? (steer ? "steer" : "follow_up") : null).catch(
+      (error: unknown) => {
+        if (task) this.promptFailed(task.id, threadId, error);
+        else console.warn("[agent-tasks] could not deliver a message to a thread:", error);
+      },
+    );
+    return {
+      thread_id: threadId,
       delivered: inFlight
         ? steer
           ? "steered the current turn"
           : "queued after the current turn"
         : "started a new turn",
-      next: "Call wait_for_tasks to collect the reply.",
+      next: "Don't wait for it. A reply, if any, arrives as a message to your thread.",
     };
   }
 
-  private async cancelTask(
+  private async cancelThread(
     caller: TaskThreadInfo,
-    taskId: string,
+    args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const task = this.ownTask(caller, taskId);
-    if (!isActive(task.status) || !task.childThreadId) {
-      return { task_id: task.id, status: task.status, note: "Nothing was running." };
+    const { thread_id: threadId } = parseWith(THREAD_ID_INPUT, args);
+    if (threadId === caller.threadId) {
+      throw new ToolInputError("That's your own thread; end your turn instead.");
     }
-    this.stopReasons.set(task.id, "cancelled");
-    await this.host.cancelTurn(task.childThreadId);
-    return { task_id: task.id, status: "cancelling" };
+    this.requireThreadInfo(threadId);
+    if (!this.host.isTurnInFlight(threadId)) {
+      return {
+        thread_id: threadId,
+        status: "idle",
+        note: "Nothing was running.",
+      };
+    }
+    const task = this.store.byChildThread(threadId);
+    if (task && isActive(task.status)) this.stopReasons.set(task.id, "cancelled");
+    await this.host.cancelTurn(threadId);
+    return { thread_id: threadId, status: "cancelling" };
+  }
+
+  private async deleteThread(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { thread_id: threadId } = parseWith(THREAD_ID_INPUT, args);
+    const key = [caller.threadId, deleteThreadOperation.id, threadId].join("\u0000");
+    if (this.pendingConfirmationKeys.has(key)) return stillWaiting();
+    const outcome = await callAsAgent(
+      deleteThreadOperation,
+      { thread: threadId },
+      this.agentContext(caller.threadId),
+    );
+    if (outcome.status === "done") {
+      return {
+        status: "deleted",
+        thread_id: threadId,
+        title: outcome.result.title,
+      };
+    }
+    this.pendingConfirmationKeys.add(key);
+    this.confirmThenRun(
+      caller.threadId,
+      deleteThreadOperation,
+      outcome.input as Parameters<typeof deleteThreadOperation.run>[0],
+      outcome.confirmation,
+      (result) => `Deleted thread “${result.title}”.`,
+      () => this.pendingConfirmationKeys.delete(key),
+    );
+    return awaitingConfirmation(outcome.confirmation, "deletes the thread");
+  }
+
+  private async moveThread(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const input = parseWith(MOVE_THREAD_INPUT, args);
+    const threadId = input.thread_id ?? caller.threadId;
+    const result = await this.runOperation(
+      moveThreadOperation,
+      { thread: threadId, workspace: input.workspace },
+      caller,
+    );
+    const own = threadId === caller.threadId;
+    const when =
+      result.status === "unchanged"
+        ? `The thread already works in ${result.workspace}.`
+        : result.status === "after_turn"
+          ? own
+            ? `Moved to ${result.workspace}. From your next turn you work in ${result.cwd}; for the rest of this turn, use paths inside it.`
+            : `That thread moves to ${result.workspace} (${result.cwd}) when its current turn ends.`
+          : `Moved to ${result.workspace}; the thread works in ${result.cwd} from its next turn.`;
+    return {
+      status: result.status,
+      thread_id: threadId,
+      workspace_path: result.cwd,
+      message: when,
+      ...(result.leftBehind.length > 0
+        ? {
+            left_behind: result.leftBehind.slice(0, 50),
+            note: "These uncommitted changes stay in the old workspace; commit, stash or redo them deliberately.",
+          }
+        : {}),
+    };
   }
 
   // ---------------------------------------------------------------------------
@@ -841,7 +1277,10 @@ export class AgentTaskService {
       },
       caller,
     );
-    return { workspace_path: created.worktree.path, branch: created.worktree.branch };
+    return {
+      workspace_path: created.worktree.path,
+      branch: created.worktree.branch,
+    };
   }
 
   private async deleteWorkspace(
@@ -855,14 +1294,7 @@ export class AgentTaskService {
       input.project ?? caller.projectId,
       resolve(input.path),
     ].join("\u0000");
-    if (this.pendingConfirmationKeys.has(key)) {
-      return {
-        status: "awaiting_confirmation",
-        message:
-          "The confirm card for this is still waiting for the user; Pipper didn't add another. " +
-          "Don't call wrap_up or call this again; say in one line that it's waiting for them.",
-      };
-    }
+    if (this.pendingConfirmationKeys.has(key)) return stillWaiting();
     const ctx = this.agentContext(caller.threadId);
     const outcome = await callAsAgent(
       deleteWorkspaceOperation,
@@ -881,15 +1313,7 @@ export class AgentTaskService {
       (result) => `Deleted workspace ${result.path}.`,
       () => this.pendingConfirmationKeys.delete(key),
     );
-    return {
-      status: "awaiting_confirmation",
-      message:
-        "Pipper is showing the user a confirm card for this in your thread. That card ends " +
-        "your turn: don't call wrap_up, and don't ask about it yourself. Say in one line that " +
-        "it's waiting for the user, then stop. If they confirm, Pipper deletes the workspace " +
-        "itself, and either way you get the outcome as a note. Don't retry or poll.",
-      confirmation: { title: outcome.confirmation.title, impact: outcome.confirmation.impact },
-    };
+    return awaitingConfirmation(outcome.confirmation, "deletes the workspace");
   }
 
   /** Run an operation as this thread's agent; destructive ones go through deleteWorkspace. */
@@ -1002,7 +1426,10 @@ export class AgentTaskService {
       automated ||
       (this.config.startApproval === "ask" && !this.alwaysApproved.has(caller.threadId));
     if (!needsAsk) return;
-    const answer = await this.host.requestApproval(caller.threadId, { title, detail });
+    const answer = await this.host.requestApproval(caller.threadId, {
+      title,
+      detail,
+    });
     if (answer === "deny") {
       throw new Error("The user declined. Don't retry this; do the work yourself or ask the user.");
     }
@@ -1132,12 +1559,18 @@ export class AgentTaskService {
     mode: "follow_up" | "steer" | null,
   ): Promise<void> {
     try {
-      await this.host.sendPrompt(threadId, message, { mode, origin: "agent-task" });
+      await this.host.sendPrompt(threadId, message, {
+        mode,
+        origin: "agent-task",
+      });
     } catch (error) {
       if (mode !== null || !(error instanceof Error) || !/already in flight/i.test(error.message)) {
         throw error;
       }
-      await this.host.sendPrompt(threadId, message, { mode: "follow_up", origin: "agent-task" });
+      await this.host.sendPrompt(threadId, message, {
+        mode: "follow_up",
+        origin: "agent-task",
+      });
     }
   }
 
@@ -1195,4 +1628,28 @@ function turnOutcome(nextStep: NextStep | null, report: string | null): AgentTas
 
 function lowerFirst(text: string): string {
   return text.charAt(0).toLowerCase() + text.slice(1);
+}
+
+const MAX_LISTED_THREADS = 100;
+
+/** The result of a destructive call that now waits on the user's confirm card. */
+function awaitingConfirmation(confirmation: Confirmation, effect: string): Record<string, unknown> {
+  return {
+    status: "awaiting_confirmation",
+    message:
+      "Pipper is showing the user a confirm card for this in your thread. That card ends " +
+      "your turn: don't call wrap_up, and don't ask about it yourself. Say in one line that " +
+      `it's waiting for the user, then stop. If they confirm, Pipper ${effect} itself, and ` +
+      "either way you get the outcome as a note. Don't retry or poll.",
+    confirmation: { title: confirmation.title, impact: confirmation.impact },
+  };
+}
+
+function stillWaiting(): Record<string, unknown> {
+  return {
+    status: "awaiting_confirmation",
+    message:
+      "The confirm card for this is still waiting for the user; Pipper didn't add another. " +
+      "Don't call wrap_up or call this again; say in one line that it's waiting for them.",
+  };
 }

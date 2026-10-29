@@ -195,6 +195,21 @@ export async function openThreadTab(threadId: string): Promise<OpenTabsState> {
 }
 
 /**
+ * Add a tab without switching to it: a thread an agent started for the user
+ * appears next to the others while the user stays where they are.
+ */
+export async function openThreadTabInBackground(threadId: string): Promise<OpenTabsState> {
+  const { next } = await mutateOpenTabs((current) => ({
+    ...current,
+    openThreadIds: current.openThreadIds.includes(threadId)
+      ? current.openThreadIds
+      : [...current.openThreadIds, threadId],
+  }));
+  notifyTabEvent("open", threadId, next);
+  return next;
+}
+
+/**
  * Close a thread tab. When `isPeer` is provided (same project + workspace as
  * the closed thread), the next active tab is chosen among peers first so
  * closing a tab never yanks the user into another workspace; only when the

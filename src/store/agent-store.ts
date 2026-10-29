@@ -101,6 +101,24 @@ function applyThreadDeleted(threadId: string): void {
   useThreadStore.getState().forgetThread(threadId);
 }
 
+/**
+ * A thread row changed in main (it moved to another workspace): replace it in
+ * every cache that holds it, so its tab, the workspace grouping and the
+ * sidebar follow without a refetch.
+ */
+function applyThreadUpdated(thread: Thread): void {
+  const replace = (item: Thread) => (item.id === thread.id ? { ...item, ...thread } : item);
+  queryClient.setQueryData<(OpenTabsState & { openThreads: Thread[] }) | undefined>(
+    OPEN_TABS_QUERY_KEY,
+    (current) =>
+      current ? { ...current, openThreads: current.openThreads.map(replace) } : current,
+  );
+  queryClient.setQueriesData<ThreadPage | undefined>({ queryKey: ["project-threads"] }, (current) =>
+    current ? { ...current, threads: current.threads.map(replace) } : current,
+  );
+  useThreadStore.setState((state) => ({ threads: state.threads.map(replace) }));
+}
+
 /** A question surfaced to the user, mapped from an ACP permission request. */
 export interface UiRequest {
   id: string;
@@ -580,7 +598,7 @@ function applyBridgeEvent(
   // Catalogs live in the model-catalog store (applied by the bridge listener).
   if (payload.type === "model-catalogs") return {};
   // Thread lists live in the thread store and queries (bridge listener).
-  if (payload.type === "thread-deleted") return {};
+  if (payload.type === "thread-deleted" || payload.type === "thread-updated") return {};
 
   if (
     pendingThreadTarget &&
@@ -934,6 +952,9 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         if (payload.type === "thread-deleted") {
           applyThreadDeleted(payload.threadId);
         }
+        if (payload.type === "thread-updated") {
+          applyThreadUpdated(payload.thread);
+        }
         if (payload.type === "model-catalogs") {
           const remember = useModelCatalogStore.getState().remember;
           for (const [agentId, models] of Object.entries(payload.catalogs)) {
@@ -1207,10 +1228,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const failed = (err: unknown): boolean => {
       if (switchId !== latestThreadSwitchId) return false;
       if (pendingThreadTarget === threadId) pendingThreadTarget = null;
-      set({
-        pendingThreadTarget: null,
-        error: err instanceof Error ? err.message : "Failed to switch thread",
-      });
+      const message = err instanceof Error ? err.message : "Failed to switch thread";
+      // The thread was deleted while something still pointed at it (a
+      // finished-thread card, a stale list): drop it everywhere instead of
+      // leaving a dead entry to click again.
+      if (/Thread not found/i.test(message)) {
+        useThreadStore.getState().forgetThread(threadId);
+        set({ pendingThreadTarget: null, error: "That thread was deleted." });
+        return true;
+      }
+      set({ pendingThreadTarget: null, error: message });
       return true;
     };
     try {

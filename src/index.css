@@ -709,3 +709,46 @@
   outline: 2px solid var(--workspace-state-accent);
   outline-offset: 2px;
 }
+
+/*
+ * Running subthread circle in the composer rail. While the subthread works, a
+ * band of light sweeps across the circle and its logo, the same sweep as
+ * .animate-text-shimmer.
+ */
+.subthread-orb {
+  overflow: hidden;
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.subthread-orb-waiting {
+  box-shadow: inset 0 0 0 1px rgb(245 158 11 / 0.7);
+}
+.subthread-orb-working::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 30%,
+    color-mix(in oklab, var(--foreground) 22%, transparent) 50%,
+    transparent 70%
+  );
+  background-size: 250% 100%;
+  animation: subthread-orb-shimmer 2.2s linear infinite;
+}
+@keyframes subthread-orb-shimmer {
+  0% {
+    background-position: 150% 0;
+  }
+  100% {
+    background-position: -150% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .subthread-orb-working::after {
+    animation: none;
+    background: none;
+  }
+}

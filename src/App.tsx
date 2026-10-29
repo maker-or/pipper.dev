@@ -8,6 +8,7 @@ import { getAllTerminalSessions, makeWorkspaceKey, useTerminalStore } from "@/st
 import { resolveTerminalWorkspace } from "@/lib/terminal-workspace";
 import { Toaster } from "@/components/ui/toaster";
 import { toast } from "@/components/ui/toast";
+import { errorToast } from "@/lib/error-toast";
 import { AgentView } from "@/components/agent-view";
 import { GlobalTabBar } from "@/components/global-tab-bar";
 import { DiffIngestor } from "@/components/diff-ingestor";
@@ -528,6 +529,11 @@ export default function App() {
     });
   }, [uiMode]);
 
+  // Project errors surface as a toast, once each, like every other error.
+  useEffect(() => {
+    if (projectError) toast(errorToast(projectError));
+  }, [projectError]);
+
   // Workspaces created or deleted by anyone (an agent included): refresh the
   // loaded list and the persisted selection, which a delete moves to the root.
   useEffect(() => {
@@ -943,11 +949,6 @@ export default function App() {
       <Suspense fallback={null}>
         <LauncherUpdateBanner />
       </Suspense>
-      {projectError && (
-        <div className="border-b border-red-500/30 bg-red-500/10 px-4 py-2 text-[12px] text-red-500">
-          {projectError}
-        </div>
-      )}
 
       <Toaster />
 

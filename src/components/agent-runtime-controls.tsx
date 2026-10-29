@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { StopIcon } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,8 @@ interface AgentRuntimeControlsProps {
   isStreaming?: boolean;
   isStopping?: boolean;
   onStop?: () => void;
+  /** Running subthreads, shown at the start of the right-hand group. */
+  subthreads?: ReactNode;
 }
 
 export function AgentRuntimeControls({
@@ -61,6 +63,7 @@ export function AgentRuntimeControls({
   isStreaming = false,
   isStopping = false,
   onStop,
+  subthreads,
 }: AgentRuntimeControlsProps) {
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -147,6 +150,7 @@ export function AgentRuntimeControls({
       </AnimatePresence>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        {subthreads}
         {hasReasoningLevels && (
           <Button
             type="button"

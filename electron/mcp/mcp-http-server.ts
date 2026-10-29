@@ -50,6 +50,8 @@ interface JsonRpcMessage {
 
 const DEFAULT_SERVER_INFO: McpServerInfo = { name: "pipper", version: "1.0.0" };
 const REQUEST_TIMEOUT_MS = 30_000;
+/** How long an idle keep-alive connection stays open; longer than clients keep theirs. */
+export const KEEP_ALIVE_TIMEOUT_MS = 10 * 60_000;
 const MAX_IN_FLIGHT_PER_ENDPOINT = 16;
 
 function readBody(req: IncomingMessage, limit = 4 * 1024 * 1024): Promise<string> {
@@ -119,6 +121,12 @@ export class McpHttpServer {
         if (!res.headersSent) sendJson(res, 500, rpcError(null, -32603, "internal error"));
       });
     });
+    // Node closes an idle keep-alive connection after 5 s by default. Agent
+    // harnesses (OpenCode runs on Bun) can hold idle connections longer and
+    // reuse one just as Node closes it; that call then fails as "Connection
+    // closed" without reaching us. Outlast any client's idle pool instead.
+    server.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
+    server.headersTimeout = KEEP_ALIVE_TIMEOUT_MS + 5_000;
     this.server = server;
     this.port = await new Promise<number>((resolve, reject) => {
       server.once("error", reject);

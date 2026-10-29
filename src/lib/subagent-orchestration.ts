@@ -65,7 +65,7 @@ function agentLabel(
 
 const ORCHESTRATOR_PREAMBLE =
   "You are acting as an orchestrator. The pipper-agents MCP server lets you start other " +
-  "coding agents as tasks: `start_task` opens a thread for one agent and returns at once, " +
+  "coding agents in subthreads: `start_subthread` opens a thread for one agent and returns at once, " +
   "`wait_for_tasks` collects their receipts, and `list_agents` shows what is available. " +
   "Subagents share none of your context, so every brief must be fully self-contained: " +
   "include the background, relevant file paths, constraints, and the exact output you " +
@@ -112,7 +112,7 @@ export function composeOrchestrationPrompt(
 
   return [
     ORCHESTRATOR_PREAMBLE,
-    "The user assigned the following subagents. Start each with start_task, using the " +
+    "The user assigned the following subagents. Start each with start_subthread, using the " +
       "listed agent_id, and run independent tasks in parallel. Enrich each brief with any " +
       "context the subagent will need before delegating it.",
     `<assignments>\n${taskList}\n</assignments>`,

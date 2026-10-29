@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
+import { Agent, request } from "node:http";
 import { McpHttpServer, type McpEndpoint } from "./mcp-http-server.ts";
 
 const endpoint: McpEndpoint = {
@@ -29,6 +30,33 @@ describe("client-hosted MCP http server", () => {
   const server = new McpHttpServer();
 
   afterEach(() => server.close());
+
+  test("a connection left idle past Node's default (5 s plus a 1 s buffer) is still open for the next call", async () => {
+    await server.start();
+    server.register("tok1", endpoint);
+    const url = new URL(server.urlFor("tok1"));
+    const agent = new Agent({ keepAlive: true, maxSockets: 1 });
+    const post = () =>
+      new Promise<{ status: number; reused: boolean }>((resolve, reject) => {
+        const req = request(
+          url,
+          { method: "POST", agent, headers: { "content-type": "application/json" } },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve({ status: res.statusCode ?? 0, reused: req.reusedSocket }));
+          },
+        );
+        req.on("error", reject);
+        req.end(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }));
+      });
+    try {
+      expect((await post()).status).toBe(200);
+      await new Promise((resolve) => setTimeout(resolve, 7_000));
+      expect(await post()).toEqual({ status: 200, reused: true });
+    } finally {
+      agent.destroy();
+    }
+  }, 15_000);
 
   test("speaks enough MCP for an agent to discover and call tools", async () => {
     await server.start();

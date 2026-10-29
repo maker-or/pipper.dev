@@ -9,7 +9,7 @@ import type {
   WorkspaceGitActionResult,
   WorkspaceGitStatus,
 } from "../contracts/git.ts";
-import type { OpenTabsState, Thread, ThreadPage } from "../contracts/threads.ts";
+import type { OpenTabsState, Thread, ThreadMoveResult, ThreadPage } from "../contracts/threads.ts";
 import type {
   AcpBridgeEvent,
   AcpPromptInput,
@@ -358,6 +358,9 @@ const api = {
     },
   },
   threads: {
+    /** Move a thread to another workspace of its project; applies after a running turn. */
+    move: (input: { threadId: string; workspace: string }): Promise<ThreadMoveResult> =>
+      ipcRenderer.invoke("threads:move", input),
     list: (): Promise<Thread[]> => ipcRenderer.invoke("threads:list"),
     listByIds: (ids: string[]): Promise<Thread[]> => ipcRenderer.invoke("threads:listByIds", ids),
     listProject: (input: {

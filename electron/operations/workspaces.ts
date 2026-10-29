@@ -359,3 +359,11 @@ export async function workspaceImpact(
 function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
+
+/**
+ * Hand a workspace an agent created to the user, as when an agent starts a
+ * thread for the user in it: from then on deleting it needs confirming.
+ */
+export function releaseWorkspaceToUser(worktreePath: string): void {
+  requireDeps().provenance.forget("workspace", pathKey(worktreePath));
+}

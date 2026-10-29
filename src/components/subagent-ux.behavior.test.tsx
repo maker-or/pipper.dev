@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import { SubagentComposer } from "@/components/subagent-composer";
-import { AgentTaskActivity, AgentTaskOrigin } from "@/components/agent-task-activity";
+import { AgentTaskOrigin, SubthreadOrbs } from "@/components/agent-task-activity";
 
 function agent(id: string, displayName: string, available = true): AcpAgentDescriptor {
   return { id, name: id, displayName, command: id, args: [], available };
@@ -93,10 +93,10 @@ describe("SubagentComposer", () => {
   });
 });
 
-describe("AgentTaskActivity", () => {
+describe("SubthreadOrbs", () => {
   const render = (tasks: AgentTaskSnapshot[], parentThreadId: string | null = "parent") =>
     renderToStaticMarkup(
-      <AgentTaskActivity
+      <SubthreadOrbs
         tasks={tasks}
         agents={AGENTS}
         parentThreadId={parentThreadId}
@@ -141,6 +141,24 @@ describe("AgentTaskActivity", () => {
 
   test("renders nothing when no thread is being viewed", () => {
     expect(render([task("a1", "running")], null)).toBe("");
+  });
+
+  test("a working subthread shimmers; one waiting on the user is amber", () => {
+    const html = render([task("run", "running"), task("ask", "idle", { outcome: "needs_input" })]);
+    expect(html).toContain("subthread-orb-working");
+    expect(html).toContain("subthread-orb-waiting");
+    expect(html).toContain('aria-label="Open task for run · Codex · Working"');
+  });
+
+  test("past four circles, the rest collapse into a count", () => {
+    const html = render(
+      ["a", "b", "c", "d", "e", "f"].map((id) =>
+        task(id, "running", { createdAt: id.charCodeAt(0) }),
+      ),
+    );
+    expect(html.match(/subthread-orb-working/g)).toHaveLength(4);
+    expect(html).toContain("+2");
+    expect(html).not.toContain("task for e");
   });
 });
 

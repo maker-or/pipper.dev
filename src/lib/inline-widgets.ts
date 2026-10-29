@@ -1,4 +1,5 @@
 import type { InlineWidgetRef } from "../../contracts/acp.ts";
+import { threadLinkFromToolPart, type ThreadLink } from "./thread-links.ts";
 
 /**
  * Finds the widgets an agent showed with the `show_widget` MCP tool.
@@ -67,12 +68,14 @@ export function widgetRefKey(ref: InlineWidgetRef): string {
 
 export type MessageBodyBlock =
   | { kind: "text"; text: string }
-  | { kind: "widget"; ref: InlineWidgetRef; key: string };
+  | { kind: "widget"; ref: InlineWidgetRef; key: string }
+  | { kind: "thread"; link: ThreadLink; key: string };
 
 /**
  * An assistant turn's visible body in timeline order: text segments with
- * widgets between them, where the agent showed them. Consecutive text joins
- * into one block, and a widget shown twice appears once.
+ * widgets and links to threads the agent started between them, where the
+ * agent made them. Consecutive text joins into one block, and a widget shown
+ * twice (or a thread started twice) appears once.
  */
 export function buildMessageBodyBlocks(
   parts: unknown[],
@@ -87,6 +90,15 @@ export function buildMessageBodyBlocks(
       const last = blocks.at(-1);
       if (last?.kind === "text") last.text = `${last.text}\n\n${typed.text}`;
       else blocks.push({ kind: "text", text: typed.text });
+      continue;
+    }
+    const link = threadLinkFromToolPart(part);
+    if (link) {
+      const key = `thread:${link.threadId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "thread", link, key });
+      }
       continue;
     }
     const ref = widgetRefFromToolPart(part, threadId);

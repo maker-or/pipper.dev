@@ -20,13 +20,16 @@ export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "- ask and actions: only when the user has a decision to make or a step to take. One short question, and one or two buttons that answer it, your recommendation first. Leave the question out of your closing message; the card shows it.",
   "- blocked: true when you can't continue without the answer.",
   "",
-  "Tasks (when start_task is listed). Each task is a real thread the user can see, nested under yours.",
-  "- start_task returns at once. Keep working, then call wait_for_tasks to collect receipts. If you finish your turn instead, Pipper adds a short note to your thread when a task stops.",
-  "- A task shares none of your context. Its brief must say everything: goal, relevant paths, constraints, and what you expect back. Use done_when for checks that define success.",
-  '- workspace: "shared" (default) works in your folder; use it for reading, research and small edits. Use "new" when tasks change files in parallel, so each gets its own worktree and branch.',
-  "- A receipt's report comes from the task; files_changed and tool_calls come from Pipper. Check the facts before relying on the report.",
-  "- An idle task is a conversation: message_task asks a follow-up or answers its question (outcome needs_input).",
-  "- Don't start a task for something you can do in a few tool calls yourself.",
+  "Threads (when start_subthread is listed). Every thread is one the user can see and talk to; address them by thread_id.",
+  '- Pick the tool by who the work is for. The user asks for a new, separate or another thread ("start a thread for X", "open a thread that does Y"): create_thread, never start_subthread. You hand off part of your own job and need the result back: start_subthread.',
+  "- start_subthread runs another agent on a piece of your job in a thread nested under yours, and returns at once. Keep working, then call wait_for_tasks to collect receipts; if you end your turn instead, Pipper adds a note to your thread when it stops.",
+  "- A subthread shares none of your context. Its brief must say everything: goal, relevant paths, constraints, and what you expect back. Use done_when for checks that define success.",
+  '- workspace: "shared" (default) works in your folder; use it for reading, research and small edits. Use "new" when subthreads change files in parallel, so each gets its own worktree and branch.',
+  "- A receipt's report comes from the subthread; files_changed and tool_calls come from Pipper. Check the facts before relying on the report.",
+  "- create_thread starts a top-level thread the user owns, in its own tab. It isn't nested, has no depth limit and doesn't report back, so don't wait for it; tell the user it started.",
+  "- message_thread talks to any thread: a subthread you started, the thread that started you, or another thread in list_threads. Pipper states who sent it. It never waits for a reply; the reply arrives as a message.",
+  "- move_thread moves your own thread (or one you started) to another workspace from its next turn.",
+  "- Don't start a subthread for something you can do in a few tool calls yourself.",
 ].join("\n");
 
 export const WRAP_UP_TOOL: McpToolDefinition = {
@@ -91,32 +94,40 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
   const catalog = agents
     .map((a) => `- ${a.id} (${a.displayName})${a.description ? `: ${a.description}` : ""}`)
     .join("\n");
-  const taskId = { type: "string", description: "A task_id from start_task or list_tasks." };
   return [
     {
       name: "list_agents",
-      description: "List the coding agents you may start as tasks, with ids and descriptions.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
+      description:
+        "List the coding agents you may start in a subthread, with ids and descriptions.",
+      inputSchema: {
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      },
     },
     {
-      name: "start_task",
+      name: "start_subthread",
       description:
-        "Start another coding agent on a task in a new thread nested under yours. Returns " +
-        "immediately with task_id and thread_id; the task runs in the background. Collect the " +
-        "result with wait_for_tasks or get_task.\n\nAvailable agents:\n" +
+        "Start another coding agent on a piece of your job in a new thread nested under yours. " +
+        "Returns immediately with thread_id; the subthread runs in the background. Collect the " +
+        "result with wait_for_tasks or get_thread. Not for when the user asks for a new or " +
+        "separate thread: that's create_thread.\n\nAvailable agents:\n" +
         catalog,
       inputSchema: {
         type: "object",
         properties: {
           agent_id: {
             type: "string",
-            description: "Which agent runs the task.",
+            description: "Which agent runs the subthread.",
             enum: agents.map((a) => a.id),
           },
-          title: { type: "string", description: "Short thread title, under 60 characters." },
+          title: {
+            type: "string",
+            description: "Short thread title, under 60 characters.",
+          },
           task: {
             type: "string",
-            description: "Complete, self-contained brief. The task sees nothing else.",
+            description: "Complete, self-contained brief. The subthread sees nothing else.",
           },
           done_when: {
             type: "array",
@@ -133,11 +144,14 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
             type: "boolean",
             description: 'With workspace "new": install packages first. Default false.',
           },
-          model: { type: "string", description: "Optional model id inside the agent." },
+          model: {
+            type: "string",
+            description: "Optional model id inside the agent.",
+          },
           request_key: {
             type: "string",
             description:
-              "Optional idempotency key. Retrying with the same key returns the same task.",
+              "Optional idempotency key. Retrying with the same key returns the same subthread.",
           },
         },
         required: ["agent_id", "title", "task"],
@@ -145,19 +159,31 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
       },
     },
     {
+      name: "create_thread",
+      description:
+        "Start a new top-level thread for the user: its own tab (opened in the background), " +
+        "owned by the user, not nested under yours and not reporting back to you. Use it only " +
+        "when the user asked you, in words, for a separate thread, or for work that stands on " +
+        "its own (its own branch or PR, something they'll open and steer themselves). For a " +
+        "piece of your own job, use start_subthread. The thread sees only your brief. Returns " +
+        "at once.\n\nAvailable agents:\n" +
+        catalog,
+      inputSchema: toolInputSchema(CREATE_THREAD_INPUT),
+    },
+    {
       name: "wait_for_tasks",
       description:
-        `Block until tasks stop (up to ${MAX_WAIT_SECONDS} s) and return their receipts. ` +
-        "Without task_ids, waits on every running task you started. If it times out, the tasks " +
-        "keep running; call it again.",
+        `Block until subthreads stop (up to ${MAX_WAIT_SECONDS} s) and return their receipts. ` +
+        "Without thread_ids, waits on every running subthread you started. If it times out, " +
+        "they keep running; call it again.",
       inputSchema: {
         type: "object",
         properties: {
-          task_ids: { type: "array", items: { type: "string" } },
+          thread_ids: { type: "array", items: { type: "string" } },
           until: {
             type: "string",
             enum: ["all", "any"],
-            description: "Return when all (default) or any of the tasks stop.",
+            description: "Return when all (default) or any of them stop.",
           },
           timeout_seconds: {
             type: "number",
@@ -168,51 +194,58 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
       },
     },
     {
-      name: "get_task",
-      description: "Return one task's receipt: status, outcome, report and the facts Pipper saw.",
-      inputSchema: {
-        type: "object",
-        properties: { task_id: taskId },
-        required: ["task_id"],
-        additionalProperties: false,
-      },
-    },
-    {
-      name: "list_tasks",
-      description: "List the tasks you started, newest first, with status and outcome.",
-      inputSchema: { type: "object", properties: {}, additionalProperties: false },
-    },
-    {
-      name: "message_task",
+      name: "get_thread",
       description:
-        "Send a task a message. follow_up (default) runs after its current turn, or now if it " +
-        "is idle; steer interrupts the current turn. Returns at once.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          task_id: taskId,
-          message: { type: "string" },
-          mode: { type: "string", enum: ["follow_up", "steer"] },
-        },
-        required: ["task_id", "message"],
-        additionalProperties: false,
-      },
+        "Any thread's status, last turn and wrap_up, with its parent and children. For a " +
+        "subthread you started, the receipt: outcome, report and the facts Pipper saw. Never waits.",
+      inputSchema: toolInputSchema(GET_THREAD_INPUT),
     },
     {
-      name: "cancel_task",
-      description: "Stop a task's current turn. Its thread stays for the user to read.",
-      inputSchema: {
-        type: "object",
-        properties: { task_id: taskId },
-        required: ["task_id"],
-        additionalProperties: false,
-      },
+      name: "list_threads",
+      description:
+        'Your subthreads, newest first, with status and outcome. scope "project" lists every ' +
+        "thread in the project instead.",
+      inputSchema: toolInputSchema(LIST_THREADS_INPUT),
+    },
+    {
+      name: "message_thread",
+      description:
+        "Send any thread a message; Pipper states that it came from your thread. follow_up " +
+        "(default) runs after its current turn, or now if it is idle; steer interrupts the " +
+        "current turn. Returns at once; a reply arrives as a message to your thread.",
+      inputSchema: toolInputSchema(MESSAGE_THREAD_INPUT),
+    },
+    {
+      name: "cancel_thread",
+      description:
+        "Stop another thread's current turn. Its conversation stays; a message starts it again.",
+      inputSchema: toolInputSchema(THREAD_ID_INPUT),
+    },
+    {
+      name: "delete_thread",
+      description:
+        "Delete a thread and its conversation. Runs at once for a subthread you (or your " +
+        "subthreads) started. Otherwise it returns awaiting_confirmation: Pipper shows the user " +
+        "a confirm card, deletes it if they confirm, and you get the outcome as a note. That " +
+        "card ends your turn: don't call wrap_up, don't ask about it, and don't call this again " +
+        "for the same thread while it waits. You can't delete your own thread or the thread " +
+        "that started you.",
+      inputSchema: toolInputSchema(THREAD_ID_INPUT),
+    },
+    {
+      name: "move_thread",
+      description:
+        "Move a thread to another workspace of its project: your own thread (the default) or " +
+        "a subthread you started. It takes effect from the thread's next turn, since a running " +
+        "turn can't change directory; files stay where they are, and the result lists " +
+        "uncommitted changes left behind.",
+      inputSchema: toolInputSchema(MOVE_THREAD_INPUT),
     },
     {
       name: "create_workspace",
       description:
-        "Create a new worktree and branch in your project. Returns its path for start_task's " +
-        "workspace, so several tasks can share it.",
+        "Create a new worktree and branch in your project. Returns its path for " +
+        "start_subthread's workspace, so several subthreads can share it.",
       inputSchema: toolInputSchema(CREATE_WORKSPACE_INPUT),
     },
     {
@@ -247,6 +280,54 @@ export const CREATE_WORKSPACE_INPUT = z.strictObject({
   name: z.string().trim().min(1).describe("Short name; letters, digits and dashes."),
   install_dependencies: z.boolean().optional().describe("Default false."),
   project: PROJECT_INPUT,
+});
+
+const THREAD_ID = z.string().min(1).describe("A thread_id from list_threads or get_thread.");
+
+export const CREATE_THREAD_INPUT = z.strictObject({
+  agent_id: z.string().min(1).describe("Which agent runs the thread."),
+  title: z.string().trim().min(1).describe("Short thread title, under 60 characters."),
+  task: z
+    .string()
+    .trim()
+    .min(1)
+    .describe("Complete, self-contained brief. The new thread sees nothing else."),
+  workspace: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      '"shared" (default): your folder. "new": a fresh worktree and branch. Or an absolute ' +
+        "path from list_workspaces.",
+    ),
+  install_dependencies: z.boolean().optional().describe('With workspace "new". Default false.'),
+  model: z.string().min(1).optional().describe("Optional model id inside the agent."),
+});
+
+export const THREAD_ID_INPUT = z.strictObject({ thread_id: THREAD_ID });
+
+export const GET_THREAD_INPUT = THREAD_ID_INPUT;
+
+export const LIST_THREADS_INPUT = z.strictObject({
+  scope: z
+    .enum(["subthreads", "project"])
+    .optional()
+    .describe('"subthreads" (default): the threads you started. "project": every thread.'),
+  project: PROJECT_INPUT,
+});
+
+export const MESSAGE_THREAD_INPUT = z.strictObject({
+  thread_id: THREAD_ID,
+  message: z.string().trim().min(1),
+  mode: z.enum(["follow_up", "steer"]).optional(),
+});
+
+export const MOVE_THREAD_INPUT = z.strictObject({
+  workspace: z
+    .string()
+    .min(1)
+    .describe("A workspace path from list_workspaces; the project's root path for main."),
+  thread_id: THREAD_ID.optional().describe("Default: your own thread."),
 });
 
 export const DELETE_WORKSPACE_INPUT = z.strictObject({

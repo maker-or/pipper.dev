@@ -50,6 +50,7 @@ import { selectThread } from "@/lib/thread-actions";
 import { invalidateProjectFiles, useProjectFileIndex } from "@/lib/project-file-index";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { InlineWidget } from "@/components/inline-widget";
+import { ThreadLinkCard } from "@/components/thread-link-card";
 import { buildMessageBodyBlocks, type MessageBodyBlock } from "@/lib/inline-widgets";
 import { AssistantTraceDeck } from "@/components/ui/assistant-trace-deck";
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator";
@@ -60,6 +61,7 @@ import { cn } from "@/lib/utils";
 import { isInstanceSelected } from "@/lib/agent-selection";
 import { beginRendererInteraction } from "@/lib/monitor-runtime-observer";
 import { toast } from "@/components/ui/toast";
+import { errorToast } from "@/lib/error-toast";
 import type { AgentPanelSnapshot } from "@/store/agent-store";
 import { useContinuationStore } from "@/store/continuation-store";
 import {
@@ -83,7 +85,7 @@ import {
 import { CONTINUE_COMMAND, matchAgentCommands, mergeAgentCommands } from "@/lib/agent-commands";
 import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subagent-orchestration";
 import { SubagentComposer, type SubagentComposerSubmit } from "@/components/subagent-composer";
-import { AgentTaskActivity, AgentTaskOrigin } from "@/components/agent-task-activity";
+import { AgentTaskOrigin, SubthreadOrbs } from "@/components/agent-task-activity";
 import { DiffSummaryCard } from "@/components/diff-summary-card";
 import { NextStepCard } from "@/components/next-step-card";
 import { nextStepFromParts } from "@/lib/next-step";
@@ -114,7 +116,15 @@ function withProjectChip(
 ): ComposerContent {
   const entities = getEntityTokens(content).filter((entity) => entity.kind !== "project");
   return buildContent(
-    [{ kind: "project", id: project.id, label: project.name, icon: project.icon }, ...entities],
+    [
+      {
+        kind: "project",
+        id: project.id,
+        label: project.name,
+        icon: project.icon,
+      },
+      ...entities,
+    ],
     getFreeText(content),
   );
 }
@@ -585,6 +595,8 @@ function MessageBody({
         {bodyBlocks.map((block, index) =>
           block.kind === "widget" ? (
             <InlineWidget key={block.key} widgetRef={block.ref} threadId={threadId} />
+          ) : block.kind === "thread" ? (
+            <ThreadLinkCard key={block.key} link={block.link} />
           ) : (
             <div
               key={`text-${index}`}
@@ -734,7 +746,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     images: ChatImageAttachment[];
   } | null>(null);
   const [previewImage, setPreviewImage] = useState<ChatImageAttachment | null>(null);
-  const [dismissedAgentError, setDismissedAgentError] = useState<string | null>(null);
   const [traceDeckOpenByKey, setTraceDeckOpenByKey] = useState<Record<string, boolean>>({});
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const composerRegionRef = useRef<HTMLDivElement>(null);
@@ -1012,11 +1023,17 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     for (const item of raw) {
       if (!item || typeof item !== "object") continue;
       if ("value" in item && "name" in item) {
-        out.push({ value: String((item as any).value), name: String((item as any).name) });
+        out.push({
+          value: String((item as any).value),
+          name: String((item as any).name),
+        });
       } else if ("options" in item && Array.isArray((item as any).options)) {
         for (const nested of (item as any).options) {
           if (nested && typeof nested === "object" && "value" in nested) {
-            out.push({ value: String(nested.value), name: String(nested.name ?? nested.value) });
+            out.push({
+              value: String(nested.value),
+              name: String(nested.name ?? nested.value),
+            });
           }
         }
       }
@@ -1414,7 +1431,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       "selectstart",
     ];
     for (const eventName of intentEvents) {
-      scrollContainer.addEventListener(eventName, stopOnReaderIntent, { passive: true });
+      scrollContainer.addEventListener(eventName, stopOnReaderIntent, {
+        passive: true,
+      });
     }
     document.addEventListener("keydown", stopOnReaderIntent, true);
 
@@ -1477,7 +1496,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     awaitingAssistantAfterUserRef.current = pending.kind === "new-turn" ? targetIndex : null;
     cancelConversationAnchor();
     markProgrammaticScroll();
-    conversationVirtualizer.scrollToIndex(targetIndex, { align: "start", behavior: "auto" });
+    conversationVirtualizer.scrollToIndex(targetIndex, {
+      align: "start",
+      behavior: "auto",
+    });
     anchorRafRef.current = requestAnimationFrame(() => {
       const scrollContainer = messagesScrollRef.current;
       if (!scrollContainer) {
@@ -1597,7 +1619,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   }, [threadId]);
 
   const prepareNewTurnScroll = (targetThreadId: string | null) => {
-    pendingScrollActionRef.current = { kind: "new-turn", threadId: targetThreadId };
+    pendingScrollActionRef.current = {
+      kind: "new-turn",
+      threadId: targetThreadId,
+    };
     awaitingAssistantAfterUserRef.current = null;
     cancelConversationScrollAnimation();
     cancelConversationAnchor();
@@ -1853,7 +1878,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                 // blocks by hand here would bypass that filter (a supplied
                 // `prompt` short-circuits assemblePromptBlocks in the main path).
                 prompt: [
-                  { type: "text", text: buildContinuationText(pendingTranscript) },
+                  {
+                    type: "text",
+                    text: buildContinuationText(pendingTranscript),
+                  },
                   ...assemblePromptBlocks({
                     message: trimmed,
                     images: newImages,
@@ -2147,16 +2175,25 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   };
 
   // Antigravity sign-in failures are rendered as the persistent auth banner
-  // above (with in-place sign-in buttons), not as a dismissible switch error.
-  // Suppress the raw error only when that banner actually renders; a text
-  // match without an auth_required message must stay visible.
+  // above (with in-place sign-in buttons), not as an error toast. Suppress
+  // the raw error only when that banner actually renders; a text match
+  // without an auth_required message must still be reported.
   const authBannerVisible = Boolean(snapshot?.authRequiredMessage);
   const visibleAgentError =
-    agentError &&
-    agentError !== dismissedAgentError &&
-    !(snapshot?.agentId === "antigravity-acp" && authBannerVisible)
+    agentError && !(snapshot?.agentId === "antigravity-acp" && authBannerVisible)
       ? agentError
       : null;
+  // Errors surface as a toast, once each; nothing is drawn in the conversation.
+  const toastedAgentError = useRef<string | null>(null);
+  useEffect(() => {
+    if (!visibleAgentError) {
+      toastedAgentError.current = null;
+      return;
+    }
+    if (toastedAgentError.current === visibleAgentError) return;
+    toastedAgentError.current = visibleAgentError;
+    toast(errorToast(visibleAgentError));
+  }, [visibleAgentError]);
   const runtimeControlsDisabled =
     isRuntimeActionPending || isSwitchingThread || isConnecting || !snapshot;
   const composerDisabled = isDraftMode
@@ -2202,7 +2239,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       await useAgentRegistryStore.getState().load();
       const known = useModelCatalogStore.getState().byAgentId;
       const refresh = draftAgentId && !known[draftAgentId]?.length ? [draftAgentId] : [];
-      const catalogs = await window.omni?.agent?.getModelCatalogs?.({ refresh });
+      const catalogs = await window.omni?.agent?.getModelCatalogs?.({
+        refresh,
+      });
       if (!catalogs) return;
       const remember = useModelCatalogStore.getState().remember;
       for (const [agentId, models] of Object.entries(catalogs)) {
@@ -2253,7 +2292,11 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       // freshest catalog. Otherwise fall back to last-seen models for that agent.
       const liveForAgent =
         snapshot?.agentId === agentId && models.length > 0
-          ? models.map((m) => ({ modelId: m.modelId, name: m.name, provider: m.provider }))
+          ? models.map((m) => ({
+              modelId: m.modelId,
+              name: m.name,
+              provider: m.provider,
+            }))
           : null;
       const source = liveForAgent ?? catalogByAgentId[agentId] ?? [];
       const agentLabel = agentNameById.get(agentId) ?? formatProviderName(agentId);
@@ -2583,7 +2626,12 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                                         if (!Array.isArray(content)) return [];
                                         return content
                                           .filter(
-                                            (part): part is { type: "toolCall"; id: string } =>
+                                            (
+                                              part,
+                                            ): part is {
+                                              type: "toolCall";
+                                              id: string;
+                                            } =>
                                               Boolean(
                                                 part &&
                                                 typeof part === "object" &&
@@ -2638,19 +2686,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                         methods={authMethods}
                         onAuthenticated={() => refresh()}
                       />
-                    )}
-                    {visibleAgentError && (
-                      <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] text-red-500">
-                        <WarningIcon className="mt-0.5 size-4 shrink-0" />
-                        <span className="min-w-0 flex-1">{visibleAgentError}</span>
-                        <button
-                          type="button"
-                          className="shrink-0 text-red-500/80 hover:text-red-500"
-                          onClick={() => setDismissedAgentError(visibleAgentError)}
-                        >
-                          Dismiss
-                        </button>
-                      </div>
                     )}
                     {isConnecting && (
                       <div className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-[12px] text-muted-foreground">
@@ -2767,13 +2802,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                         threadId={threadId || null}
                         onOpenThread={(parentThreadId) => void selectThread(parentThreadId)}
                         className="relative z-10 mb-1"
-                      />
-                      <AgentTaskActivity
-                        tasks={agentTasks}
-                        agents={registryAgents}
-                        parentThreadId={threadId || null}
-                        onOpenThread={(childThreadId) => void selectThread(childThreadId)}
-                        className="relative z-10 mb-1.5"
                       />
 
                       {isDraftMode ? (
@@ -2927,6 +2955,14 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                     sessionTokens={snapshot?.stats?.used}
                     sessionCost={snapshot?.stats?.cost?.amount}
                     rateLimit={snapshot?.usage?.rateLimit}
+                    subthreads={
+                      <SubthreadOrbs
+                        tasks={agentTasks}
+                        agents={registryAgents}
+                        parentThreadId={threadId || null}
+                        onOpenThread={(childThreadId) => void selectThread(childThreadId)}
+                      />
+                    }
                   />
                 )}
               </div>

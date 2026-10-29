@@ -2,21 +2,14 @@
 
 import { useMemo } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ArrowSquareOut, ArrowBendUpLeft } from "@phosphor-icons/react";
+import { ArrowBendUpLeft } from "@phosphor-icons/react";
 import { cn } from "@/lib/utils";
-import { Elevated } from "@/lib/elevated";
+import { ProviderLogo } from "@/components/provider-logos";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import { taskStatusText } from "@/lib/agent-task-tree";
 
 type TaskState = "starting" | "working" | "permission" | "question";
-
-const STATE_DOT: Record<TaskState, string> = {
-  starting: "bg-muted-foreground",
-  working: "bg-blue-500",
-  permission: "bg-amber-500",
-  question: "bg-amber-500",
-};
 
 const STATE_LABEL: Record<TaskState, string> = {
   starting: "Starting",
@@ -24,6 +17,9 @@ const STATE_LABEL: Record<TaskState, string> = {
   permission: "Needs permission",
   question: "Has a question",
 };
+
+/** Circles shown before the rest collapse into a "+N" count. */
+const MAX_ORBS = 4;
 
 /** What the parent thread should show for a task, or null when it needs nothing. */
 export function taskState(task: AgentTaskSnapshot): TaskState | null {
@@ -33,27 +29,29 @@ export function taskState(task: AgentTaskSnapshot): TaskState | null {
   return null;
 }
 
-interface AgentTaskActivityProps {
+interface SubthreadOrbsProps {
   tasks: AgentTaskSnapshot[];
   agents: AcpAgentDescriptor[];
-  /** The thread being viewed; only tasks it started are shown. */
+  /** The thread being viewed; only subthreads it started are shown. */
   parentThreadId: string | null;
   onOpenThread: (threadId: string) => void;
   className?: string;
 }
 
 /**
- * Tasks the viewed thread started that are running or waiting on someone,
- * fed by "agent-tasks" bridge events. Each task is a real thread; a row opens
- * it. Settled tasks drop off: their thread and receipt stay available.
+ * Subthreads the viewed thread started that are running or waiting on
+ * someone, as small provider-logo circles in the composer rail. A working
+ * subthread shimmers; one waiting on the user gets an amber ring and
+ * dot. Each circle opens its thread. Settled subthreads drop off: their
+ * thread and receipt stay available.
  */
-export function AgentTaskActivity({
+export function SubthreadOrbs({
   tasks,
   agents,
   parentThreadId,
   onOpenThread,
   className,
-}: AgentTaskActivityProps) {
+}: SubthreadOrbsProps) {
   const prefersReducedMotion = useReducedMotion();
 
   const visible = useMemo(() => {
@@ -63,90 +61,85 @@ export function AgentTaskActivity({
       .sort((a, b) => a.createdAt - b.createdAt);
   }, [tasks, parentThreadId]);
 
-  const agentName = (agentId: string) =>
-    agents.find((agent) => agent.id === agentId)?.displayName ?? agentId;
+  if (visible.length === 0) return null;
+
+  const agentFor = (agentId: string) => agents.find((agent) => agent.id === agentId);
+  const shown = visible.slice(0, MAX_ORBS);
+  const hidden = visible.length - shown.length;
 
   return (
-    <AnimatePresence initial={false}>
-      {visible.length > 0 && (
-        <motion.div
-          data-pipper-id="agent-task-activity"
-          aria-label="Agent tasks"
-          initial={{
-            opacity: 0,
-            y: prefersReducedMotion ? 0 : 12,
-            scale: prefersReducedMotion ? 1 : 0.98,
-          }}
-          animate={{ opacity: 1, y: 0, scale: 1 }}
-          exit={
-            prefersReducedMotion
-              ? { opacity: 0, transition: { duration: 0 } }
-              : { opacity: 0, y: 8, scale: 0.99, transition: { duration: 0.15, ease: "easeIn" } }
-          }
-          transition={
-            prefersReducedMotion ? { duration: 0 } : { type: "spring", duration: 0.3, bounce: 0 }
-          }
-          style={{ transformOrigin: "bottom center" }}
-          className={className}
+    <ul
+      data-pipper-id="subthread-orbs"
+      aria-label="Running subthreads"
+      className={cn("flex items-center gap-1", className)}
+    >
+      <AnimatePresence initial={false}>
+        {shown.map((task) => {
+          const state = taskState(task)!;
+          const waiting = state === "permission" || state === "question";
+          const agent = agentFor(task.agentId);
+          const agentName = agent?.displayName ?? task.agentId;
+          const childThreadId = task.childThreadId;
+          const label = `${task.title} · ${agentName} · ${STATE_LABEL[state]}`;
+          return (
+            <motion.li
+              key={task.taskId}
+              data-status={state}
+              initial={{ opacity: 0, scale: prefersReducedMotion ? 1 : 0.6 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: prefersReducedMotion ? 1 : 0.6 }}
+              transition={
+                prefersReducedMotion
+                  ? { duration: 0 }
+                  : { type: "spring", duration: 0.3, bounce: 0 }
+              }
+            >
+              <button
+                type="button"
+                disabled={!childThreadId}
+                onClick={() => childThreadId && onOpenThread(childThreadId)}
+                aria-label={childThreadId ? `Open ${label}` : label}
+                title={label}
+                className={cn(
+                  "relative flex size-6 items-center justify-center rounded-full outline-none",
+                  "transition-transform duration-100 hover:scale-110",
+                  "focus-visible:ring-1 focus-visible:ring-[color:var(--focus-ring,#6B97FF)]",
+                  "disabled:cursor-default disabled:hover:scale-100",
+                )}
+              >
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "subthread-orb absolute inset-0 flex items-center justify-center rounded-full text-foreground",
+                    waiting ? "subthread-orb-waiting" : "subthread-orb-working",
+                  )}
+                >
+                  <ProviderLogo
+                    provider={agent?.icon ?? agent?.driverId ?? task.agentId}
+                    label={agentName}
+                    size={12}
+                  />
+                </span>
+                {waiting && (
+                  <span
+                    aria-hidden="true"
+                    className="absolute -right-0.5 -top-0.5 size-2 rounded-full border border-background bg-amber-500"
+                  />
+                )}
+              </button>
+            </motion.li>
+          );
+        })}
+      </AnimatePresence>
+      {hidden > 0 && (
+        <li
+          className="px-1 text-[11px] tabular-nums text-muted-foreground"
+          title={`${hidden} more running`}
         >
-          <Elevated offset={1} shadowLevel={2} className="rounded-xl px-2 py-2">
-            <div className="flex items-center justify-between px-1.5 pb-1.5">
-              <span className="text-[11px] uppercase tracking-wide text-muted-foreground">
-                Tasks
-              </span>
-              <span className="text-[11px] tabular-nums text-muted-foreground">
-                {visible.length}
-              </span>
-            </div>
-            <ul className="flex flex-col">
-              {visible.map((task) => {
-                const state = taskState(task)!;
-                const working = state === "working" || state === "starting";
-                const childThreadId = task.childThreadId;
-                return (
-                  <li key={task.taskId} data-status={state}>
-                    <button
-                      type="button"
-                      disabled={!childThreadId}
-                      onClick={() => childThreadId && onOpenThread(childThreadId)}
-                      title={childThreadId ? "Open this task's thread" : STATE_LABEL[state]}
-                      className="group flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-foreground/5 disabled:cursor-default"
-                    >
-                      <span className="relative flex size-1.5 shrink-0 items-center justify-center">
-                        {state === "working" && (
-                          <span className="absolute inline-flex size-1.5 animate-ping rounded-full bg-blue-500/60" />
-                        )}
-                        <span className={cn("relative size-1.5 rounded-full", STATE_DOT[state])} />
-                      </span>
-                      <span
-                        className={cn(
-                          "shrink-0 text-[13px] font-medium",
-                          working ? "animate-text-shimmer" : "text-foreground",
-                        )}
-                      >
-                        {agentName(task.agentId)}
-                      </span>
-                      <span className="min-w-0 flex-1 truncate text-[13px] text-muted-foreground">
-                        {task.title}
-                      </span>
-                      <span className="shrink-0 text-[11px] text-muted-foreground">
-                        {STATE_LABEL[state]}
-                      </span>
-                      {childThreadId && (
-                        <ArrowSquareOut
-                          size={12}
-                          className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100"
-                        />
-                      )}
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </Elevated>
-        </motion.div>
+          +{hidden}
+        </li>
       )}
-    </AnimatePresence>
+    </ul>
   );
 }
 

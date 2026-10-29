@@ -54,12 +54,12 @@ describe("draft validation", () => {
 });
 
 describe("orchestration prompt", () => {
-  test("auto mode tells the orchestrator to fan out via start_task around the goal", () => {
+  test("auto mode tells the orchestrator to fan out via start_subthread around the goal", () => {
     const draft = emptyOrchestrationDraft();
     draft.goal = "Migrate the settings page to the new design system";
     const prompt = composeOrchestrationPrompt(draft, AGENTS, 4);
 
-    expect(prompt).toContain("start_task");
+    expect(prompt).toContain("start_subthread");
     expect(prompt).toContain("wait_for_tasks");
     expect(prompt).toContain("Migrate the settings page to the new design system");
     // The user's parallel pick is a hard cap on how many auto-mode starts.

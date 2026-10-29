@@ -1,6 +1,7 @@
 import type { AcpSessionSlice } from "../../src/lib/acp-session-reducer.ts";
 import type { AgentTaskOutcome, AgentTaskStatus } from "../../contracts/agent-tasks.ts";
 import type { AgentTaskRow } from "./agent-task-store.ts";
+import { WRAP_UP_TOOL_NAME, parseNextStep, type NextStep } from "../../contracts/next-step.ts";
 
 /** Longest report stored on a task row and returned in a receipt. */
 export const MAX_REPORT_CHARS = 6_000;
@@ -10,6 +11,8 @@ const MAX_FILES_LISTED = 50;
 export interface TurnSummary {
   text: string;
   toolCalls: Record<string, number>;
+  /** The turn's last valid wrap_up, read back from its tool call input. */
+  nextStep: NextStep | null;
 }
 
 /**
@@ -27,14 +30,20 @@ export function summarizeLastTurn(slice: AcpSessionSlice): TurnSummary {
   }
   let text = "";
   const toolCalls: Record<string, number> = {};
+  let nextStep: NextStep | null = null;
   for (const entry of slice.entries.slice(start)) {
     if (entry.type === "agent_text") text += entry.text;
     else if (entry.type === "tool_call") {
-      const kind = slice.toolCalls[entry.toolCallId]?.kind ?? "other";
+      const call = slice.toolCalls[entry.toolCallId];
+      const kind = call?.kind ?? "other";
       toolCalls[kind] = (toolCalls[kind] ?? 0) + 1;
+      if (call?.status === "completed" && WRAP_UP_TOOL_NAME.test((call.title ?? "").trim())) {
+        const parsed = parseNextStep(call.rawInput);
+        if (parsed.ok) nextStep = parsed.value;
+      }
     }
   }
-  return { text: text.trim(), toolCalls };
+  return { text: text.trim(), toolCalls, nextStep };
 }
 
 const STATUS_LINE = /^\s*STATUS:\s*(done|blocked|needs_input)\s*$/im;
@@ -61,6 +70,7 @@ export function clip(text: string, max: number): string {
 
 /** First message a task's thread receives: the contract plus the brief. */
 export function composeBrief(input: {
+  parentThreadId: string;
   parentTitle: string | null;
   task: string;
   doneWhen: string[];
@@ -68,9 +78,10 @@ export function composeBrief(input: {
   ownWorkspace: boolean;
 }): string {
   const lines = [
-    `You were started as a task by another agent in Pipper${
-      input.parentTitle ? ` (from the thread "${input.parentTitle}")` : ""
-    }. The user can see this thread and may reply here.`,
+    `You were started as a subthread by another agent in Pipper, from the thread ${
+      input.parentTitle ? `"${input.parentTitle}" ` : ""
+    }(thread_id ${input.parentThreadId}). The user can see this thread and may reply here.`,
+    `If you need an answer to continue, message_thread that thread_id with the question and end your turn; the reply arrives as your next message.`,
     `Work in ${input.workspacePath}.${
       input.ownWorkspace
         ? " This is your own worktree and branch; commit your work there when it is complete."
@@ -106,7 +117,6 @@ export interface ReceiptFacts {
 /** Plain-object receipt returned to the parent agent as JSON. */
 export function buildReceipt(task: AgentTaskRow, facts: ReceiptFacts): Record<string, unknown> {
   const receipt: Record<string, unknown> = {
-    task_id: task.id,
     thread_id: task.childThreadId,
     title: task.title,
     agent_id: task.agentId,
@@ -160,20 +170,20 @@ export function isActive(status: AgentTaskStatus): boolean {
 export function composeParentNote(tasks: AgentTaskRow[]): string {
   const lines = [
     tasks.length === 1
-      ? "[Pipper] A task you started has stopped."
-      : `[Pipper] ${tasks.length} tasks you started have stopped.`,
+      ? "[Pipper] A subthread you started has stopped."
+      : `[Pipper] ${tasks.length} subthreads you started have stopped.`,
   ];
   for (const task of tasks) {
     const outcome = task.status === "idle" ? (task.outcome ?? "done") : task.status;
     const preview =
       task.nextStep?.recap ??
       (task.report ? clip(task.report.replace(/\s+/g, " "), 280) : task.error);
-    lines.push(`- ${task.title} (task_id ${task.id}, ${task.agentId}): ${outcome}`);
+    lines.push(`- ${task.title} (thread_id ${task.childThreadId}, ${task.agentId}): ${outcome}`);
     if (preview) lines.push(`  ${preview}`);
     if (task.nextStep?.ask) lines.push(`  Asks: ${task.nextStep.ask}`);
   }
   lines.push(
-    "Call get_task for the full receipt, message_task to follow up, or carry on with your work.",
+    "Call get_thread for the full receipt, message_thread to follow up, or carry on with your work.",
   );
   return lines.join("\n");
 }

@@ -31,6 +31,18 @@ export interface ThreadPage {
   nextOffset: number;
 }
 
+/** What moving a thread to another workspace did. */
+export interface ThreadMoveResult {
+  /** "after_turn": the thread is mid-turn; the move lands when the turn ends. */
+  status: "moved" | "after_turn" | "unchanged";
+  /** The target workspace's name ("main" for the project root). */
+  workspace: string;
+  /** The directory the thread runs in from its next turn. */
+  cwd: string;
+  /** Files with uncommitted changes left in the old workspace. */
+  leftBehind: string[];
+}
+
 export interface OpenTabsState {
   openThreadIds: string[];
   activeThreadId: string | null;

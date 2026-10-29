@@ -37,8 +37,10 @@ import { checkUrl, normalizeUserUrl, type UrlDecision } from "./url-policy.ts";
  * server (same per-session endpoint pattern as AgentTaskService).
  *
  * Invariants:
- * - Every page belongs to exactly one session token and lives in that
- *   token's in-memory partition; sessions never share cookies or storage.
+ * - Every page belongs to exactly one session record and lives in that
+ *   record's in-memory partition; sessions never share cookies or storage,
+ *   even when they share an endpoint (harnesses that keep MCP servers per
+ *   directory, see attachMcpServers).
  * - Releasing a token (session closed, agent crashed, never bound) closes all
  *   of its pages and clears its partition before the endpoint disappears.
  * - Tool calls for one session run one at a time, so CDP commands from two
@@ -98,6 +100,15 @@ export interface BrowserServiceOptions {
 /** Lets the service attribute widgets to threads and tell the renderer. */
 export interface WidgetHooks {
   resolveThread(sessionId: string): string | null;
+  /**
+   * Of several sessions sharing one endpoint, the one making this tool call;
+   * null when none can be told apart.
+   */
+  sessionForToolCall?(
+    sessionIds: string[],
+    toolName: string,
+    args: Record<string, unknown>,
+  ): Promise<string | null>;
   onWidgetUpdated(widget: { widgetId: string; threadId: string | null }): void;
 }
 
@@ -159,6 +170,17 @@ export class BrowserService {
   private readonly downloadsDir: string | undefined;
   private readonly widgetStore: WidgetStore | null;
   private widgetHooks: WidgetHooks | null = null;
+  /**
+   * Endpoints shared by a directory's sessions: token → attachments not yet
+   * bound or released, and each bound session's own record (keyed by a
+   * record token that is never served).
+   */
+  private readonly sharedEndpoints = new Map<
+    string,
+    { shareKey: string; pending: number; recordBySession: Map<string, string> }
+  >();
+  /** Share key (connection + directory) → its shared endpoint token. */
+  private readonly sharedByKey = new Map<string, string>();
   private readonly appOrigins: () => string[];
   private readonly isEnabled: () => boolean;
   private readonly baseDir: string | undefined;
@@ -212,34 +234,46 @@ export class BrowserService {
    * Append the browser MCP server to a session's server list with a fresh
    * endpoint token. Callers must bindSession() once the ACP session id is
    * known; a token that is never bound is released automatically.
+   *
+   * With a `shareKey`, sessions with that key share one endpoint token: a
+   * harness that keeps MCP servers per directory (OpenCode) re-adds the
+   * servers each session is given, replacing the directory's client under
+   * that name and closing its connection mid-call. Only the first session
+   * is given the server; later ones in the directory already see it. Each
+   * bound session still gets its own record and pages, and a call is routed
+   * to the session whose agent made it.
    */
   async attachMcpServers(
     baseServers: Array<Record<string, unknown>>,
     caps: AgentCapabilities,
+    shareKey: string | null = null,
   ): Promise<{ servers: Array<Record<string, unknown>>; token: string | null }> {
     if (this.disposed || !this.isEnabled()) return { servers: baseServers, token: null };
 
     const shimPath = await this.ensureStarted();
-    const token = randomUUID();
-    const record: SessionRecord = {
-      token,
-      sessionId: null,
-      partition: `pipper-browser-${token}`,
-      pages: new Map(),
-      currentPageId: null,
-      nextPageNumber: 1,
-      notices: [],
-      queue: Promise.resolve(),
-      unboundTimer: null,
-      released: false,
-      partitionUsed: false,
-    };
-    record.unboundTimer = setTimeout(() => {
-      if (record.sessionId === null) void this.releaseToken(token);
-    }, this.limits.unboundTokenMs);
-    record.unboundTimer.unref?.();
-    this.sessions.set(token, record);
-    this.server.register(token, this.endpointFor(token));
+    let token: string;
+    const sharedToken = shareKey ? this.sharedByKey.get(shareKey) : undefined;
+    const shared = sharedToken ? this.sharedEndpoints.get(sharedToken) : undefined;
+    if (shareKey && sharedToken && shared) {
+      token = sharedToken;
+      shared.pending += 1;
+      // Already registered in this directory by a live session.
+      if (shared.recordBySession.size > 0) return { servers: baseServers, token };
+    } else if (shareKey) {
+      token = randomUUID();
+      this.sharedEndpoints.set(token, { shareKey, pending: 1, recordBySession: new Map() });
+      this.sharedByKey.set(shareKey, token);
+      this.server.register(token, this.endpointFor(token));
+    } else {
+      token = randomUUID();
+      const record = this.createRecord(token);
+      record.unboundTimer = setTimeout(() => {
+        if (record.sessionId === null) void this.releaseToken(token);
+      }, this.limits.unboundTokenMs);
+      record.unboundTimer.unref?.();
+      this.sessions.set(token, record);
+      this.server.register(token, this.endpointFor(token));
+    }
 
     const url = this.server.urlFor(token);
     const entry: Record<string, unknown> = caps.mcpCapabilities?.http
@@ -254,7 +288,34 @@ export class BrowserService {
     return { servers: [...baseServers, entry], token };
   }
 
+  private createRecord(token: string): SessionRecord {
+    return {
+      token,
+      sessionId: null,
+      partition: `pipper-browser-${token}`,
+      pages: new Map(),
+      currentPageId: null,
+      nextPageNumber: 1,
+      notices: [],
+      queue: Promise.resolve(),
+      unboundTimer: null,
+      released: false,
+      partitionUsed: false,
+    };
+  }
+
   bindSession(token: string, sessionId: string): void {
+    const shared = this.sharedEndpoints.get(token);
+    if (shared) {
+      shared.pending = Math.max(0, shared.pending - 1);
+      if (shared.recordBySession.has(sessionId)) return;
+      const recordToken = randomUUID();
+      const record = this.createRecord(recordToken);
+      record.sessionId = sessionId;
+      this.sessions.set(recordToken, record);
+      shared.recordBySession.set(sessionId, recordToken);
+      return;
+    }
     const record = this.sessions.get(token);
     if (!record) return;
     record.sessionId = sessionId;
@@ -267,15 +328,37 @@ export class BrowserService {
     for (const record of this.sessions.values()) {
       if (record.sessionId === sessionId) void this.releaseToken(record.token);
     }
+    for (const [token, shared] of this.sharedEndpoints) {
+      if (shared.recordBySession.delete(sessionId)) this.dropSharedIfUnused(token);
+    }
   }
 
   /** Release an endpoint created for a session that was never established. */
   releaseTokenForSession(token: string): void {
+    const shared = this.sharedEndpoints.get(token);
+    if (shared) {
+      shared.pending = Math.max(0, shared.pending - 1);
+      this.dropSharedIfUnused(token);
+      return;
+    }
     void this.releaseToken(token);
   }
 
+  private dropSharedIfUnused(token: string): void {
+    const shared = this.sharedEndpoints.get(token);
+    if (!shared || shared.pending > 0 || shared.recordBySession.size > 0) return;
+    this.sharedEndpoints.delete(token);
+    if (this.sharedByKey.get(shared.shareKey) === token) this.sharedByKey.delete(shared.shareKey);
+    this.server.unregister(token);
+  }
+
+  /** Endpoints served: one per unshared session, one per shared directory. */
   endpointCount(): number {
-    return this.sessions.size;
+    let sharedRecords = 0;
+    for (const shared of this.sharedEndpoints.values()) {
+      sharedRecords += shared.recordBySession.size;
+    }
+    return this.sessions.size - sharedRecords + this.sharedEndpoints.size;
   }
 
   pageCount(): number {
@@ -295,6 +378,8 @@ export class BrowserService {
       record.pages.clear();
     }
     this.sessions.clear();
+    this.sharedEndpoints.clear();
+    this.sharedByKey.clear();
     this.previewer?.dispose();
     this.previewer = null;
     this.server.close();
@@ -480,13 +565,21 @@ export class BrowserService {
     };
   }
 
-  private callTool(
+  private async callTool(
     token: string,
     name: string,
     args: Record<string, unknown>,
   ): Promise<McpToolResult> {
-    const record = this.sessions.get(token);
-    if (!record) return Promise.resolve(errorResult("This browser session has ended."));
+    const record = this.sharedEndpoints.has(token)
+      ? await this.sharedCaller(token, name, args)
+      : this.sessions.get(token);
+    if (record === null) {
+      return errorResult(
+        "Pipper couldn't tell which thread made this call, because several threads in this " +
+          "folder share the connection. Call the tool again.",
+      );
+    }
+    if (!record) return errorResult("This browser session has ended.");
     const started = record.queue.then(() => this.runTool(record, name, args));
     // The next call waits for this call's real work, not just its reply: a
     // timed-out call keeps driving CDP until it settles or its page is closed.
@@ -495,6 +588,25 @@ export class BrowserService {
       () => undefined,
     );
     return started.then((run) => run.result);
+  }
+
+  /** On a shared endpoint, the record of the session whose agent made this call. */
+  private async sharedCaller(
+    token: string,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<SessionRecord | null | undefined> {
+    const shared = this.sharedEndpoints.get(token);
+    if (!shared) return undefined;
+    const sessionIds = [...shared.recordBySession.keys()];
+    if (sessionIds.length === 0) return undefined;
+    const sessionId =
+      sessionIds.length === 1
+        ? sessionIds[0]!
+        : ((await this.widgetHooks?.sessionForToolCall?.(sessionIds, name, args)) ?? null);
+    if (!sessionId) return null;
+    const recordToken = shared.recordBySession.get(sessionId);
+    return recordToken ? this.sessions.get(recordToken) : undefined;
   }
 
   private async runTool(

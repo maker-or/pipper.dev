@@ -18,6 +18,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Dropdown, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
+import { ThreadTabMenu } from "@/components/thread-tab-menu";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
 import { ProjectIcon } from "@/components/ui/icon-picker";
 import { PixelGridLoader } from "@/components/ui/pixel-grid-loader";
@@ -157,6 +158,10 @@ export function GlobalTabBar() {
   >([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
+  const [threadMenu, setThreadMenu] = useState<{
+    thread: Thread;
+    position: { x: number; y: number };
+  } | null>(null);
   const [editingThreadTitle, setEditingThreadTitle] = useState("");
   const [editingThreadOriginalTitle, setEditingThreadOriginalTitle] = useState("");
 
@@ -722,6 +727,16 @@ export function GlobalTabBar() {
 
   return (
     <Tabs className="w-full min-w-0" value={selectedTabValue} onValueChange={handleTabChange}>
+      {threadMenu && (
+        <ThreadTabMenu
+          thread={threadMenu.thread}
+          projectPath={
+            projectsList.find((item) => item.id === threadMenu.thread.project_id)?.path ?? ""
+          }
+          position={threadMenu.position}
+          onClose={() => setThreadMenu(null)}
+        />
+      )}
       <div
         className="flex w-full max-w-[1000px] min-w-0 items-center gap-1"
         data-pipper-id="global-tab-bar"
@@ -755,6 +770,11 @@ export function GlobalTabBar() {
                 onEditCommit={commitRenameThread}
                 onEditCancel={cancelRenameThread}
                 onDoubleClick={() => startRenameThread(thread.id, tabTitle)}
+                onContextMenu={(event) => {
+                  if (!project) return;
+                  event.preventDefault();
+                  setThreadMenu({ thread, position: { x: event.clientX, y: event.clientY } });
+                }}
                 data-pipper-id={`thread-tab-${thread.id}`}
               />
             );

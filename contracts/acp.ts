@@ -5,6 +5,7 @@
  */
 
 import type { AgentTaskSnapshot } from "./agent-tasks.ts";
+import type { Thread } from "./threads.ts";
 import type {
   AgentCapabilities,
   AuthMethod,
@@ -387,6 +388,8 @@ export type AcpBridgeEvent =
   | { type: "thread-closed"; threadId: string }
   /** The thread's row is gone (thread-closed only means its session closed). */
   | { type: "thread-deleted"; threadId: string }
+  /** The thread's row changed outside the renderer (moved to another workspace). */
+  | { type: "thread-updated"; thread: Thread }
   | {
       type: "connection";
       agentId: string | null;

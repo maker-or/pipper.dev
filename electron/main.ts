@@ -84,9 +84,20 @@ import {
   setSelectedAgentIds,
   saveGithubPrSnapshot,
 } from "./db";
-import { getThread, listThreads, listThreadsByIds, listProjectThreads } from "./threads";
+import {
+  getThread,
+  listThreads,
+  listThreadsByIds,
+  listProjectThreads,
+  updateThreadWorktreePath,
+} from "./threads";
 import { runAsUser } from "./operations/define.ts";
 import { ProvenanceStore } from "./operations/provenance.ts";
+import {
+  configureThreadOperations,
+  deleteThread as deleteThreadOperation,
+  moveThread as moveThreadOperation,
+} from "./operations/threads.ts";
 import {
   configureWorkspaceOperations,
   createWorkspace as createWorkspaceOperation,
@@ -2488,16 +2499,54 @@ function registerIpc(): void {
     return requireAgentManager().renameThread(id, title);
   });
 
-  ipcMain.handle("threads:delete", async (_event, id: string) => {
-    const isPeer = makeWorkspacePeerPredicate(id);
-    const manager = requireAgentManager();
-    await manager.deleteThread(id);
-    // After deleteThread: its own replacement switch is part of this delete.
-    const selectionAtClose = manager.selectionGeneration();
-    const next = await closeThreadTab(id, isPeer);
-    await activateTabAfterClose(manager, next, selectionAtClose);
-    broadcastOpenTabsChanged(mainWindow, next);
+  configureThreadOperations({
+    getThread,
+    getProject,
+    listWorktrees,
+    threadTitle: (id) => getThread(id)?.title ?? null,
+    isTurnInFlight: (id) => requireAgentManager().isThreadTurnInFlight(id),
+    deleteThread: async (id) => {
+      const isPeer = makeWorkspacePeerPredicate(id);
+      const manager = requireAgentManager();
+      await manager.deleteThread(id);
+      // After deleteThread: its own replacement switch is part of this delete.
+      const selectionAtClose = manager.selectionGeneration();
+      const next = await closeThreadTab(id, isPeer);
+      await activateTabAfterClose(manager, next, selectionAtClose);
+      broadcastOpenTabsChanged(mainWindow, next);
+    },
+    setThreadWorkspace: updateThreadWorktreePath,
+    reloadThreadSession: (id) => requireAgentManager().reloadThreadSession(id),
+    threadChanged: (id) => {
+      const manager = requireAgentManager();
+      manager.announceThreadUpdated(id);
+      // The thread on screen moved: the workspace selection follows it, so
+      // the user lands where the thread went.
+      const thread = getThread(id);
+      const project = thread ? getProject(thread.project_id) : null;
+      if (!thread || !project || manager.getState().threadId !== id) return;
+      void updateWorkspaceSelection(project.id, thread.worktree_path ?? project.path)
+        .then(() => broadcastToWindows("worktrees:changed", { projectId: project.id }))
+        .catch((error: unknown) => {
+          console.error("[threads] Failed to follow a moved thread's workspace:", error);
+        });
+    },
+    uncommittedFiles: async (path) => {
+      try {
+        return (await getWorkspaceGitStatus(path)).files.map((file) => file.path);
+      } catch {
+        return null;
+      }
+    },
   });
+
+  ipcMain.handle("threads:delete", async (_event, id: string) => {
+    await runAsUser(deleteThreadOperation, { thread: id });
+  });
+
+  ipcMain.handle("threads:move", (_event, input: { threadId: string; workspace: string }) =>
+    runAsUser(moveThreadOperation, { thread: input.threadId, workspace: input.workspace }),
+  );
 
   ipcMain.handle("tabs:listOpen", () => readOpenTabsState());
   ipcMain.handle("tabs:isFluidPageSwipeEnabled", () => isFluidPageSwipeEnabled());

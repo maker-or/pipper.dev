@@ -1,4 +1,9 @@
+import type { Project } from "../../contracts/projects.ts";
+import type { Thread } from "../../contracts/threads.ts";
+import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import { useAgentStore } from "@/store/agent-store";
+import { useProjectStore } from "@/store/project-store";
+import { useWorktreeStore } from "@/store/worktree-store";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 
 /** Benchmark runs drive thread switches from Playwright. Never block on a draft confirm. */
@@ -40,4 +45,30 @@ export async function selectThread(
     }
     throw err;
   }
+}
+
+/**
+ * Bring a finished background thread on screen. Threads can live in another
+ * project or workspace than the one being viewed; the advanced tab strip only
+ * shows the active workspace's tabs, so the project and workspace are
+ * switched first or the thread would be selected but invisible.
+ */
+export async function openThreadAnywhere(thread: Thread, projects?: Project[]): Promise<void> {
+  projects ??= await window.omni.projects.list();
+  const project = projects.find((item) => item.id === thread.project_id);
+  if (project && project.id !== useProjectStore.getState().activeProject?.id) {
+    await window.omni.projects.setActive(project.id);
+  }
+  if (project) {
+    const worktrees = useWorktreeStore.getState();
+    const current = normalizeWorkspacePath(
+      worktrees.selectedWorktreePathByProject[project.id],
+      project.path,
+    );
+    const target = normalizeWorkspacePath(thread.worktree_path, project.path);
+    if (target !== current) {
+      await worktrees.switchWorktree(project.id, target ?? project.path);
+    }
+  }
+  await selectThread(thread.id);
 }

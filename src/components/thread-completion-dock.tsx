@@ -2,49 +2,21 @@ import { useEffect, useMemo, useRef } from "react";
 import { ArrowRight, CheckCircle, WarningCircle, X } from "@phosphor-icons/react";
 import type { Project } from "../../contracts/projects.ts";
 import type { Thread } from "../../contracts/threads.ts";
-import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
-import { toast } from "@/components/ui/toast";
-import { selectThread } from "@/lib/thread-actions";
+import { TOAST_TITLE_MAX, clampToastText, toast } from "@/components/ui/toast";
+import { openThreadAnywhere, selectThread } from "@/lib/thread-actions";
 import { useOpenTabsQuery } from "@/lib/thread-queries";
 import { cn } from "@/lib/utils";
-import { useProjectStore } from "@/store/project-store";
 import {
   startThreadCompletionWatcher,
   useThreadCompletionStore,
 } from "@/store/thread-completion-store";
 import { useThreadStore } from "@/store/thread-store";
-import { useWorktreeStore } from "@/store/worktree-store";
 
 /** Toasts linger long enough to read across a project switch, no longer. */
 const COMPLETION_TOAST_MS = 8_000;
 
 function threadLabel(thread: Thread | undefined): string {
   return thread?.title?.trim() || "Untitled thread";
-}
-
-/**
- * Bring a finished background thread on screen. Threads can live in another
- * project or workspace than the one being viewed; the advanced tab strip only
- * shows the active workspace's tabs, so the project and workspace are
- * switched first or the thread would be selected but invisible.
- */
-async function jumpToThread(thread: Thread, projects: Project[]): Promise<void> {
-  const project = projects.find((item) => item.id === thread.project_id);
-  if (project && project.id !== useProjectStore.getState().activeProject?.id) {
-    await window.omni.projects.setActive(project.id);
-  }
-  if (project) {
-    const worktrees = useWorktreeStore.getState();
-    const current = normalizeWorkspacePath(
-      worktrees.selectedWorktreePathByProject[project.id],
-      project.path,
-    );
-    const target = normalizeWorkspacePath(thread.worktree_path, project.path);
-    if (target !== current) {
-      await worktrees.switchWorktree(project.id, target ?? project.path);
-    }
-  }
-  await selectThread(thread.id);
 }
 
 /**
@@ -92,7 +64,7 @@ export function ThreadCompletionDock({ projects }: { projects: Project[] }) {
       return;
     }
     try {
-      await jumpToThread(thread, projectsRef.current);
+      await openThreadAnywhere(thread, projectsRef.current);
     } catch (err) {
       toast({
         icon: <WarningCircle weight="duotone" className="size-5 text-destructive" />,
@@ -111,10 +83,14 @@ export function ThreadCompletionDock({ projects }: { projects: Project[] }) {
         const project = projectsRef.current.find((item) => item.id === thread?.project_id);
         toast({
           icon: <CheckCircle weight="duotone" className="size-5 text-emerald-500" />,
-          title: `${threadLabel(thread)} finished`,
+          // Cap the label so " finished" survives the toast's own clamp.
+          title: `${clampToastText(threadLabel(thread), TOAST_TITLE_MAX - 9)} finished`,
           description: project ? `Agent run completed in ${project.name}.` : "Agent run completed.",
           duration: COMPLETION_TOAST_MS,
-          action: { label: "Open", onClick: () => void openRef.current(threadId) },
+          action: {
+            label: "Open",
+            onClick: () => void openRef.current(threadId),
+          },
         });
       }),
     [],
