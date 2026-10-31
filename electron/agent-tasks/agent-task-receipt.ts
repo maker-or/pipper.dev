@@ -46,6 +46,74 @@ export function summarizeLastTurn(slice: AcpSessionSlice): TurnSummary {
   return { text: text.trim(), toolCalls, nextStep };
 }
 
+export interface ConversationMessage {
+  index: number;
+  role: "user" | "agent" | "tool";
+  text: string;
+}
+
+export interface ConversationPage {
+  messages: ConversationMessage[];
+  /** Messages in the whole conversation. */
+  total: number;
+  /** Pass as `before` for the page before this one; null at the start. */
+  next_before: number | null;
+}
+
+const MESSAGE_CHARS = 2_000;
+const PAGE_MESSAGES = 40;
+const PAGE_CHARS = 20_000;
+
+/**
+ * A thread's conversation as another agent reads it: the user's and the
+ * agent's text, and one line per tool call. Thoughts and tool output are
+ * left out; each message is clipped.
+ */
+export function conversationMessages(slice: AcpSessionSlice): ConversationMessage[] {
+  const raw: Array<{ role: ConversationMessage["role"]; text: string }> = [];
+  for (const entry of slice.entries) {
+    if (entry.type === "user_text") raw.push({ role: "user", text: entry.text });
+    else if (entry.type === "agent_text") {
+      const last = raw.at(-1);
+      if (last?.role === "agent") last.text += entry.text;
+      else raw.push({ role: "agent", text: entry.text });
+    } else if (entry.type === "tool_call") {
+      const call = slice.toolCalls[entry.toolCallId];
+      const status = call?.status && call.status !== "completed" ? ` (${call.status})` : "";
+      raw.push({
+        role: "tool",
+        text: `${call?.kind ?? "other"}: ${call?.title?.trim() || "tool call"}${status}`,
+      });
+    }
+  }
+  return raw
+    .map((message) => ({ role: message.role, text: clip(message.text.trim(), MESSAGE_CHARS) }))
+    .filter((message) => message.text)
+    .map((message, index) => ({ index, ...message }));
+}
+
+/** The page of messages ending just before `before` (default: the newest). */
+export function pageConversation(
+  messages: ConversationMessage[],
+  before?: number,
+): ConversationPage {
+  const end = Math.min(before ?? messages.length, messages.length);
+  let start = end;
+  let chars = 0;
+  while (start > 0 && end - start < PAGE_MESSAGES) {
+    const size = messages[start - 1]!.text.length;
+    // Always include one message, however long.
+    if (end > start && chars + size > PAGE_CHARS) break;
+    chars += size;
+    start--;
+  }
+  return {
+    messages: messages.slice(start, end),
+    total: messages.length,
+    next_before: start > 0 ? start : null,
+  };
+}
+
 const STATUS_LINE = /^\s*STATUS:\s*(done|blocked|needs_input)\s*$/im;
 
 /** The outcome the child declared, or "done" when it didn't say. */

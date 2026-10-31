@@ -68,3 +68,26 @@ export interface AgentTaskSnapshot {
   nextStep: NextStep | null;
   error: string | null;
 }
+
+export type ThreadProposalState = "open" | "started" | "dismissed" | "expired";
+
+/**
+ * A thread an agent proposed with create_thread (`initiation: "propose"`).
+ * Nothing runs until the user starts it from the card in the proposing thread.
+ */
+export interface ThreadProposalSnapshot {
+  proposalId: string;
+  callerThreadId: string;
+  projectId: string;
+  agentId: string;
+  title: string;
+  task: string;
+  model: string | null;
+  /** "new" for a new worktree, else the folder the thread would run in. */
+  workspace: string;
+  installDependencies: boolean;
+  state: ThreadProposalState;
+  /** The thread it started, once started. */
+  threadId: string | null;
+  createdAt: number;
+}

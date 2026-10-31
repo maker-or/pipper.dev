@@ -94,6 +94,11 @@ import {
 import { runAsUser } from "./operations/define.ts";
 import { ProvenanceStore } from "./operations/provenance.ts";
 import {
+  configureSettingsOperations,
+  SettingChangeStore,
+  undoSettingsChange,
+} from "./operations/settings.ts";
+import {
   configureThreadOperations,
   createThread as createThreadOperation,
   deleteThread as deleteThreadOperation,
@@ -2502,8 +2507,31 @@ function registerIpc(): void {
     return requireAgentManager().renameThread(id, title);
   });
 
+  const settingChanges = new SettingChangeStore(() => getDb());
+  configureSettingsOperations({
+    getAgentTasks: () => requireAgentManager().getAgentTaskConfig(),
+    setAgentTasks: (partial) => requireAgentManager().setAgentTaskConfig(partial),
+    getBrowser: () => {
+      if (!browserService) throw new Error("Browser service is not ready");
+      return browserService.getConfig();
+    },
+    setBrowser: (partial) => {
+      if (!browserService) throw new Error("Browser service is not ready");
+      return browserService.setConfig(partial);
+    },
+    getAutoInstall: getWorktreeAutoInstall,
+    setAutoInstall: setWorktreeAutoInstall,
+    changes: settingChanges,
+  });
+  ipcMain.handle("settings:getChange", (_event, id: string) => settingChanges.get(String(id)));
+  ipcMain.handle("settings:undoChange", (_event, id: string) =>
+    runAsUser(undoSettingsChange, { change: String(id) }),
+  );
+
   configureThreadOperations({
     getThread,
+    listModels: async (agentId) =>
+      (await requireAgentManager().getModelCatalogs())[agentId] ?? null,
     createThread: (input) =>
       requireAgentManager().createThread(
         input.projectId,
@@ -2809,6 +2837,17 @@ function registerIpc(): void {
     requireAgentManager().setAgentTaskConfig(partial),
   );
   ipcMain.handle("agentTasks:list", () => requireAgentManager().getAgentTasks());
+  ipcMain.handle("agentTasks:getProposals", (_event, ids: unknown) =>
+    requireAgentManager().getThreadProposals(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    ),
+  );
+  ipcMain.handle("agentTasks:startProposal", (_event, id: string) =>
+    requireAgentManager().startThreadProposal(String(id)),
+  );
+  ipcMain.handle("agentTasks:dismissProposal", (_event, id: string) =>
+    requireAgentManager().dismissThreadProposal(String(id)),
+  );
 
   ipcMain.handle(
     "widgets:getDocument",

@@ -43,6 +43,8 @@ function fakeApp() {
   } as unknown as WorkspaceDeps);
 
   configureThreadOperations({
+    listModels: async (agentId: string) =>
+      agentId === "codex" ? [{ modelId: "gpt-5.5", name: "GPT-5.5" }] : null,
     getProject: (id: string) => (id === PROJECT.id ? PROJECT : null),
     listWorktrees: async () => worktrees,
     createThread: async (input: Parameters<ThreadDeps["createThread"]>[0]) => {
@@ -175,5 +177,32 @@ describe("threads.create", () => {
     ).rejects.toThrow(/agent failed to start/);
     expect(app.rolledBack).toHaveLength(1);
     expect(app.rolledBack[0]).toMatch(/^\/wt\/again-/);
+  });
+
+  test("an agent's model is matched to the agent's catalog, and an unknown one is refused", async () => {
+    const app = fakeApp();
+    const start = (model: string) =>
+      callAsAgent(
+        createThread,
+        { project: "p1", agent: "codex", title: "m", model, activation: "background" },
+        agent(),
+      );
+
+    await start("GPT-5.5");
+    expect(app.created[0]!.model).toBe("gpt-5.5");
+    await expect(start("claude-opus")).rejects.toThrow(
+      /codex has no model "claude-opus"\. Available: gpt-5\.5/,
+    );
+    expect(app.created).toHaveLength(1);
+  });
+
+  test("an agent with no known catalog keeps the model it was given", async () => {
+    const app = fakeApp();
+    await callAsAgent(
+      createThread,
+      { project: "p1", agent: "claude", title: "m", model: "opus", activation: "background" },
+      agent(),
+    );
+    expect(app.created[0]!.model).toBe("opus");
   });
 });

@@ -28,7 +28,12 @@ import type {
   InlineWidgetDocument,
   InlineWidgetRef,
 } from "../contracts/acp.ts";
-import type { AgentTaskConfig, AgentTaskSnapshot } from "../contracts/agent-tasks.ts";
+import type { SettingChangeRecord } from "../contracts/settings.ts";
+import type {
+  AgentTaskConfig,
+  AgentTaskSnapshot,
+  ThreadProposalSnapshot,
+} from "../contracts/agent-tasks.ts";
 import type {
   LauncherDownloadProgress,
   LauncherUpdateDiagnostics,
@@ -538,11 +543,23 @@ const api = {
       };
     },
   },
+  settings: {
+    getChange: (id: string): Promise<SettingChangeRecord | null> =>
+      ipcRenderer.invoke("settings:getChange", id),
+    undoChange: (id: string): Promise<SettingChangeRecord> =>
+      ipcRenderer.invoke("settings:undoChange", id),
+  },
   agentTasks: {
     getConfig: (): Promise<AgentTaskConfig> => ipcRenderer.invoke("agentTasks:getConfig"),
     setConfig: (partial: Partial<AgentTaskConfig>): Promise<AgentTaskConfig> =>
       ipcRenderer.invoke("agentTasks:setConfig", partial),
     list: (): Promise<AgentTaskSnapshot[]> => ipcRenderer.invoke("agentTasks:list"),
+    getProposals: (ids: string[]): Promise<ThreadProposalSnapshot[]> =>
+      ipcRenderer.invoke("agentTasks:getProposals", ids),
+    startProposal: (id: string): Promise<ThreadProposalSnapshot> =>
+      ipcRenderer.invoke("agentTasks:startProposal", id),
+    dismissProposal: (id: string): Promise<ThreadProposalSnapshot> =>
+      ipcRenderer.invoke("agentTasks:dismissProposal", id),
   },
   widgets: {
     getDocument: (

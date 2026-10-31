@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
-import { nestThreads, taskStatusText } from "./agent-task-tree";
+import { nestThreads, taskStatusText, threadsNeedingUser } from "./agent-task-tree";
 
 function task(
   childThreadId: string,
@@ -67,5 +67,39 @@ describe("taskStatusText", () => {
     );
     expect(taskStatusText(task("a", "p", { status: "idle", outcome: "done" }))).toBe("Done");
     expect(taskStatusText(task("a", "p", { status: "timed_out" }))).toBe("Timed out");
+  });
+});
+
+describe("threadsNeedingUser", () => {
+  const snap = (
+    childThreadId: string,
+    parentThreadId: string,
+    extra: Partial<AgentTaskSnapshot> = {},
+  ): AgentTaskSnapshot =>
+    ({
+      taskId: childThreadId,
+      parentThreadId,
+      childThreadId,
+      status: "running",
+      outcome: null,
+      waitingForPermission: false,
+      ...extra,
+    }) as AgentTaskSnapshot;
+
+  test("marks every ancestor of a subthread waiting on the user, and nothing else", () => {
+    const waiting = threadsNeedingUser([
+      snap("child", "top"),
+      snap("grandchild", "child", { waitingForPermission: true }),
+      snap("other", "top2", { status: "idle", outcome: "done" }),
+    ]);
+    expect([...waiting].sort()).toEqual(["child", "top"]);
+  });
+
+  test("a question it ended on counts; a cycle doesn't loop", () => {
+    const waiting = threadsNeedingUser([
+      snap("a", "b", { status: "idle", outcome: "needs_input" }),
+      snap("b", "a"),
+    ]);
+    expect([...waiting].sort()).toEqual(["a", "b"]);
   });
 });

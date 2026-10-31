@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { createPortal } from "react-dom";
-import { GitBranch, WarningIcon } from "@phosphor-icons/react";
-import { Dropdown, DropdownLabel } from "@/components/ui/dropdown";
+import { Copy, GitBranch, WarningIcon } from "@phosphor-icons/react";
+import { Dropdown, DropdownLabel, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
 import { toast } from "@/components/ui/toast";
 import type { Thread, ThreadMoveResult } from "../../contracts/threads.ts";
@@ -19,9 +19,10 @@ interface ThreadTabMenuProps {
 const MENU_WIDTH = 240;
 
 /**
- * A thread tab's right-click menu: move the thread to another workspace of
- * its project. The move runs through the same operation agents use
- * (`threads:move`); a running turn finishes first.
+ * A thread tab's right-click menu: copy the thread's id, so another thread's
+ * agent can read or message it (`get_thread`, `message_thread`), or move the
+ * thread to another workspace of its project. The move runs through the same
+ * operation agents use (`threads:move`); a running turn finishes first.
  */
 export function ThreadTabMenu({ thread, projectPath, position, onClose }: ThreadTabMenuProps) {
   const [workspaces, setWorkspaces] = useState<Worktree[] | null>(null);
@@ -75,6 +76,24 @@ export function ThreadTabMenu({ thread, projectPath, position, onClose }: Thread
     }
   };
 
+  const copyId = async () => {
+    onClose();
+    try {
+      await navigator.clipboard.writeText(thread.id);
+      toast({
+        icon: <Copy weight="duotone" className="size-5 text-muted-foreground" />,
+        title: "Copied thread ID",
+        description: "Paste it into another thread to have its agent read or message this one.",
+      });
+    } catch {
+      toast({
+        icon: <WarningIcon className="size-5 text-red-500" />,
+        title: "Couldn't copy the thread ID",
+        description: thread.id,
+      });
+    }
+  };
+
   const left = Math.min(position.x, window.innerWidth - MENU_WIDTH - 8);
   return createPortal(
     <div
@@ -84,6 +103,14 @@ export function ThreadTabMenu({ thread, projectPath, position, onClose }: Thread
       style={{ left, top: position.y + 4, width: MENU_WIDTH } as CSSProperties}
     >
       <Dropdown className="w-full">
+        <MenuItem
+          index={0}
+          icon={Copy}
+          label="Copy thread ID"
+          pipperId="copy-thread-id"
+          onSelect={() => void copyId()}
+        />
+        <DropdownSeparator />
         <DropdownLabel>Move to workspace</DropdownLabel>
         {workspaces === null ? (
           <DropdownLabel>Loading…</DropdownLabel>
@@ -93,7 +120,7 @@ export function ThreadTabMenu({ thread, projectPath, position, onClose }: Thread
             return (
               <MenuItem
                 key={workspace.path}
-                index={index}
+                index={index + 1}
                 icon={GitBranch}
                 label={workspaceLabel(workspace)}
                 checked={isCurrent}

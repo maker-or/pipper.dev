@@ -40,7 +40,12 @@ import type {
   InlineWidgetDocument,
   InlineWidgetRef,
 } from "../../contracts/acp.ts";
-import type { AgentTaskConfig, AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
+import type { SettingChangeRecord } from "../../contracts/settings.ts";
+import type {
+  AgentTaskConfig,
+  AgentTaskSnapshot,
+  ThreadProposalSnapshot,
+} from "../../contracts/agent-tasks.ts";
 import type {
   LauncherDownloadProgress,
   LauncherUpdateDiagnostics,
@@ -338,10 +343,17 @@ declare global {
         reportEditorText: (text: string) => void;
         onEvent: (callback: (payload: AcpBridgeEvent) => void) => () => void;
       };
+      settings: {
+        getChange: (id: string) => Promise<SettingChangeRecord | null>;
+        undoChange: (id: string) => Promise<SettingChangeRecord>;
+      };
       agentTasks: {
         getConfig: () => Promise<AgentTaskConfig>;
         setConfig: (partial: Partial<AgentTaskConfig>) => Promise<AgentTaskConfig>;
         list: () => Promise<AgentTaskSnapshot[]>;
+        getProposals: (ids: string[]) => Promise<ThreadProposalSnapshot[]>;
+        startProposal: (id: string) => Promise<ThreadProposalSnapshot>;
+        dismissProposal: (id: string) => Promise<ThreadProposalSnapshot>;
       };
       widgets: {
         getDocument: (

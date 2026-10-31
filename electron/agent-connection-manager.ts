@@ -52,7 +52,7 @@ import {
 import type { BrowserService } from "./browser/browser-service.ts";
 import { listMcpServers, toAcpMcpServers } from "./mcp-servers.ts";
 import { AgentTaskService, type AgentTaskHost } from "./agent-tasks/agent-task-service.ts";
-import { AgentTaskStore } from "./agent-tasks/agent-task-store.ts";
+import { AgentTaskStore, ThreadProposalStore } from "./agent-tasks/agent-task-store.ts";
 import { summarizeLastTurn } from "./agent-tasks/agent-task-receipt.ts";
 import { changedFiles, headSha } from "./agent-tasks/agent-task-git.ts";
 import { pickCallingSession, sharesMcpServersPerDirectory } from "./agent-tasks/tool-call-match.ts";
@@ -483,6 +483,7 @@ export class AgentConnectionManager {
     this.tasks = new AgentTaskService({
       host: this.agentTaskHost(),
       store: options.agentTaskStore ?? new AgentTaskStore(() => getDb()),
+      proposals: new ThreadProposalStore(() => getDb()),
       captureAnalytics: (name, properties) => this.captureAnalytics?.(name, properties),
     });
     void this.tasks.init().catch((error: unknown) => {
@@ -535,6 +536,18 @@ export class AgentConnectionManager {
 
   getAgentTasks() {
     return this.tasks.snapshots();
+  }
+
+  getThreadProposals(ids: string[]) {
+    return this.tasks.getProposals(ids);
+  }
+
+  startThreadProposal(id: string) {
+    return this.tasks.startProposal(id);
+  }
+
+  dismissThreadProposal(id: string) {
+    return this.tasks.dismissProposal(id);
   }
 
   /** The connection manager's side of the agent-task service. */
@@ -590,8 +603,14 @@ export class AgentConnectionManager {
         const runtime = this.sessions.get(threadId);
         return runtime ? summarizeLastTurn(runtime.slice) : null;
       },
+      threadSlice: (threadId) => {
+        const runtime = this.sessions.get(threadId);
+        if (runtime) return runtime.slice;
+        const thread = getThread(threadId);
+        return thread ? (this.snapshotStore.load(thread)?.slice ?? null) : null;
+      },
       hasPendingPermission: (threadId) => this.permissions.listForThread(threadId).length > 0,
-      requestApproval: async (threadId, { title, detail }) => {
+      requestApproval: async (threadId, { title, detail, once }) => {
         const sessionId =
           this.sessions.get(threadId)?.agentSessionId ?? getThread(threadId)?.agent_session_id;
         if (!sessionId) return "deny";
@@ -607,11 +626,16 @@ export class AgentConnectionManager {
             },
             options: [
               { optionId: "once", name: "Allow", kind: "allow_once" },
-              {
-                optionId: "always",
-                name: "Allow for this thread",
-                kind: "allow_always",
-              },
+              // A grant is its own decision each time.
+              ...(once
+                ? []
+                : [
+                    {
+                      optionId: "always",
+                      name: "Allow for this thread",
+                      kind: "allow_always" as const,
+                    },
+                  ]),
               { optionId: "deny", name: "Don't allow", kind: "reject_once" },
             ],
           },

@@ -26,14 +26,29 @@ interface ToolPartLike {
   outputPreview?: unknown;
 }
 
-export function threadLinkFromToolPart(part: unknown): ThreadLink | null {
+const PROPOSAL_ID =
+  /"proposal_id"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})"/i;
+
+/** A completed thread-starting call's tool name and output preview. */
+function threadToolCall(part: unknown): { name: string; output: string } | null {
   if (!part || typeof part !== "object") return null;
   const tool = part as ToolPartLike;
   if (tool.type !== "toolCall" || tool.status !== "completed") return null;
   if (typeof tool.name !== "string" || typeof tool.outputPreview !== "string") return null;
   const name = THREAD_TOOL_NAME.exec(tool.name.trim())?.[1]?.toLowerCase();
-  if (!name) return null;
-  const threadId = THREAD_ID.exec(tool.outputPreview)?.[1];
-  if (!threadId) return null;
-  return { threadId, kind: name === "create_thread" ? "thread" : "subthread" };
+  return name ? { name, output: tool.outputPreview } : null;
+}
+
+export function threadLinkFromToolPart(part: unknown): ThreadLink | null {
+  const call = threadToolCall(part);
+  const threadId = call && THREAD_ID.exec(call.output)?.[1];
+  if (!call || !threadId) return null;
+  return { threadId, kind: call.name === "create_thread" ? "thread" : "subthread" };
+}
+
+/** The proposal id from a `create_thread` call with initiation "propose". */
+export function threadProposalFromToolPart(part: unknown): string | null {
+  const call = threadToolCall(part);
+  if (call?.name !== "create_thread") return null;
+  return PROPOSAL_ID.exec(call.output)?.[1] ?? null;
 }

@@ -20,6 +20,7 @@ import { Dropdown, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
 import { ThreadTabMenu } from "@/components/thread-tab-menu";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
+import { threadsNeedingUser } from "@/lib/agent-task-tree";
 import { ProjectIcon } from "@/components/ui/icon-picker";
 import { PixelGridLoader } from "@/components/ui/pixel-grid-loader";
 import { toast } from "@/components/ui/toast";
@@ -113,6 +114,8 @@ export function GlobalTabBar() {
   const snapshot = useAgentStore((state) => state.snapshot);
   const agentError = useAgentStore((state) => state.error);
   const runningThreadIds = useAgentStore((state) => state.runningThreadIds);
+  const agentTasks = useAgentStore((state) => state.agentTasks);
+  const threadsWaitingOnUser = useMemo(() => threadsNeedingUser(agentTasks), [agentTasks]);
   const pendingThreadTarget = useAgentStore((state) => state.pendingThreadTarget);
 
   const requestedThreadId = useWorkspaceViewStore((state) => state.requestedThreadId);
@@ -763,6 +766,8 @@ export function GlobalTabBar() {
                 label={tabTitle}
                 scrollLabelOnHover
                 icon={Icon}
+                attention={threadsWaitingOnUser.has(thread.id)}
+                title={threadsWaitingOnUser.has(thread.id) ? "A subthread needs you" : undefined}
                 onClose={() => handleCloseThreadTab(thread.id)}
                 editing={isEditing}
                 editValue={isEditing ? editingThreadTitle : tabTitle}

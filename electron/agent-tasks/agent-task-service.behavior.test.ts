@@ -12,14 +12,21 @@ vi.mock("electron", () => ({
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskConfig, AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import type { Thread } from "../../contracts/threads.ts";
+import type { AcpSessionSlice } from "../../src/lib/acp-session-reducer.ts";
 import type { Worktree } from "../../contracts/worktrees.ts";
 import type { WorkspaceGitStatus } from "../../contracts/git.ts";
 import type { Confirmation } from "../operations/define.ts";
 import { ProvenanceStore, ensureProvenanceSchema } from "../operations/provenance.ts";
 import { configureWorkspaceOperations, type WorkspaceDeps } from "../operations/workspaces.ts";
 import { configureThreadOperations, type ThreadDeps } from "../operations/threads.ts";
+import {
+  configureSettingsOperations,
+  ensureSettingChangeSchema,
+  SettingChangeStore,
+} from "../operations/settings.ts";
+import type { BrowserConfig } from "../../contracts/acp.ts";
 import { pathKey } from "../worktree-manager.ts";
-import { AgentTaskStore, ensureAgentTaskSchema } from "./agent-task-store.ts";
+import { AgentTaskStore, ThreadProposalStore, ensureAgentTaskSchema } from "./agent-task-store.ts";
 import {
   AgentTaskService,
   type AgentTaskHost,
@@ -77,9 +84,11 @@ interface SentPrompt {
  */
 function makeHost() {
   const threads = new Map<string, FakeThread>();
+  const slices = new Map<string, AcpSessionSlice>();
   const sent: SentPrompt[] = [];
   const cancelled: string[] = [];
   const approvals: Array<{ threadId: string; title: string }> = [];
+  const grants: Array<{ threadId: string; title: string; detail: Record<string, unknown> }> = [];
   const workspaces: Array<{ path: string; rolledBack: boolean }> = [];
   const worktrees: Worktree[] = [
     { path: PROJECT.path, branch: "main", head: "a1", isProjectRoot: true },
@@ -192,6 +201,7 @@ function makeHost() {
     },
     isTurnInFlight: (threadId) =>
       !staleInFlight.has(threadId) && Boolean(threads.get(threadId)?.inFlight),
+    threadSlice: (threadId) => slices.get(threadId) ?? null,
     lastTurn: (threadId) => {
       const thread = threads.get(threadId);
       return thread
@@ -203,8 +213,9 @@ function makeHost() {
         : null;
     },
     hasPendingPermission: (threadId) => Boolean(threads.get(threadId)?.pendingPermission),
-    requestApproval: async (threadId, { title }) => {
-      approvals.push({ threadId, title });
+    requestApproval: async (threadId, { title, detail, once }) => {
+      if (once) grants.push({ threadId, title, detail });
+      else approvals.push({ threadId, title });
       return approvalAnswer;
     },
     requestConfirmation: (threadId, confirmation) =>
@@ -235,6 +246,7 @@ function makeHost() {
   };
   const threadDeps = (): ThreadDeps => ({
     getThread: threadRow,
+    listModels: async () => null,
     createThread: async ({ title, worktreePath, agentId }) => {
       if (createThreadError) throw createThreadError;
       const thread = addThread(
@@ -339,6 +351,7 @@ function makeHost() {
 
   return {
     host,
+    slices,
     workspaceDeps,
     threadDeps,
     reloaded,
@@ -360,6 +373,7 @@ function makeHost() {
     sent,
     cancelled,
     approvals,
+    grants,
     workspaces,
     emitted,
     addThread,
@@ -393,6 +407,7 @@ afterEach(() => {
   for (const service of services.splice(0)) service.dispose();
   configureWorkspaceOperations(null);
   configureThreadOperations(null);
+  configureSettingsOperations(null);
   vi.useRealTimers();
 });
 
@@ -400,14 +415,35 @@ async function setup(config: Partial<AgentTaskConfig> = {}) {
   const db = new DatabaseSync(":memory:");
   ensureAgentTaskSchema(db);
   ensureProvenanceSchema(db);
+  ensureSettingChangeSchema(db);
   const store = new AgentTaskStore(() => db);
   const fake = makeHost();
   configureWorkspaceOperations(fake.workspaceDeps(db));
   configureThreadOperations(fake.threadDeps());
+  const settingsState = {
+    browser: {
+      enabled: false,
+      pagesPerSession: 4,
+      idleMinutes: 5,
+      downloads: "ask",
+    } as BrowserConfig,
+  };
+  configureSettingsOperations({
+    getAgentTasks: () => service.getConfig(),
+    setAgentTasks: (partial) => service.setConfig(partial),
+    getBrowser: () => settingsState.browser,
+    setBrowser: async (partial) =>
+      (settingsState.browser = { ...settingsState.browser, ...partial }),
+    getAutoInstall: () => true,
+    setAutoInstall: () => {},
+    changes: new SettingChangeStore(() => db),
+  });
   const baseDir = await mkdtemp(join(tmpdir(), "pipper-agent-tasks-"));
+  const proposals = new ThreadProposalStore(() => db);
   const service = new AgentTaskService({
     host: fake.host,
     store,
+    proposals,
     baseDir,
     noteDelayMs: 5,
   });
@@ -521,6 +557,64 @@ describe("starting tasks", () => {
       tool_calls: { edit: 2, read: 1 },
     });
     expect(receipt.report).toContain("Found 3 call sites");
+  });
+
+  test("get_thread with messages reads another thread's conversation, a page at a time", async () => {
+    const { fake, call } = await setup();
+    const other = fake.addThread("Siri intents", PROJECT.path);
+    const entries: AcpSessionSlice["entries"] = [];
+    for (let i = 0; i < 25; i++) {
+      entries.push({ type: "user_text", id: `u${i}`, messageId: null, text: `question ${i}` });
+      entries.push({ type: "agent_thought", id: `h${i}`, messageId: null, text: "thinking" });
+      entries.push({ type: "agent_text", id: `a${i}`, messageId: null, text: `answer ` });
+      entries.push({ type: "agent_text", id: `b${i}`, messageId: null, text: `${i}` });
+      entries.push({ type: "tool_call", id: `c${i}`, toolCallId: `t${i}` });
+    }
+    const toolCalls = Object.fromEntries(
+      Array.from({ length: 25 }, (_, i) => [
+        `t${i}`,
+        { toolCallId: `t${i}`, title: "Read intents.swift", kind: "read", status: "completed" },
+      ]),
+    );
+    fake.slices.set(other.threadId, { entries, toolCalls } as unknown as AcpSessionSlice);
+
+    const newest = await call("get_thread", { thread_id: other.threadId, messages: true });
+
+    // 25 user questions, 25 joined answers and 25 tool lines; no thoughts.
+    expect(newest.conversation.total).toBe(75);
+    expect(newest.conversation.messages).toHaveLength(40);
+    expect(newest.conversation.messages.at(-1)).toEqual({
+      index: 74,
+      role: "tool",
+      text: "read: Read intents.swift",
+    });
+    expect(newest.conversation.messages.at(-2)).toMatchObject({ role: "agent", text: "answer 24" });
+    expect(newest.conversation.next_before).toBe(35);
+
+    const older = await call("get_thread", {
+      thread_id: other.threadId,
+      messages: true,
+      before: newest.conversation.next_before,
+    });
+    expect(older.conversation.messages[0]).toEqual({
+      index: 0,
+      role: "user",
+      text: "question 0",
+    });
+    expect(older.conversation.next_before).toBeNull();
+  });
+
+  test("get_thread says when a thread has no saved conversation, and omits it unless asked", async () => {
+    const { fake, call } = await setup();
+    const other = fake.addThread("Never opened", PROJECT.path);
+
+    expect(await call("get_thread", { thread_id: other.threadId })).not.toHaveProperty(
+      "conversation",
+    );
+    expect(await call("get_thread", { thread_id: other.threadId, messages: true })).toMatchObject({
+      conversation: null,
+      conversation_note: expect.stringMatching(/no saved conversation/),
+    });
   });
 
   test("get_thread shows a subthread that is still working as running, without waiting", async () => {
@@ -1038,6 +1132,7 @@ describe("restart", () => {
     const revived = new AgentTaskService({
       host: fake.host,
       store: new AgentTaskStore(() => db),
+      proposals: new ThreadProposalStore(() => db),
       baseDir: await mkdtemp(join(tmpdir(), "pipper-agent-tasks-")),
     });
     services.push(revived);
@@ -1593,6 +1688,7 @@ describe("create_thread", () => {
     const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
 
     const created = await childCall("create_thread", {
+      initiation: "user_asked",
       agent_id: "claude",
       title: "Explore the codebase",
       task: "Map the repository.",
@@ -1623,18 +1719,87 @@ describe("create_thread", () => {
     const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
 
     const refused = await childCall("create_thread", {
+      initiation: "user_asked",
       agent_id: "claude",
       title: "T",
       task: "x",
     });
 
     expect(refused.error).toMatch(/Only start a new thread when the user asked/);
+    expect(refused.error).toMatch(/initiation "propose"/);
     expect(fake.backgroundTabs).toEqual([]);
+  });
+
+  test("a proposal starts nothing until the user presses Start, then runs as theirs", async () => {
+    const { fake, call, parent, service } = await setup();
+    const proposed = await call("create_thread", {
+      initiation: "propose",
+      agent_id: "claude",
+      title: "Fix billing tests",
+      task: "Make the billing suite pass.",
+    });
+
+    expect(proposed).toMatchObject({ status: "proposed", title: "Fix billing tests" });
+    expect(proposed.thread_id).toBeUndefined();
+    expect(fake.backgroundTabs).toEqual([]);
+    const [open] = service.getProposals([proposed.proposal_id]);
+    expect(open).toMatchObject({ state: "open", workspace: PROJECT.path, threadId: null });
+
+    const started = await service.startProposal(proposed.proposal_id);
+    expect(started.state).toBe("started");
+    expect(fake.backgroundTabs).toEqual([started.threadId]);
+    const brief = fake.sent.find((p) => p.threadId === started.threadId)!;
+    expect(brief.message).toContain(
+      `[Proposed by “Build the feature” (Claude), thread_id ${parent.threadId} and started by the user.`,
+    );
+    expect(brief.message).toContain("Make the billing suite pass.");
+
+    // A second press returns the same thread.
+    expect((await service.startProposal(proposed.proposal_id)).threadId).toBe(started.threadId);
+    expect(fake.backgroundTabs).toHaveLength(1);
+  });
+
+  test("a turn another thread started may propose a thread; a dismissed one can't start", async () => {
+    const { fake, call, endpointFor, service } = await setup();
+    const started = await call("start_subthread", { agent_id: "codex", title: "Kid", task: "x" });
+    const childCall = await endpointFor(fake.threads.get(started.thread_id)!.sessionId);
+
+    const proposed = await childCall("create_thread", {
+      initiation: "propose",
+      agent_id: "claude",
+      title: "Follow-up",
+      task: "x",
+    });
+    expect(proposed.status).toBe("proposed");
+
+    expect(service.dismissProposal(proposed.proposal_id).state).toBe("dismissed");
+    expect((await service.startProposal(proposed.proposal_id)).state).toBe("dismissed");
+    expect(fake.backgroundTabs).toEqual([]);
+  });
+
+  test("a proposal nobody answered expires after a week", async () => {
+    const { call, service } = await setup();
+    const proposed = await call("create_thread", {
+      initiation: "propose",
+      agent_id: "claude",
+      title: "Old",
+      task: "x",
+    });
+    const [proposal] = service.getProposals([proposed.proposal_id]);
+    const db = (service as unknown as { proposals: { db: () => DatabaseSync } }).proposals.db();
+    db.prepare("UPDATE thread_proposals SET created_at = ? WHERE id = ?").run(
+      proposal!.createdAt - 8 * 24 * 60 * 60_000,
+      proposed.proposal_id,
+    );
+
+    expect(service.getProposals([proposed.proposal_id])[0]!.state).toBe("expired");
+    await expect(service.startProposal(proposed.proposal_id)).rejects.toThrow(/expired/);
   });
 
   test("its new workspace belongs to the user, so deleting it needs confirming", async () => {
     const { fake, call } = await setup();
     const created = await call("create_thread", {
+      initiation: "user_asked",
       agent_id: "claude",
       title: "Own branch",
       task: "x",
@@ -1712,7 +1877,7 @@ describe("an endpoint shared by a directory's sessions (OpenCode)", () => {
         method: "tools/call",
         params: {
           name: "create_thread",
-          arguments: { agent_id: "claude", title: "T", task: "x" },
+          arguments: { initiation: "user_asked", agent_id: "claude", title: "T", task: "x" },
         },
       }),
     });
@@ -1756,9 +1921,19 @@ describe("a retried thread-starting call", () => {
   test("create_thread with the same title in one turn returns the first thread", async () => {
     const { fake, parent, call } = await setup();
     fake.userTurn(parent.threadId);
-    const first = await call("create_thread", { agent_id: "codex", title: "Explore", task: "x" });
+    const first = await call("create_thread", {
+      initiation: "user_asked",
+      agent_id: "codex",
+      title: "Explore",
+      task: "x",
+    });
     // The reply was lost; the agent retries, even with another agent.
-    const retry = await call("create_thread", { agent_id: "claude", title: "Explore ", task: "x" });
+    const retry = await call("create_thread", {
+      initiation: "user_asked",
+      agent_id: "claude",
+      title: "Explore ",
+      task: "x",
+    });
 
     expect(retry).toMatchObject({ status: "already_started", thread_id: first.thread_id });
     expect(fake.backgroundTabs).toEqual([first.thread_id]);
@@ -1767,10 +1942,20 @@ describe("a retried thread-starting call", () => {
   test("a new turn may start a thread with the same title again", async () => {
     const { fake, parent, call } = await setup();
     fake.userTurn(parent.threadId);
-    const first = await call("create_thread", { agent_id: "codex", title: "Explore", task: "x" });
+    const first = await call("create_thread", {
+      initiation: "user_asked",
+      agent_id: "codex",
+      title: "Explore",
+      task: "x",
+    });
     fake.finish(parent.threadId, "Started.");
     fake.userTurn(parent.threadId);
-    const again = await call("create_thread", { agent_id: "codex", title: "Explore", task: "x" });
+    const again = await call("create_thread", {
+      initiation: "user_asked",
+      agent_id: "codex",
+      title: "Explore",
+      task: "x",
+    });
 
     expect(again.status).toBe("started");
     expect(again.thread_id).not.toBe(first.thread_id);
@@ -1784,5 +1969,56 @@ describe("a retried thread-starting call", () => {
 
     expect(retry).toMatchObject({ status: "already_started", thread_id: first.thread_id });
     expect(service.snapshots()).toHaveLength(1);
+  });
+});
+
+describe("settings tools", () => {
+  test("get_settings reads; a tightening update applies at once without a card", async () => {
+    const { fake, call, service } = await setup();
+
+    expect((await call("get_settings")).agent_tasks).toMatchObject({ start_approval: "allow" });
+    const result = await call("update_settings", { agent_tasks: { max_running_per_thread: 2 } });
+
+    expect(result).toMatchObject({
+      status: "changed",
+      change_id: expect.any(String),
+      changed: [{ setting: "agent_tasks.max_running_per_thread", from: 4, to: 2, applies: "now" }],
+    });
+    expect(service.getConfig().maxRunningPerThread).toBe(2);
+    expect(fake.grants).toEqual([]);
+  });
+
+  test("a widening update waits for a one-click grant, and applies only if allowed", async () => {
+    const { fake, parent, call, service } = await setup();
+    fake.setApproval("deny");
+
+    const declined = await call("update_settings", {
+      browser: { enabled: true },
+      agent_tasks: { max_depth: 2 },
+    });
+
+    expect(declined.error).toMatch(/didn't allow this change/);
+    expect(fake.grants).toEqual([
+      {
+        threadId: parent.threadId,
+        title: "Change Pipper settings",
+        detail: {
+          changes: ["Subthread depth: 1 level → 2 levels", "Browser for agents: off → on"],
+        },
+      },
+    ]);
+    expect(service.getConfig().maxDepth).toBe(1);
+
+    fake.setApproval("once");
+    const allowed = await call("update_settings", { browser: { enabled: true } });
+    expect(allowed.status).toBe("changed");
+    expect(allowed.next).toMatch(/apply to new threads/);
+  });
+
+  test("an update to the values already set changes nothing", async () => {
+    const { call } = await setup();
+    expect(await call("update_settings", { agent_tasks: { notify_parent: true } })).toMatchObject({
+      status: "unchanged",
+    });
   });
 });

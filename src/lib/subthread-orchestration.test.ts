@@ -5,7 +5,7 @@ import {
   isSubagentTrigger,
   newAssignment,
   validateOrchestrationDraft,
-} from "./subagent-orchestration.ts";
+} from "./subthread-orchestration.ts";
 
 const AGENTS = [
   { id: "claude-agent-acp", displayName: "Claude" },
@@ -70,7 +70,7 @@ describe("orchestration prompt", () => {
     expect(prompt).toMatch(/Do not start more than 4/);
     // The orchestrator decides the split — no fabricated assignments.
     expect(prompt).not.toContain("<assignments>");
-    // Subagents share no context: the prompt must say tasks are self-contained.
+    // Subthreads share no context: the prompt must say tasks are self-contained.
     expect(prompt).toMatch(/self-contained/i);
     expect(prompt).toMatch(/parallel/i);
   });

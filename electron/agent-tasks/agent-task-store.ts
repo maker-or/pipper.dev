@@ -3,6 +3,7 @@ import type {
   AgentTaskOutcome,
   AgentTaskStatus,
   AgentTaskWorkspaceMode,
+  ThreadProposalSnapshot,
 } from "../../contracts/agent-tasks.ts";
 import { parseNextStep, type NextStep } from "../../contracts/next-step.ts";
 
@@ -47,6 +48,21 @@ export function ensureAgentTaskSchema(db: DatabaseSync): void {
       ON agent_tasks(child_thread_id) WHERE child_thread_id IS NOT NULL;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_tasks_request_key
       ON agent_tasks(parent_thread_id, request_key) WHERE request_key IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS thread_proposals (
+      id TEXT PRIMARY KEY,
+      caller_thread_id TEXT NOT NULL,
+      project_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      task TEXT NOT NULL,
+      model TEXT,
+      workspace TEXT NOT NULL,
+      install_dependencies INTEGER NOT NULL DEFAULT 0,
+      state TEXT NOT NULL,
+      thread_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
   `);
   const columns = db.prepare("PRAGMA table_info(agent_tasks)").all() as Array<{ name: string }>;
   if (!columns.some((column) => column.name === "next_step")) {
@@ -288,6 +304,111 @@ export class AgentTaskStore {
   delete(id: string): void {
     this.db().prepare("DELETE FROM agent_tasks WHERE id = ?").run(id);
   }
+}
+
+/** Proposals nobody answered stop offering Start after this long. */
+export const PROPOSAL_TTL_MS = 7 * 24 * 60 * 60_000;
+
+interface RawProposal {
+  id: string;
+  caller_thread_id: string;
+  project_id: string;
+  agent_id: string;
+  title: string;
+  task: string;
+  model: string | null;
+  workspace: string;
+  install_dependencies: number;
+  state: string;
+  thread_id: string | null;
+  created_at: number;
+}
+
+/**
+ * Threads agents proposed for the user to start. The row is the card's
+ * state: open until the user starts or dismisses it, or a week passes.
+ */
+export class ThreadProposalStore {
+  private readonly db: () => DatabaseSync;
+
+  constructor(db: () => DatabaseSync) {
+    this.db = db;
+  }
+
+  insert(
+    proposal: Omit<ThreadProposalSnapshot, "state" | "threadId" | "createdAt">,
+    now = Date.now(),
+  ): ThreadProposalSnapshot {
+    this.db()
+      .prepare(
+        `INSERT INTO thread_proposals (id, caller_thread_id, project_id, agent_id, title, task,
+           model, workspace, install_dependencies, state, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)`,
+      )
+      .run(
+        proposal.proposalId,
+        proposal.callerThreadId,
+        proposal.projectId,
+        proposal.agentId,
+        proposal.title,
+        proposal.task,
+        proposal.model,
+        proposal.workspace,
+        proposal.installDependencies ? 1 : 0,
+        now,
+        now,
+      );
+    return this.get(proposal.proposalId, now)!;
+  }
+
+  get(id: string, now = Date.now()): ThreadProposalSnapshot | null {
+    const raw = this.db().prepare("SELECT * FROM thread_proposals WHERE id = ?").get(id) as
+      | RawProposal
+      | undefined;
+    return raw ? proposalFromRaw(raw, now) : null;
+  }
+
+  /** Move an open proposal on; false when someone answered it first. */
+  settle(id: string, state: "started" | "dismissed", threadId: string | null, now = Date.now()) {
+    const result = this.db()
+      .prepare(
+        `UPDATE thread_proposals SET state = ?, thread_id = ?, updated_at = ?
+         WHERE id = ? AND state = 'open'`,
+      )
+      .run(state, threadId, now, id);
+    return Number(result.changes) > 0;
+  }
+
+  attachThread(id: string, threadId: string, now = Date.now()): void {
+    this.db()
+      .prepare(`UPDATE thread_proposals SET thread_id = ?, updated_at = ? WHERE id = ?`)
+      .run(threadId, now, id);
+  }
+
+  /** Hand an open proposal back after a start that failed. */
+  reopen(id: string, now = Date.now()): void {
+    this.db()
+      .prepare(`UPDATE thread_proposals SET state = 'open', updated_at = ? WHERE id = ?`)
+      .run(now, id);
+  }
+}
+
+function proposalFromRaw(raw: RawProposal, now: number): ThreadProposalSnapshot {
+  const expired = raw.state === "open" && now - raw.created_at > PROPOSAL_TTL_MS;
+  return {
+    proposalId: raw.id,
+    callerThreadId: raw.caller_thread_id,
+    projectId: raw.project_id,
+    agentId: raw.agent_id,
+    title: raw.title,
+    task: raw.task,
+    model: raw.model,
+    workspace: raw.workspace,
+    installDependencies: raw.install_dependencies === 1,
+    state: expired ? "expired" : (raw.state as ThreadProposalSnapshot["state"]),
+    threadId: raw.thread_id,
+    createdAt: raw.created_at,
+  };
 }
 
 function readNextStep(json: string | null): NextStep | null {

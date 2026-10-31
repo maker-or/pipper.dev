@@ -64,3 +64,34 @@ export function taskStatusText(task: AgentTaskSnapshot): string {
   if (task.status === "idle" && task.outcome === "blocked") return "Blocked";
   return STATUS_TEXT[task.status];
 }
+
+/** The task waits on the user: a permission prompt, or a question it ended on. */
+export function taskNeedsUser(task: AgentTaskSnapshot): boolean {
+  return (
+    (task.status === "running" && task.waitingForPermission) ||
+    (task.status === "idle" && task.outcome === "needs_input")
+  );
+}
+
+/**
+ * Threads with a subthread, at any depth, waiting on the user, so a tab can
+ * show it even when the waiting thread has no tab of its own.
+ */
+export function threadsNeedingUser(tasks: AgentTaskSnapshot[]): Set<string> {
+  const parentOf = new Map<string, string>();
+  for (const task of tasks)
+    if (task.childThreadId) parentOf.set(task.childThreadId, task.parentThreadId);
+  const out = new Set<string>();
+  for (const task of tasks) {
+    if (!taskNeedsUser(task)) continue;
+    // A corrupt cycle must never loop the renderer.
+    for (
+      let id: string | undefined = task.parentThreadId;
+      id && !out.has(id);
+      id = parentOf.get(id)
+    ) {
+      out.add(id);
+    }
+  }
+  return out;
+}

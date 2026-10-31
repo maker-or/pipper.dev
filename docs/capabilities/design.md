@@ -6,8 +6,8 @@ Each of those operations is defined once and reachable from both the renderer
 (IPC) and agents (MCP). What agents do shows up through UI Pipper already has:
 nested threads, ACP plans and permission prompts, inline widgets and cards.
 
-Status: steps 1 and 2 of _Migration_ are built (`electron/operations/`), and
-part of step 3; the rest is proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
+Status: steps 1, 2 and 4 of _Migration_ are built (`electron/operations/`),
+and step 3 except the routing guide; the rest is proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
 design extends them to the rest of Pipper's own state.
 
 ## What gets a tool
@@ -702,10 +702,46 @@ if Pipper adopts Effect more broadly.
      a finished subthread only through the note Pipper adds to its thread,
      and `get_thread` shows status on demand. `start_subthread`'s
      description lists the agents.
-   - Still to come with this step: `"propose"` cards, the routing guide and
-     `model` check, the subthread UI and the `subagent-*` renames.
-     `notify_creator` waits until it proves needed.
+   - **Built:** `create_thread` takes `initiation`. `"propose"` starts
+     nothing: it stores a row in `thread_proposals` and the caller's turn
+     shows a card with **Start** and **Dismiss**. Start runs
+     `threads.create` as the user and turns the card into a link; unanswered
+     cards expire after a week. A turn another thread started may propose
+     but not start.
+   - **Built:** `model` is checked against the agent's model catalog, by id
+     or name, before any approval card; a wrong one is refused with the list.
+     An agent whose catalog Pipper hasn't seen passes its model through.
+   - **Built:** the subthread UI. The link card in the parent follows the
+     task (live status, "Has a question" with an amber ring, the recap once
+     it stops); a subthread shows a breadcrumb back to its parent; a tab
+     gets an amber dot while a subthread under it, at any depth, waits on
+     the user. The provider-logo circles in the composer replace the
+     summary strip. Subthreads still open in their own tab rather than
+     inside the parent's, and promotion isn't built.
+   - **Built:** the `subagent-*` files are `subthread-*`, and the
+     orchestrator's prompt says subthread. The `/subagent` command keeps its
+     name.
+   - **Built:** a thread tab's right-click menu has **Copy thread ID**, and
+     `get_thread` takes `messages: true` (and `before` to page back) to read
+     a thread's conversation: user and agent text plus a line per tool
+     call, newest page first, from the live session or the saved snapshot.
+   - Still to come with this step: the routing guide. `notify_creator` waits
+     until it proves needed.
 4. Settings with per-setting tiers, `get_settings` / `update_settings`.
+   - **Built:** `electron/operations/settings.ts` lists each setting agents
+     can change (agent tasks, browser, workspace auto-install) with its
+     bounds, a `widens(from, to)` test and when it applies. `define.ts` gains
+     the `grant` tier: an operation's `grant()` raises a `local` call from its
+     input, and the agent gets a one-click card (Allow / Don't allow, no
+     "for this thread"). `update_settings` waits on that card only for the
+     widening lines; values out of range are refused, not clamped.
+   - **Built:** each agent change is a row in `setting_changes`; the turn
+     shows a card listing it ("Browser for agents: on → off") with **Undo**,
+     which puts every setting in the change back as the user.
+   - Not yet: the renderer's own settings (theme, tab swipe), the routing
+     guide as a setting, connectors and remote-access state in
+     `get_settings` (steps 5 and 6). The settings window doesn't refresh
+     while open when an agent changes something.
 5. Connectors: `add_connector`, the sign-in card, session reload at turn end.
 6. Remote access: `show_remote_pairing` and the pairing card.
 7. Merge `pipper-browser` into `pipper`.

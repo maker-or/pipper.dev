@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { buildMessageBodyBlocks } from "./inline-widgets.ts";
-import { threadLinkFromToolPart } from "./thread-links.ts";
+import { threadLinkFromToolPart, threadProposalFromToolPart } from "./thread-links.ts";
 
 const ID = "2feaf268-d2eb-46e1-8516-3f3ba247f47c";
 
@@ -46,4 +46,17 @@ test("the turn's body links each started thread once, where the agent started it
     { type: "text", text: "It's running." },
   ]);
   expect(blocks.map((block) => block.kind)).toEqual(["text", "thread", "text"]);
+});
+
+test("a proposed thread becomes one proposal card; only create_thread proposes", () => {
+  const proposed = `{ "status": "proposed", "proposal_id": "${ID}", "title": "Fix billing" }`;
+  expect(threadProposalFromToolPart(toolPart("pipper-agents_create_thread", proposed))).toBe(ID);
+  expect(threadProposalFromToolPart(toolPart("start_subthread", proposed))).toBeNull();
+  expect(threadProposalFromToolPart(toolPart("create_thread", CREATED))).toBeNull();
+
+  const blocks = buildMessageBodyBlocks([
+    toolPart("create_thread", proposed),
+    toolPart("create_thread", `{ "status": "already_proposed", "proposal_id": "${ID}" }`),
+  ]);
+  expect(blocks).toEqual([{ kind: "proposal", proposalId: ID, key: `proposal:${ID}` }]);
 });

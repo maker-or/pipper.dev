@@ -3,6 +3,7 @@ import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import { NEXT_STEP_LIMITS } from "../../contracts/next-step.ts";
 import type { McpToolDefinition } from "../mcp/mcp-http-server.ts";
 import { toolInputSchema } from "../operations/define.ts";
+import { SETTINGS_UPDATE_INPUT } from "../operations/settings.ts";
 
 export const AGENT_TASK_SERVER_NAME = "pipper-agents";
 
@@ -22,10 +23,11 @@ export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "- A subthread shares none of your context. Its brief must say everything: goal, relevant paths, constraints, and what you expect back. Use done_when for checks that define success.",
   '- workspace: "shared" (default) works in your folder; use it for reading, research and small edits. Use "new" when subthreads change files in parallel, so each gets its own worktree and branch.',
   "- A receipt's report comes from the subthread; files_changed and tool_calls come from Pipper. Check the facts before relying on the report.",
-  "- create_thread starts a top-level thread the user owns, in its own tab. It isn't nested, has no depth limit and doesn't report back, so don't wait for it; tell the user it started.",
+  '- create_thread starts a top-level thread the user owns, in its own tab. It isn\'t nested, has no depth limit and doesn\'t report back, so don\'t wait for it; tell the user it started. initiation "user_asked" only when the user asked for it in words; otherwise "propose": nothing runs until the user presses Start on the card Pipper shows.',
   "- message_thread talks to any thread: a subthread you started, the thread that started you, or another thread in list_threads. Pipper states who sent it. It never waits for a reply; the reply arrives as a message.",
   "- move_thread moves your own thread (or one you started) to another workspace from its next turn.",
   "- Don't start a subthread for something you can do in a few tool calls yourself.",
+  "- update_settings changes Pipper's settings only when the user asks for it. Never widen what agents can do on your own initiative.",
 ].join("\n");
 
 export const WRAP_UP_TOOL: McpToolDefinition = {
@@ -132,7 +134,8 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
           },
           model: {
             type: "string",
-            description: "Optional model id inside the agent.",
+            description:
+              "Optional model id inside the agent. Leave it out for the agent's default; a model the agent doesn't offer is refused with the list.",
           },
           request_key: {
             type: "string",
@@ -147,12 +150,13 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
     {
       name: "create_thread",
       description:
-        "Start a new top-level thread for the user: its own tab (opened in the background), " +
-        "owned by the user, not nested under yours and not reporting back to you. Use it only " +
-        "when the user asked you, in words, for a separate thread, or for work that stands on " +
-        "its own (its own branch or PR, something they'll open and steer themselves). For a " +
-        "piece of your own job, use start_subthread. The thread sees only your brief. Returns " +
-        "at once.\n\nAvailable agents:\n" +
+        "Start or propose a new top-level thread for the user: its own tab (opened in the " +
+        "background), owned by the user, not nested under yours and not reporting back to you. " +
+        "For work that stands on its own (its own branch or PR, something they'll open and " +
+        'steer themselves). initiation "user_asked" when the user asked for it in words; ' +
+        'otherwise "propose", and the user decides. For a piece of your own job, use ' +
+        "start_subthread. The thread sees only your brief. Returns at once.\n\n" +
+        "Available agents:\n" +
         catalog,
       inputSchema: toolInputSchema(CREATE_THREAD_INPUT),
     },
@@ -160,7 +164,9 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
       name: "get_thread",
       description:
         "Any thread's status, last turn and wrap_up, with its parent and children. For a " +
-        "subthread you started, the receipt: outcome, report and the facts Pipper saw. Never waits.",
+        "subthread you started, the receipt: outcome, report and the facts Pipper saw. " +
+        "messages: true adds the conversation a page at a time, for when the user asks you to " +
+        "look at another thread. Never waits.",
       inputSchema: toolInputSchema(GET_THREAD_INPUT),
     },
     {
@@ -228,8 +234,27 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
         "root or the workspace your own thread runs in.",
       inputSchema: toolInputSchema(DELETE_WORKSPACE_INPUT),
     },
+    {
+      name: "get_settings",
+      description:
+        "Pipper's settings that agents can change, grouped by area: agent_tasks (subthreads " +
+        "and these tools), browser (browser tools for agents) and workspaces.",
+      inputSchema: toolInputSchema(GET_SETTINGS_INPUT),
+    },
+    {
+      name: "update_settings",
+      description:
+        "Change Pipper settings when the user asks: a partial object in get_settings' shape. " +
+        "A change that widens what agents can do (turning tools on, raising a limit, " +
+        "allowing without asking) waits for the user to allow it in a card; anything else " +
+        "applies at once. Pipper shows the change in your thread with an undo. Turning tools " +
+        "on or off applies to new threads.",
+      inputSchema: toolInputSchema(SETTINGS_UPDATE_INPUT),
+    },
   ];
 }
+
+export const GET_SETTINGS_INPUT = z.strictObject({});
 
 const PROJECT_INPUT = z
   .string()
@@ -248,6 +273,12 @@ export const CREATE_WORKSPACE_INPUT = z.strictObject({
 const THREAD_ID = z.string().min(1).describe("A thread_id from list_threads or get_thread.");
 
 export const CREATE_THREAD_INPUT = z.strictObject({
+  initiation: z
+    .enum(["user_asked", "propose"])
+    .describe(
+      '"user_asked" starts it now: only when the user asked for a new thread in their own ' +
+        'words. "propose" starts nothing; the user gets a card to start or dismiss it.',
+    ),
   agent_id: z.string().min(1).describe("Which agent runs the thread."),
   title: z.string().trim().min(1).describe("Short thread title, under 60 characters."),
   task: z
@@ -264,12 +295,33 @@ export const CREATE_THREAD_INPUT = z.strictObject({
         "path from list_workspaces.",
     ),
   install_dependencies: z.boolean().optional().describe('With workspace "new". Default false.'),
-  model: z.string().min(1).optional().describe("Optional model id inside the agent."),
+  model: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Optional model id inside the agent. Leave it out for the agent's default; a model the agent doesn't offer is refused with the list.",
+    ),
 });
 
 export const THREAD_ID_INPUT = z.strictObject({ thread_id: THREAD_ID });
 
-export const GET_THREAD_INPUT = THREAD_ID_INPUT;
+export const GET_THREAD_INPUT = z.strictObject({
+  thread_id: THREAD_ID,
+  messages: z
+    .boolean()
+    .optional()
+    .describe(
+      "true: also return the conversation, newest page first: the user's and agent's " +
+        "messages and a line per tool call.",
+    ),
+  before: z
+    .number()
+    .int()
+    .min(0)
+    .optional()
+    .describe("With messages: the page before this index. Pass the last page's next_before."),
+});
 
 export const LIST_THREADS_INPUT = z.strictObject({
   scope: z

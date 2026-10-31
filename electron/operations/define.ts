@@ -7,7 +7,7 @@ import { z } from "zod";
  * gated. See docs/capabilities/design.md.
  */
 
-export type OperationTier = "read" | "local" | "destructive";
+export type OperationTier = "read" | "local" | "grant" | "destructive";
 
 export type Caller = { kind: "user" } | { kind: "agent"; threadId: string };
 
@@ -30,6 +30,18 @@ export interface Confirmation {
   measures: Record<string, number>;
 }
 
+/**
+ * What the one-click card shows for a `grant` call: a change that widens what
+ * agents can do. Each grant is its own decision; there's no "allow for this
+ * thread".
+ */
+export interface Grant {
+  /** "Change Pipper settings". */
+  title: string;
+  /** One line per widening change, written by Pipper: "Browser for agents: off → on". */
+  changes: string[];
+}
+
 export interface Operation<I, O> {
   id: string;
   tier: OperationTier;
@@ -43,6 +55,11 @@ export interface Operation<I, O> {
   owned?: (input: I, ctx: AgentContext) => Promise<boolean>;
   /** Destructive agent calls on what the caller doesn't own: the card. */
   describe?: (input: I, ctx: AgentContext) => Promise<Confirmation>;
+  /**
+   * Agent calls only: raises a `local` call to `grant` from its input. The
+   * card to show, or null when nothing in the input widens anything.
+   */
+  grant?: (input: I, ctx: AgentContext) => Promise<Grant | null>;
   run: (input: I, ctx: OperationContext) => Promise<O>;
 }
 
@@ -86,12 +103,15 @@ export async function runAsUser<I, O>(operation: Operation<I, O>, raw: unknown):
 
 export type AgentCallOutcome<O> =
   | { status: "done"; result: O }
-  | { status: "needs_confirmation"; input: unknown; confirmation: Confirmation };
+  | { status: "needs_confirmation"; input: unknown; confirmation: Confirmation }
+  | { status: "needs_grant"; input: unknown; grant: Grant };
 
 /**
- * An agent's call. `read` and `local` run. `destructive` runs when the caller
- * owns everything it would destroy; otherwise it returns the card to show,
- * and the caller of this function asks the user (see AgentTaskService).
+ * An agent's call. `read` and `local` run. `grant`, or a `local` call whose
+ * input widens something, returns the one-click card to show. `destructive`
+ * runs when the caller owns everything it would destroy; otherwise it returns
+ * the hold-to-confirm card. The caller of this function asks the user (see
+ * AgentTaskService) and then calls `operation.run` itself.
  */
 export async function callAsAgent<I, O>(
   operation: Operation<I, O>,
@@ -101,6 +121,12 @@ export async function callAsAgent<I, O>(
   const input = parseInput(operation, raw);
   const forbidden = await operation.forbid?.(input, ctx);
   if (forbidden) throw new OperationInputError(forbidden);
+  const grant =
+    operation.tier === "grant" || operation.tier === "local"
+      ? ((await operation.grant?.(input, ctx)) ??
+        (operation.tier === "grant" ? { title: operation.id, changes: [] } : null))
+      : null;
+  if (grant) return { status: "needs_grant", input, grant };
   if (operation.tier === "destructive" && !(await operation.owned?.(input, ctx))) {
     if (!operation.describe) {
       throw new Error(`${operation.id} is destructive but has no confirmation to show`);

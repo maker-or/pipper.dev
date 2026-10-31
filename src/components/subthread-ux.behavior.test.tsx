@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
-import { SubagentComposer } from "@/components/subagent-composer";
+import { SubthreadComposer } from "@/components/subthread-composer";
 import { AgentTaskOrigin, SubthreadOrbs } from "@/components/agent-task-activity";
 
 function agent(id: string, displayName: string, available = true): AcpAgentDescriptor {
@@ -54,10 +54,10 @@ function task(
 
 const noop = () => {};
 
-describe("SubagentComposer", () => {
+describe("SubthreadComposer", () => {
   test("offers only installed agents as orchestrators and blocks submit until a goal exists", () => {
     const html = renderToStaticMarkup(
-      <SubagentComposer
+      <SubthreadComposer
         agents={AGENTS}
         defaultOrchestratorId="codex-acp"
         onSubmit={() => {}}
@@ -72,14 +72,14 @@ describe("SubagentComposer", () => {
     // Not installed → not offered.
     expect(html).not.toContain("Gemini");
     // Auto mode is the default, and an empty goal blocks submission.
-    expect(html).toContain("The orchestrator splits the goal across this many subagents.");
+    expect(html).toContain("The orchestrator splits the goal across this many subthreads.");
     expect(html).toMatch(/What should the orchestrator achieve/);
     expect(submitButtonTag(html)).toContain('disabled=""');
   });
 
   test("a seeded goal (from “/subagent <text>”) makes the draft immediately submittable", () => {
     const html = renderToStaticMarkup(
-      <SubagentComposer
+      <SubthreadComposer
         agents={AGENTS}
         defaultOrchestratorId={null}
         initialGoal="fix the login flow"
@@ -163,16 +163,42 @@ describe("SubthreadOrbs", () => {
 });
 
 describe("AgentTaskOrigin", () => {
-  test("shows only in a task's own thread, with its status and a way back", () => {
+  const titles = (id: string) => (id === "parent" ? "Build auth" : null);
+
+  test("in a subthread: a breadcrumb from the parent's title to the task, with its status", () => {
     const tasks = [task("t1", "idle", { outcome: "needs_input" })];
     const inChild = renderToStaticMarkup(
-      <AgentTaskOrigin tasks={tasks} threadId="child-t1" onOpenThread={noop} />,
+      <AgentTaskOrigin
+        tasks={tasks}
+        threadId="child-t1"
+        threadTitle={titles}
+        onOpenThread={noop}
+      />,
     );
-    expect(inChild).toContain("Task started by another agent");
+    expect(inChild).toContain('title="Back to Build auth"');
+    expect(inChild).toContain("task for t1");
     expect(inChild).toContain("Has a question");
-    expect(inChild).toContain("Open parent thread");
     expect(
-      renderToStaticMarkup(<AgentTaskOrigin tasks={tasks} threadId="parent" onOpenThread={noop} />),
+      renderToStaticMarkup(
+        <AgentTaskOrigin
+          tasks={tasks}
+          threadId="parent"
+          threadTitle={titles}
+          onOpenThread={noop}
+        />,
+      ),
     ).toBe("");
+  });
+
+  test("a parent Pipper hasn't loaded reads as the parent thread", () => {
+    const html = renderToStaticMarkup(
+      <AgentTaskOrigin
+        tasks={[task("t1", "running")]}
+        threadId="child-t1"
+        threadTitle={() => null}
+        onOpenThread={noop}
+      />,
+    );
+    expect(html).toContain("Back to Parent thread");
   });
 });

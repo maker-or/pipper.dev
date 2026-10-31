@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { ensureThreadSnapshotSchema } from "./thread-snapshot-schema.ts";
 import { ensureAgentTaskSchema } from "./agent-tasks/agent-task-store.ts";
 import { ensureProvenanceSchema } from "./operations/provenance.ts";
+import { ensureSettingChangeSchema } from "./operations/settings.ts";
 
 let db: DatabaseSync | null = null;
 
@@ -218,6 +219,8 @@ export function getDb(): DatabaseSync {
   ensureAgentTaskSchema(db);
   // Which thread created which resource (see electron/operations/provenance.ts).
   ensureProvenanceSchema(db);
+  // Settings changes agents made (see electron/operations/settings.ts).
+  ensureSettingChangeSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_agent_selections (

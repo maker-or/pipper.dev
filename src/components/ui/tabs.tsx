@@ -370,6 +370,8 @@ interface TabItemProps extends ComponentPropsWithoutRef<typeof TabsPrimitive.Tab
    * still named for hover and assistive tech.
    */
   iconOnly?: boolean;
+  /** An amber dot on the icon: something in this tab waits on the user. */
+  attention?: boolean;
   /** @internal Auto-assigned by TabsList. */
   _index?: number;
 }
@@ -388,6 +390,7 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
       onEditCancel,
       scrollLabelOnHover = false,
       iconOnly = false,
+      attention = false,
       _index = 0,
       className,
       ...props
@@ -477,14 +480,23 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
         {...props}
       >
         {Icon && (
-          <Icon
-            size={16}
-            strokeWidth={isActive ? 2 : 1.5}
-            className={cn(
-              "transition-[color,stroke-width] duration-80",
-              isActive ? "text-foreground" : "text-muted-foreground",
+          <span className="relative flex shrink-0">
+            <Icon
+              size={16}
+              strokeWidth={isActive ? 2 : 1.5}
+              className={cn(
+                "transition-[color,stroke-width] duration-80",
+                isActive ? "text-foreground" : "text-muted-foreground",
+              )}
+            />
+            {attention && (
+              <span
+                data-pipper-id="tab-attention"
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-amber-500 ring-1 ring-background"
+              />
             )}
-          />
+          </span>
         )}
         {iconOnly && !editing ? null : editing ? (
           <input

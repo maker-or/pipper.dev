@@ -3,14 +3,14 @@ import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 /**
  * Client-side `/subagent` composer logic: the draft the morphed composer
  * edits, its validation, and the single orchestration prompt composed for
- * the orchestrator thread on submit. The orchestrator starts each subagent
+ * the orchestrator thread on submit. The orchestrator starts each subthread
  * as a task thread through the client-hosted `pipper-agents` MCP tools
- * (docs/agent-tasks/design.md); nothing here talks to subagents directly.
+ * (docs/agent-tasks/design.md); nothing here talks to subthreads directly.
  */
 
 export const SUBAGENT_COMMAND = "subagent";
 
-export interface SubagentAssignment {
+export interface SubthreadAssignment {
   /** Stable row key for the composer UI. */
   id: string;
   agentId: string;
@@ -22,12 +22,12 @@ export interface OrchestrationDraft {
   mode: "auto" | "manual";
   /** The overall goal (required in auto mode, optional in manual). */
   goal: string;
-  assignments: SubagentAssignment[];
+  assignments: SubthreadAssignment[];
 }
 
 let assignmentCounter = 0;
 
-export function newAssignment(agentId = ""): SubagentAssignment {
+export function newAssignment(agentId = ""): SubthreadAssignment {
   assignmentCounter += 1;
   return { id: `assignment-${assignmentCounter}`, agentId, task: "" };
 }
@@ -49,7 +49,7 @@ export function validateOrchestrationDraft(draft: OrchestrationDraft): string | 
     return null;
   }
   const filled = draft.assignments.filter((a) => a.task.trim());
-  if (filled.length === 0) return "Add at least one subagent task.";
+  if (filled.length === 0) return "Add at least one subthread task.";
   const missingAgent = filled.find((a) => !a.agentId);
   if (missingAgent) return "Pick an agent for every task.";
   return null;
@@ -68,7 +68,7 @@ const ORCHESTRATOR_PREAMBLE =
   "coding agents in subthreads: `start_subthread` opens a thread for one agent and returns at once, " +
   "and its description lists the agents available. When a subthread stops, Pipper adds a note " +
   "to your thread with its receipt, so start them all, then end your turn and pick up from the notes. " +
-  "Subagents share none of your context, so every brief must be fully self-contained: " +
+  "Subthreads share none of your context, so every brief must be fully self-contained: " +
   "include the background, relevant file paths, constraints, and the exact output you " +
   'expect back. Give tasks that change files in parallel `workspace: "new"` so each gets ' +
   "its own worktree.";
@@ -91,10 +91,10 @@ export function composeOrchestrationPrompt(
   if (draft.mode === "auto") {
     const split =
       parallelCap != null
-        ? `Decide how to split the goal below into at most ${parallelCap} subagent task${parallelCap === 1 ? "" : "s"}: ` +
-          `start up to ${parallelCap} subagent${parallelCap === 1 ? "" : "s"} ` +
+        ? `Decide how to split the goal below into at most ${parallelCap} subthread task${parallelCap === 1 ? "" : "s"}: ` +
+          `start up to ${parallelCap} subthread${parallelCap === 1 ? "" : "s"} ` +
           `(running independent tasks in parallel). Do not start more than ${parallelCap}. `
-        : "Decide how to split the goal below into subagent tasks: start as many subagents as " +
+        : "Decide how to split the goal below into subthread tasks: start as many subthreads as " +
           "genuinely help (running independent tasks in parallel), ";
     return [
       ORCHESTRATOR_PREAMBLE,
@@ -113,9 +113,9 @@ export function composeOrchestrationPrompt(
 
   return [
     ORCHESTRATOR_PREAMBLE,
-    "The user assigned the following subagents. Start each with start_subthread, using the " +
+    "The user assigned the following subthreads. Start each with start_subthread, using the " +
       "listed agent_id, and run independent tasks in parallel. Enrich each brief with any " +
-      "context the subagent will need before delegating it.",
+      "context the subthread will need before delegating it.",
     `<assignments>\n${taskList}\n</assignments>`,
     goal ? `<goal>\n${goal}\n</goal>` : null,
     "When every receipt has arrived in a note, verify the results against the facts in each " +

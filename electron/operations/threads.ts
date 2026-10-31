@@ -31,6 +31,8 @@ export interface ThreadDeps {
     after: string | null;
     background: boolean;
   }): Promise<Thread>;
+  /** The agent's models as Pipper last saw them, or null when it hasn't yet. */
+  listModels(agentId: string): Promise<Array<{ modelId: string; name: string }> | null>;
   getProject(id: string): Project | null;
   listWorktrees(projectPath: string): Promise<Worktree[]>;
   threadTitle(id: string): string | null;
@@ -102,6 +104,34 @@ export function workspaceNameFor(title: string | null): string {
   return `${slug || "thread"}-${randomBytes(2).toString("hex")}`;
 }
 
+/**
+ * The model id for `model` in the agent's catalog, matched by id, then by id
+ * or name ignoring case. An agent without a known catalog can't be checked,
+ * so its model passes through; the agent reports it if it's wrong.
+ */
+export async function resolveModel(
+  agentId: string,
+  model: string | null | undefined,
+): Promise<string | null> {
+  const wanted = model?.trim();
+  if (!wanted) return null;
+  const models = await requireDeps().listModels(agentId);
+  if (!models?.length) return wanted;
+  const lower = wanted.toLowerCase();
+  const match =
+    models.find((candidate) => candidate.modelId === wanted) ??
+    models.find(
+      (candidate) =>
+        candidate.modelId.toLowerCase() === lower || candidate.name.toLowerCase() === lower,
+    );
+  if (match) return match.modelId;
+  const shown = models.slice(0, 20).map((candidate) => candidate.modelId);
+  throw new OperationInputError(
+    `${agentId} has no model "${wanted}". Available: ${shown.join(", ")}` +
+      `${models.length > shown.length ? ", …" : ""}. Leave model out for the agent's default.`,
+  );
+}
+
 export interface CreatedThread {
   thread: Thread;
   /** The directory the thread runs in. */
@@ -136,6 +166,11 @@ export const createThread = defineOperation({
     const project = d.getProject(input.project);
     if (!project) throw new OperationInputError(`Project not found: ${input.project}`);
     const title = input.title?.trim() || null;
+    // The UI's pickers only offer catalog models; an agent may guess.
+    const model =
+      ctx.caller.kind === "agent" && input.agent
+        ? await resolveModel(input.agent, input.model)
+        : input.model || null;
 
     let worktreePath: string | null = null;
     let created: Awaited<ReturnType<typeof createWorkspace.run>> | null = null;
@@ -174,7 +209,7 @@ export const createThread = defineOperation({
         agentId: input.agent || null,
         title,
         worktreePath,
-        model: input.model || null,
+        model,
         after: input.after || null,
         background: input.activation === "background",
       });

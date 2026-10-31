@@ -1,5 +1,5 @@
 import type { AvailableCommand } from "@agentclientprotocol/sdk";
-import { SUBAGENT_COMMAND } from "./subagent-orchestration";
+import { SUBAGENT_COMMAND } from "./subthread-orchestration";
 
 export interface AgentCommand {
   name: string;
@@ -15,7 +15,7 @@ export const CONTINUE_COMMAND = "continue";
 export const CLIENT_COMMANDS: AgentCommand[] = [
   {
     name: SUBAGENT_COMMAND,
-    description: "Orchestrate subagents across your installed agents",
+    description: "Orchestrate subthreads across your installed agents",
     inputHint: null,
     source: "client",
   },

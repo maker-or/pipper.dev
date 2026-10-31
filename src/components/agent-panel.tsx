@@ -51,6 +51,8 @@ import { invalidateProjectFiles, useProjectFileIndex } from "@/lib/project-file-
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { InlineWidget } from "@/components/inline-widget";
 import { ThreadLinkCard } from "@/components/thread-link-card";
+import { ThreadProposalCard } from "@/components/thread-proposal-card";
+import { SettingsChangeCard } from "@/components/settings-change-card";
 import { buildMessageBodyBlocks, type MessageBodyBlock } from "@/lib/inline-widgets";
 import { AssistantTraceDeck } from "@/components/ui/assistant-trace-deck";
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator";
@@ -83,8 +85,8 @@ import {
   type ChatImageAttachment,
 } from "@/lib/agent-message-images";
 import { CONTINUE_COMMAND, matchAgentCommands, mergeAgentCommands } from "@/lib/agent-commands";
-import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subagent-orchestration";
-import { SubagentComposer, type SubagentComposerSubmit } from "@/components/subagent-composer";
+import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subthread-orchestration";
+import { SubthreadComposer, type SubthreadComposerSubmit } from "@/components/subthread-composer";
 import { AgentTaskOrigin, SubthreadOrbs } from "@/components/agent-task-activity";
 import { DiffSummaryCard } from "@/components/diff-summary-card";
 import { NextStepCard } from "@/components/next-step-card";
@@ -597,6 +599,10 @@ function MessageBody({
             <InlineWidget key={block.key} widgetRef={block.ref} threadId={threadId} />
           ) : block.kind === "thread" ? (
             <ThreadLinkCard key={block.key} link={block.link} />
+          ) : block.kind === "proposal" ? (
+            <ThreadProposalCard key={block.key} proposalId={block.proposalId} />
+          ) : block.kind === "settings" ? (
+            <SettingsChangeCard key={block.key} changeId={block.changeId} />
           ) : (
             <div
               key={`text-${index}`}
@@ -2121,7 +2127,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   const handleOrchestrationSubmit = async ({
     prompt,
     orchestratorAgentId,
-  }: SubagentComposerSubmit) => {
+  }: SubthreadComposerSubmit) => {
     setIsSubmitting(true);
     try {
       // The orchestrator runs in a thread owned by its agent. Reuse the
@@ -2130,10 +2136,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       const needsNewThread = !threadId || orchestratorAgentId !== (snapshot?.agentId ?? null);
       if (needsNewThread) {
         const projectId = activeProject?.id;
-        if (!projectId) throw new Error("Open a project before orchestrating subagents.");
+        if (!projectId) throw new Error("Open a project before orchestrating subthreads.");
         const count = threads.filter((thread) => thread.project_id === projectId).length + 1;
         // Orchestration threads bind to the current workspace like any other
-        // thread, so the orchestrator (and its subagents, which inherit the
+        // thread, so the orchestrator (and its subthreads, which inherit the
         // session cwd) runs in the tree the user is looking at.
         const worktreePath = normalizeWorkspacePath(
           useWorktreeStore.getState().selectedWorktreePathByProject[projectId],
@@ -2800,6 +2806,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                       <AgentTaskOrigin
                         tasks={agentTasks}
                         threadId={threadId || null}
+                        threadTitle={(id) =>
+                          threads.find((thread) => thread.id === id)?.title ?? null
+                        }
                         onOpenThread={(parentThreadId) => void selectThread(parentThreadId)}
                         className="relative z-10 mb-1"
                       />
@@ -2834,7 +2843,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                       ) : inlineRequest ? (
                         <AgentQuestionCard request={inlineRequest} className="relative z-10" />
                       ) : orchestrationOpen ? (
-                        <SubagentComposer
+                        <SubthreadComposer
                           className="relative z-10"
                           agents={registryAgents}
                           defaultOrchestratorId={snapshot?.agentId ?? null}

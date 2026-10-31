@@ -22,22 +22,22 @@ import {
   newAssignment,
   validateOrchestrationDraft,
   type OrchestrationDraft,
-} from "@/lib/subagent-orchestration";
+} from "@/lib/subthread-orchestration";
 
-export interface SubagentComposerSubmit {
+export interface SubthreadComposerSubmit {
   prompt: string;
   orchestratorAgentId: string;
   draft: OrchestrationDraft;
 }
 
-interface SubagentComposerProps {
+interface SubthreadComposerProps {
   /** Installed agents (unavailable ones are filtered out here). */
   agents: AcpAgentDescriptor[];
   /** Preselected orchestrator — usually the active thread's agent. */
   defaultOrchestratorId: string | null;
   /** Seeds the goal, e.g. the remainder of "/subagent fix the login flow". */
   initialGoal?: string;
-  onSubmit: (payload: SubagentComposerSubmit) => void;
+  onSubmit: (payload: SubthreadComposerSubmit) => void;
   onCancel: () => void;
   isSubmitting?: boolean;
   className?: string;
@@ -84,7 +84,7 @@ function AgentTabs({
   );
 }
 
-/** Numbered strip for how many subagents may run at once. */
+/** Numbered strip for how many subthreads may run at once. */
 function ParallelTabs({ value, onChange }: { value: number; onChange: (count: number) => void }) {
   return (
     <Tabs
@@ -95,7 +95,7 @@ function ParallelTabs({ value, onChange }: { value: number; onChange: (count: nu
         onChange(count);
       }}
     >
-      <TabsList aria-label="Max parallel subagents">
+      <TabsList aria-label="Max parallel subthreads">
         {PARALLEL_COUNTS.map((count) => (
           <TabItem
             key={count}
@@ -113,10 +113,10 @@ function ParallelTabs({ value, onChange }: { value: number; onChange: (count: nu
  * The composer, morphed into orchestration mode by `/subagent`: pick an
  * orchestrator, describe a goal (auto) or assign per-agent tasks (manual),
  * and submit one orchestration prompt to the orchestrator's thread. The
- * orchestrator starts each subagent as a task thread through the
+ * orchestrator starts each subthread as a task thread through the
  * client-hosted `pipper-agents` tools (docs/agent-tasks/design.md).
  */
-export function SubagentComposer({
+export function SubthreadComposer({
   agents,
   defaultOrchestratorId,
   initialGoal,
@@ -124,7 +124,7 @@ export function SubagentComposer({
   onCancel,
   isSubmitting = false,
   className,
-}: SubagentComposerProps) {
+}: SubthreadComposerProps) {
   const shape = useShape();
   const prefersReducedMotion = useReducedMotion();
   const installed = useMemo(() => agents.filter((a) => a.available !== false), [agents]);
@@ -151,7 +151,7 @@ export function SubagentComposer({
   }, []);
 
   // Agents the user allows as tasks (agent-tasks.json); orchestrator can be anyone.
-  const subagentChoices = useMemo(() => {
+  const subthreadChoices = useMemo(() => {
     if (!config || config.allowedAgents === "all") return installed;
     const allowed = new Set(config.allowedAgents);
     return installed.filter((a) => allowed.has(a.id));
@@ -211,7 +211,7 @@ export function SubagentComposer({
     <Elevated
       offset={1}
       shadowLevel={2}
-      data-pipper-id="subagent-composer"
+      data-pipper-id="subthread-composer"
       onKeyDown={handleKeyDown}
       className={cn("flex flex-col gap-2.5 p-2.5", shape.container, className)}
     >
@@ -222,7 +222,7 @@ export function SubagentComposer({
             className="text-[12px] text-foreground"
             style={{ fontVariationSettings: fontWeights.medium }}
           >
-            Orchestrate subagents
+            Orchestrate subthreads
           </span>
         </div>
         <Button
@@ -255,8 +255,8 @@ export function SubagentComposer({
         </Tabs>
         <span className="min-w-0 text-[11px] leading-4 text-muted-foreground">
           {draft.mode === "auto"
-            ? "The orchestrator splits the goal across this many subagents."
-            : "Assign each subagent its own task."}
+            ? "The orchestrator splits the goal across this many subthreads."
+            : "Assign each subthread its own task."}
         </span>
       </div>
 
@@ -269,8 +269,8 @@ export function SubagentComposer({
           />
           <span className="min-w-0 text-[11px] leading-4 text-muted-foreground">
             {draft.mode === "auto"
-              ? "How many subagents auto mode may spawn."
-              : "How many assigned subagents may run at once."}
+              ? "How many subthreads auto mode may spawn."
+              : "How many assigned subthreads may run at once."}
           </span>
         </div>
       )}
@@ -294,7 +294,7 @@ export function SubagentComposer({
                 <Elevated
                   key={assignment.id}
                   offset={1}
-                  data-pipper-id="subagent-assignment"
+                  data-pipper-id="subthread-assignment"
                   className={cn("flex flex-col gap-1.5 p-2", shape.item)}
                 >
                   <div className="flex items-center justify-between gap-2">
@@ -303,10 +303,10 @@ export function SubagentComposer({
                         {index + 1}
                       </span>
                       <AgentTabs
-                        agents={subagentChoices}
+                        agents={subthreadChoices}
                         selectedId={assignment.agentId}
                         onSelect={(agentId) => setAssignment(assignment.id, { agentId })}
-                        aria-label={`Subagent ${index + 1} agent`}
+                        aria-label={`Subthread ${index + 1} agent`}
                       />
                     </div>
                     {draft.assignments.length > 1 && (
@@ -314,7 +314,7 @@ export function SubagentComposer({
                         type="button"
                         variant="ghost"
                         size="icon-sm"
-                        aria-label={`Remove subagent ${index + 1}`}
+                        aria-label={`Remove subthread ${index + 1}`}
                         onClick={() =>
                           setDraft((current) => ({
                             ...current,
@@ -329,9 +329,9 @@ export function SubagentComposer({
                   <textarea
                     value={assignment.task}
                     onChange={(event) => setAssignment(assignment.id, { task: event.target.value })}
-                    placeholder={`Task for subagent ${index + 1}…`}
+                    placeholder={`Task for subthread ${index + 1}…`}
                     rows={2}
-                    aria-label={`Subagent ${index + 1} task`}
+                    aria-label={`Subthread ${index + 1} task`}
                     className={cn(textareaClasses, "px-1")}
                   />
                 </Elevated>
@@ -349,7 +349,7 @@ export function SubagentComposer({
                 }
               >
                 <Plus size={13} />
-                Add subagent
+                Add subthread
               </Button>
             </div>
           </motion.div>
@@ -370,7 +370,7 @@ export function SubagentComposer({
         }}
         placeholder={
           draft.mode === "auto"
-            ? "What should the orchestrator achieve? It will split the work across subagents."
+            ? "What should the orchestrator achieve? It will split the work across subthreads."
             : "Overall goal for synthesis (optional)…"
         }
         rows={draft.mode === "auto" ? 3 : 2}

@@ -4,11 +4,13 @@ import { app } from "electron";
 import type * as acp from "@agentclientprotocol/sdk";
 import type { AgentCapabilities } from "@agentclientprotocol/sdk";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
+import type { AcpSessionSlice } from "../../src/lib/acp-session-reducer.ts";
 import { parseNextStep, type NextStep } from "../../contracts/next-step.ts";
 import {
   callAsAgent,
   confirmationGrew,
   parseWith,
+  runAsUser,
   type AgentContext,
   type Confirmation,
   type Operation,
@@ -19,9 +21,15 @@ import {
   deleteThread as deleteThreadOperation,
   moveThread as moveThreadOperation,
   onThreadMoved,
+  resolveModel,
   workspaceNameFor,
   type CreatedThread,
 } from "../operations/threads.ts";
+import {
+  getSettings,
+  updateSettings as updateSettingsOperation,
+  type SettingsUpdateResult,
+} from "../operations/settings.ts";
 import {
   createWorkspace as createWorkspaceOperation,
   deleteWorkspace as deleteWorkspaceOperation,
@@ -34,6 +42,7 @@ import type {
   AgentTaskOutcome,
   AgentTaskSnapshot,
   AgentTaskWorkspaceMode,
+  ThreadProposalSnapshot,
 } from "../../contracts/agent-tasks.ts";
 import { McpHttpServer, type McpEndpoint, type McpToolResult } from "../mcp/mcp-http-server.ts";
 import { ensureStdioProxyScript } from "../mcp/stdio-proxy.ts";
@@ -48,12 +57,14 @@ import {
   clip,
   composeBrief,
   composeParentNote,
+  conversationMessages,
   isActive,
   isSettled,
+  pageConversation,
   parseOutcome,
   type TurnSummary,
 } from "./agent-task-receipt.ts";
-import type { AgentTaskRow, AgentTaskStore } from "./agent-task-store.ts";
+import type { AgentTaskRow, AgentTaskStore, ThreadProposalStore } from "./agent-task-store.ts";
 import type { AnalyticsEventName, AnalyticsProperties } from "../analytics-schema.ts";
 import { categorizeIntent } from "../analytics-sanitize.ts";
 import {
@@ -125,11 +136,18 @@ export interface AgentTaskHost {
   cancelTurn(threadId: string): Promise<void>;
   isTurnInFlight(threadId: string): boolean;
   lastTurn(threadId: string): TurnSummary | null;
+  /** The thread's conversation: its live session, else its saved snapshot. */
+  threadSlice(threadId: string): AcpSessionSlice | null;
   hasPendingPermission(threadId: string): boolean;
   /** Ask the user in the parent thread; resolves with their answer. */
   requestApproval(
     threadId: string,
-    request: { title: string; detail: Record<string, unknown> },
+    request: {
+      title: string;
+      detail: Record<string, unknown>;
+      /** A grant: Allow or Don't allow, without "Allow for this thread". */
+      once?: boolean;
+    },
   ): Promise<ApprovalAnswer>;
   /**
    * Show the hold-to-confirm card in the thread. Resolves when the user
@@ -145,6 +163,7 @@ export interface AgentTaskHost {
 export interface AgentTaskServiceOptions {
   host: AgentTaskHost;
   store: AgentTaskStore;
+  proposals: ThreadProposalStore;
   /** Override the userData directory in tests. */
   baseDir?: string;
   /** Batch window for parent notes. */
@@ -182,6 +201,7 @@ function within(root: string, target: string): boolean {
 export class AgentTaskService {
   private readonly host: AgentTaskHost;
   private readonly store: AgentTaskStore;
+  private readonly proposals: ThreadProposalStore;
   private readonly baseDir: string | undefined;
   private readonly noteDelayMs: number;
   private readonly captureAnalytics: AgentTaskServiceOptions["captureAnalytics"];
@@ -234,6 +254,7 @@ export class AgentTaskService {
   constructor(options: AgentTaskServiceOptions) {
     this.host = options.host;
     this.store = options.store;
+    this.proposals = options.proposals;
     this.baseDir = options.baseDir;
     this.noteDelayMs = options.noteDelayMs ?? DEFAULT_NOTE_DELAY_MS;
     this.captureAnalytics = options.captureAnalytics;
@@ -550,6 +571,10 @@ export class AgentTaskService {
         return textResult(await this.listWorkspaces(caller, args));
       case "delete_workspace":
         return textResult(await this.deleteWorkspace(caller, args));
+      case "get_settings":
+        return textResult(await this.runOperation(getSettings, args, caller));
+      case "update_settings":
+        return textResult(await this.updateSettings(caller, args));
       default:
         throw new ToolInputError(`unknown tool: ${name}`);
     }
@@ -620,6 +645,13 @@ export class AgentTaskService {
     const title = typeof args.title === "string" ? args.title.trim().toLowerCase() : "";
     const key = `${tool}:${title}`;
     const earlier = title ? this.startedThisTurn.get(caller.threadId)?.get(key) : undefined;
+    if (earlier?.status === "proposed") {
+      return {
+        ...earlier,
+        status: "already_proposed",
+        next: "You already proposed this thread in this turn. Don't propose it again.",
+      };
+    }
     if (earlier) {
       return {
         ...earlier,
@@ -647,7 +679,6 @@ export class AgentTaskService {
     const brief = requireString(args, "task");
     const doneWhen = optionalStringArray(args, "done_when");
     const workspaceArg = optionalString(args, "workspace") ?? "shared";
-    const model = optionalString(args, "model");
     const requestKey = optionalString(args, "request_key");
     const install = args.install_dependencies === true;
 
@@ -667,6 +698,8 @@ export class AgentTaskService {
       );
     }
     const { mode, path: targetPath } = await this.workspaceTarget(caller, workspaceArg);
+    // Before the approval card, so the user isn't asked about a start that fails.
+    const model = await resolveModel(agentId, optionalString(args, "model"));
     this.assertBudget(caller.threadId);
 
     await this.approve(caller, `Start ${this.agentName(agentId)} task “${title}”`, {
@@ -817,18 +850,22 @@ export class AgentTaskService {
 
   /**
    * A top-level thread for the user: no parent link, no depth limit, no
-   * receipt. Only for a request the user made in this turn; a turn another
-   * thread started can't open tabs on the user's behalf.
+   * receipt. `user_asked` starts it now, and only for a request the user made
+   * in this turn: a turn another thread started can't open tabs on the
+   * user's behalf. `propose` starts nothing; the user gets a card in this
+   * thread to start or dismiss it.
    */
   private async createUserThread(
     caller: TaskThreadInfo,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const input = parseWith(CREATE_THREAD_INPUT, args);
-    if (this.turnOrigins.get(caller.threadId) === "agent-task") {
+    const propose = input.initiation === "propose";
+    if (!propose && this.turnOrigins.get(caller.threadId) === "agent-task") {
       throw new Error(
         "Only start a new thread when the user asked for one in their own message; this turn " +
-          "was started by another thread. Use start_subthread, or ask the user.",
+          'was started by another thread. Use initiation "propose" so the user decides, or ' +
+          "start_subthread.",
       );
     }
     const agents = this.availableAgents();
@@ -839,19 +876,38 @@ export class AgentTaskService {
     }
     const title = clip(input.title, 80);
     const { mode, path } = await this.workspaceTarget(caller, input.workspace ?? "shared");
+    const model = await resolveModel(input.agent_id, input.model);
+    const workspace = mode === "new" ? "new" : (path ?? caller.cwd);
+
+    if (propose) {
+      const proposal = this.proposals.insert({
+        proposalId: randomUUID(),
+        callerThreadId: caller.threadId,
+        projectId: caller.projectId,
+        agentId: input.agent_id,
+        title,
+        task: input.task,
+        model,
+        workspace,
+        installDependencies: input.install_dependencies === true,
+      });
+      return {
+        status: "proposed",
+        proposal_id: proposal.proposalId,
+        title,
+        agent_id: input.agent_id,
+        next:
+          "Nothing runs yet. Pipper shows the user a card under your reply to start or dismiss " +
+          "it, so don't start it yourself or paste its id. Mention the proposal in a line and " +
+          "carry on.",
+      };
+    }
+
     let created: CreatedThread;
     try {
       created = await this.runOperation(
         createThreadOperation,
-        {
-          project: caller.projectId,
-          agent: input.agent_id,
-          title,
-          workspace: mode === "new" ? "new" : path,
-          setup: input.install_dependencies ? "prepared" : "source-only",
-          model: input.model ?? null,
-          activation: "background",
-        },
+        this.userThreadInput(caller.projectId, input.agent_id, title, workspace, model, input),
         caller,
       );
     } catch (error) {
@@ -861,22 +917,17 @@ export class AgentTaskService {
     }
     // The thread is the user's, so a workspace made for it is too.
     if (created.createdWorkspace) releaseWorkspaceToUser(created.createdWorkspace.path);
-    const threadId = created.thread.id;
-    const cwd = created.cwd;
-    await this.host.openThreadInBackground(threadId).catch((error: unknown) => {
-      console.warn("[agent-tasks] could not open the new thread's tab:", error);
-    });
     const sender = `“${caller.title ?? "Untitled"}” (${this.agentName(caller.agentId)}), thread_id ${caller.threadId}`;
-    const brief = `[Started by ${sender} because the user asked for a separate thread. You work for the user now; the thread that started you won't follow up.]\n\n${input.task}`;
-    void this.deliver(threadId, brief, null).catch((error: unknown) => {
-      console.warn("[agent-tasks] could not send the new thread its brief:", error);
-    });
+    await this.launchUserThread(
+      created.thread.id,
+      `[Started by ${sender} because the user asked for a separate thread. You work for the user now; the thread that started you won't follow up.]\n\n${input.task}`,
+    );
     return {
       status: "started",
-      thread_id: threadId,
+      thread_id: created.thread.id,
       title,
       agent_id: input.agent_id,
-      workspace_path: cwd,
+      workspace_path: created.cwd,
       next:
         "It runs in its own tab and belongs to the user; you get no report from it. Pipper " +
         "shows the user a link to it under your reply, so don't paste its id. Tell the user it " +
@@ -884,12 +935,106 @@ export class AgentTaskService {
     };
   }
 
+  private userThreadInput(
+    projectId: string,
+    agentId: string,
+    title: string,
+    workspace: string,
+    model: string | null,
+    options: { install_dependencies?: boolean },
+  ) {
+    return {
+      project: projectId,
+      agent: agentId,
+      title,
+      workspace,
+      setup: options.install_dependencies ? ("prepared" as const) : ("source-only" as const),
+      model,
+      activation: "background" as const,
+    };
+  }
+
+  /** Open a new user thread's tab in the background and send it its brief. */
+  private async launchUserThread(threadId: string, brief: string): Promise<void> {
+    await this.host.openThreadInBackground(threadId).catch((error: unknown) => {
+      console.warn("[agent-tasks] could not open the new thread's tab:", error);
+    });
+    void this.deliver(threadId, brief, null).catch((error: unknown) => {
+      console.warn("[agent-tasks] could not send the new thread its brief:", error);
+    });
+  }
+
+  getProposals(ids: string[]): ThreadProposalSnapshot[] {
+    return ids
+      .map((id) => this.proposals.get(id))
+      .filter((proposal): proposal is ThreadProposalSnapshot => proposal !== null);
+  }
+
+  /**
+   * The user pressed Start on a proposal card: create the thread as theirs
+   * and send it the brief. Pressing it again returns the same thread.
+   */
+  async startProposal(id: string): Promise<ThreadProposalSnapshot> {
+    const proposal = this.proposals.get(id);
+    if (!proposal) throw new Error("This proposal no longer exists.");
+    if (proposal.state === "expired") throw new Error("This proposal expired.");
+    if (proposal.state !== "open") return proposal;
+    // Claim it first, so a second click can't start a second thread.
+    if (!this.proposals.settle(id, "started", null)) return this.proposals.get(id)!;
+    let created: CreatedThread;
+    try {
+      created = await runAsUser(
+        createThreadOperation,
+        this.userThreadInput(
+          proposal.projectId,
+          proposal.agentId,
+          proposal.title,
+          proposal.workspace,
+          proposal.model,
+          { install_dependencies: proposal.installDependencies },
+        ),
+      );
+    } catch (error) {
+      this.proposals.reopen(id);
+      throw error;
+    }
+    this.proposals.attachThread(id, created.thread.id);
+    const from = this.host.threadInfo(proposal.callerThreadId);
+    const sender = from
+      ? `“${from.title ?? "Untitled"}” (${this.agentName(from.agentId)}), thread_id ${from.threadId}`
+      : `thread_id ${proposal.callerThreadId}`;
+    await this.launchUserThread(
+      created.thread.id,
+      `[Proposed by ${sender} and started by the user. You work for the user; the thread that proposed you won't follow up.]\n\n${proposal.task}`,
+    );
+    return this.proposals.get(id)!;
+  }
+
+  dismissProposal(id: string): ThreadProposalSnapshot {
+    const proposal = this.proposals.get(id);
+    if (!proposal) throw new Error("This proposal no longer exists.");
+    if (proposal.state === "open") this.proposals.settle(id, "dismissed", null);
+    return this.proposals.get(id)!;
+  }
+
+  private conversation(threadId: string, before: number | undefined): Record<string, unknown> {
+    const slice = this.host.threadSlice(threadId);
+    if (!slice) {
+      return {
+        conversation: null,
+        conversation_note: "Pipper has no saved conversation for this thread yet.",
+      };
+    }
+    return { conversation: pageConversation(conversationMessages(slice), before) };
+  }
+
   private async getThread(
     caller: TaskThreadInfo,
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
-    const { thread_id: threadId } = parseWith(GET_THREAD_INPUT, args);
+    const { thread_id: threadId, messages, before } = parseWith(GET_THREAD_INPUT, args);
     const info = this.requireThreadInfo(threadId);
+    const conversation = messages ? this.conversation(threadId, before) : {};
     const task = this.store.byChildThread(threadId);
     const family = {
       parent_thread_id: task?.parentThreadId ?? null,
@@ -899,7 +1044,7 @@ export class AgentTaskService {
         .filter((id): id is string => Boolean(id)),
     };
     if (task && task.parentThreadId === caller.threadId) {
-      return { ...(await this.receipt(task)), ...family };
+      return { ...(await this.receipt(task)), ...family, ...conversation };
     }
     const summary = this.host.lastTurn(threadId);
     const nextStep = summary?.nextStep ?? task?.nextStep ?? null;
@@ -918,6 +1063,7 @@ export class AgentTaskService {
             ...(nextStep.ask ? { ask: nextStep.ask } : {}),
           }
         : {}),
+      ...conversation,
     };
   }
 
@@ -1040,6 +1186,8 @@ export class AgentTaskService {
         title: outcome.result.title,
       };
     }
+    // Deleting is destructive, never a grant.
+    if (outcome.status !== "needs_confirmation") throw new Error("Unexpected outcome.");
     this.pendingConfirmationKeys.add(key);
     this.confirmThenRun(
       caller.threadId,
@@ -1149,6 +1297,8 @@ export class AgentTaskService {
     if (outcome.status === "done") {
       return { status: "deleted", path: outcome.result.path };
     }
+    // Deleting is destructive, never a grant.
+    if (outcome.status !== "needs_confirmation") throw new Error("Unexpected outcome.");
     this.pendingConfirmationKeys.add(key);
     this.confirmThenRun(
       caller.threadId,
@@ -1162,6 +1312,59 @@ export class AgentTaskService {
   }
 
   /** Run an operation as this thread's agent; destructive ones go through deleteWorkspace. */
+  /**
+   * Settings the user asked to change. A widening change waits for a
+   * one-click grant card; the user's answer comes back as this call's result.
+   */
+  private async updateSettings(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const ctx = this.agentContext(caller.threadId);
+    const outcome = await callAsAgent(updateSettingsOperation, args, ctx);
+    let result: SettingsUpdateResult;
+    if (outcome.status === "needs_grant") {
+      const answer = await this.host.requestApproval(caller.threadId, {
+        title: outcome.grant.title,
+        detail: { changes: outcome.grant.changes },
+        once: true,
+      });
+      if (answer === "deny") {
+        throw new Error(
+          "The user didn't allow this change. Don't retry it; tell the user it wasn't changed.",
+        );
+      }
+      result = await updateSettingsOperation.run(
+        outcome.input as Parameters<typeof updateSettingsOperation.run>[0],
+        ctx,
+      );
+    } else if (outcome.status === "done") {
+      result = outcome.result;
+    } else {
+      throw new Error(`${updateSettingsOperation.id} needs confirmation`);
+    }
+    if (result.changes.length === 0) {
+      return { status: "unchanged", next: "Every setting already had that value." };
+    }
+    return {
+      // First, so it survives into the transcript's tool output preview.
+      change_id: result.changeId,
+      status: "changed",
+      changed: result.changes.map((change) => ({
+        setting: change.path,
+        from: change.from,
+        to: change.to,
+        applies: change.applies,
+      })),
+      next:
+        (result.changes.some((change) => change.applies === "new_threads")
+          ? "Tools turned on or off apply to new threads, not this one. "
+          : "") +
+        "Pipper shows the change in this thread with an undo, so don't list it again; " +
+        "confirm it in a line.",
+    };
+  }
+
   private async runOperation<I, O>(
     operation: Operation<I, O>,
     raw: unknown,

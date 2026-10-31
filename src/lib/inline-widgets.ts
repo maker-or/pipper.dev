@@ -1,5 +1,10 @@
 import type { InlineWidgetRef } from "../../contracts/acp.ts";
-import { threadLinkFromToolPart, type ThreadLink } from "./thread-links.ts";
+import { settingsChangeFromToolPart } from "./settings-change-links.ts";
+import {
+  threadLinkFromToolPart,
+  threadProposalFromToolPart,
+  type ThreadLink,
+} from "./thread-links.ts";
 
 /**
  * Finds the widgets an agent showed with the `show_widget` MCP tool.
@@ -69,7 +74,9 @@ export function widgetRefKey(ref: InlineWidgetRef): string {
 export type MessageBodyBlock =
   | { kind: "text"; text: string }
   | { kind: "widget"; ref: InlineWidgetRef; key: string }
-  | { kind: "thread"; link: ThreadLink; key: string };
+  | { kind: "thread"; link: ThreadLink; key: string }
+  | { kind: "proposal"; proposalId: string; key: string }
+  | { kind: "settings"; changeId: string; key: string };
 
 /**
  * An assistant turn's visible body in timeline order: text segments with
@@ -90,6 +97,24 @@ export function buildMessageBodyBlocks(
       const last = blocks.at(-1);
       if (last?.kind === "text") last.text = `${last.text}\n\n${typed.text}`;
       else blocks.push({ kind: "text", text: typed.text });
+      continue;
+    }
+    const changeId = settingsChangeFromToolPart(part);
+    if (changeId) {
+      const key = `settings:${changeId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "settings", changeId, key });
+      }
+      continue;
+    }
+    const proposalId = threadProposalFromToolPart(part);
+    if (proposalId) {
+      const key = `proposal:${proposalId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "proposal", proposalId, key });
+      }
       continue;
     }
     const link = threadLinkFromToolPart(part);
