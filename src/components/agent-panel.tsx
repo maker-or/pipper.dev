@@ -53,6 +53,7 @@ import { InlineWidget } from "@/components/inline-widget";
 import { ThreadLinkCard } from "@/components/thread-link-card";
 import { ThreadProposalCard } from "@/components/thread-proposal-card";
 import { SettingsChangeCard } from "@/components/settings-change-card";
+import { ConnectorRequestCard } from "@/components/connector-request-card";
 import { buildMessageBodyBlocks, type MessageBodyBlock } from "@/lib/inline-widgets";
 import { AssistantTraceDeck } from "@/components/ui/assistant-trace-deck";
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator";
@@ -603,6 +604,8 @@ function MessageBody({
             <ThreadProposalCard key={block.key} proposalId={block.proposalId} />
           ) : block.kind === "settings" ? (
             <SettingsChangeCard key={block.key} changeId={block.changeId} />
+          ) : block.kind === "connector" ? (
+            <ConnectorRequestCard key={block.key} requestRef={block.ref} />
           ) : (
             <div
               key={`text-${index}`}

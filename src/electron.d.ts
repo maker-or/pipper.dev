@@ -42,6 +42,14 @@ import type {
 } from "../../contracts/acp.ts";
 import type { SettingChangeRecord } from "../../contracts/settings.ts";
 import type {
+  ConnectorAddInput,
+  ConnectorRequestAnswer,
+  ConnectorRequestRef,
+  ConnectorRequestSnapshot,
+  ConnectorSnapshot,
+  ConnectorUpdateInput,
+} from "../../contracts/connectors.ts";
+import type {
   AgentTaskConfig,
   AgentTaskSnapshot,
   ThreadProposalSnapshot,
@@ -370,6 +378,33 @@ declare global {
         create: (input: McpServerInput) => Promise<McpServerRecord>;
         update: (id: string, input: Partial<McpServerInput>) => Promise<McpServerRecord | null>;
         delete: (id: string) => Promise<void>;
+      };
+      /** The cards agents' `add_connector` calls show in their thread. */
+      connectorRequests: {
+        get: (ids: string[]) => Promise<ConnectorRequestSnapshot[]>;
+        /** By id, or by the thread and the connector its call named. */
+        find: (ref: ConnectorRequestRef) => Promise<ConnectorRequestSnapshot | null>;
+        /** Connects (signing in if needed); resolves when it's done or failed. */
+        connect: (id: string, answer?: ConnectorRequestAnswer) => Promise<ConnectorRequestSnapshot>;
+        cancel: (id: string) => Promise<void>;
+        decline: (id: string) => Promise<ConnectorRequestSnapshot>;
+        onChanged: (callback: (request: ConnectorRequestSnapshot) => void) => () => void;
+      };
+      connectors: {
+        list: () => Promise<ConnectorSnapshot[]>;
+        add: (input: ConnectorAddInput) => Promise<ConnectorSnapshot>;
+        update: (id: string, input: ConnectorUpdateInput) => Promise<ConnectorSnapshot>;
+        remove: (id: string) => Promise<void>;
+        /** Connects, and opens the sign-in page first if the server asks for one. */
+        connect: (id: string) => Promise<ConnectorSnapshot>;
+        /** Opens the server's sign-in page; resolves once signed in and connected. */
+        signIn: (id: string) => Promise<ConnectorSnapshot>;
+        cancelSignIn: (id: string) => Promise<void>;
+        signOut: (id: string) => Promise<ConnectorSnapshot>;
+        /** Connects again and refreshes the tools. */
+        check: (id: string) => Promise<ConnectorSnapshot>;
+        setEnabled: (id: string, enabled: boolean) => Promise<ConnectorSnapshot>;
+        onChanged: (callback: (connector: ConnectorSnapshot) => void) => () => void;
       };
       dialog: {
         pickDirectory: () => Promise<string | null>;

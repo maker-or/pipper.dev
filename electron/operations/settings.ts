@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import type { AgentTaskConfig } from "../../contracts/agent-tasks.ts";
 import type { BrowserConfig } from "../../contracts/acp.ts";
+import { CONNECTOR_CATALOG } from "../../contracts/connector-catalog.ts";
+import type { ConnectorSnapshot } from "../../contracts/connectors.ts";
 import type { SettingChange, SettingChangeRecord, SettingValue } from "../../contracts/settings.ts";
 import { defineOperation, OperationInputError, type Grant } from "./define.ts";
 
@@ -20,6 +22,11 @@ export interface SettingsDeps {
   setBrowser(partial: Partial<BrowserConfig>): Promise<BrowserConfig>;
   getAutoInstall(): boolean;
   setAutoInstall(enabled: boolean): void;
+  /** The user's connectors; absent until they load (and in tests that skip them). */
+  connectors?: {
+    list(): ConnectorSnapshot[];
+    setEnabled(id: string, enabled: boolean): void;
+  };
   changes: SettingChangeStore;
 }
 
@@ -237,8 +244,14 @@ const AREAS: Area[] = ["agent_tasks", "browser", "workspaces"];
 
 const pathOf = (def: SettingDef) => `${def.area}.${def.key}`;
 
-export const SETTINGS_UPDATE_INPUT = z.strictObject(
-  Object.fromEntries(
+type ConnectorsUpdate = Record<string, { enabled: boolean }>;
+
+type SettingsUpdate = Partial<Record<Area, Record<string, SettingValue | undefined>>> & {
+  connectors?: ConnectorsUpdate;
+};
+
+export const SETTINGS_UPDATE_INPUT = z.strictObject({
+  ...Object.fromEntries(
     AREAS.map((area) => [
       area,
       z
@@ -253,25 +266,68 @@ export const SETTINGS_UPDATE_INPUT = z.strictObject(
         .optional(),
     ]),
   ),
-) as z.ZodType<Partial<Record<Area, Record<string, SettingValue | undefined>>>>;
+  connectors: z
+    .record(z.string().min(1), z.strictObject({ enabled: z.boolean() }))
+    .optional()
+    .describe("Turn connectors on or off, by the ids get_settings lists. Applies to new threads."),
+}) as z.ZodType<SettingsUpdate>;
 
 function sameValue(a: SettingValue, b: SettingValue): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
 }
 
+interface PlannedChange {
+  change: SettingChange;
+  apply(): Promise<void>;
+}
+
+const CONNECTOR_PATH = /^connectors\.(.+)\.enabled$/;
+
+function requireConnectors(d: SettingsDeps): NonNullable<SettingsDeps["connectors"]> {
+  if (!d.connectors) throw new OperationInputError("Connectors aren't ready yet.");
+  return d.connectors;
+}
+
+/** Turning connectors on or off: `connectors.<id>.enabled`. */
+function planConnectors(d: SettingsDeps, input: ConnectorsUpdate): PlannedChange[] {
+  const connectors = requireConnectors(d);
+  const all = connectors.list();
+  return Object.entries(input).flatMap(([id, { enabled }]) => {
+    const connector = all.find((candidate) => candidate.id === id);
+    if (!connector) {
+      throw new OperationInputError(
+        `No connector with id "${id}". Connector ids: ${all.map((c) => c.id).join(", ") || "none"}.`,
+      );
+    }
+    if (connector.enabled === enabled) return [];
+    return [
+      {
+        change: {
+          path: `connectors.${id}.enabled`,
+          label: `${connector.name} connector`,
+          from: connector.enabled,
+          to: enabled,
+          fromText: onOff(connector.enabled),
+          toText: onOff(enabled),
+          widens: enabled,
+          applies: "new_threads" as const,
+        },
+        apply: async () => connectors.setEnabled(id, enabled),
+      },
+    ];
+  });
+}
+
 /** The changes an update would make, skipping settings already at that value. */
-function plan(
-  d: SettingsDeps,
-  input: Partial<Record<Area, Record<string, SettingValue | undefined>>>,
-): Array<{ def: SettingDef; change: SettingChange }> {
-  const out: Array<{ def: SettingDef; change: SettingChange }> = [];
+function plan(d: SettingsDeps, input: SettingsUpdate): PlannedChange[] {
+  const out: PlannedChange[] = [];
   for (const def of SETTINGS) {
     const to = input[def.area]?.[def.key];
     if (to === undefined) continue;
     const from = def.get(d);
     if (sameValue(from, to)) continue;
     out.push({
-      def,
+      apply: () => def.set(d, to),
       change: {
         path: pathOf(def),
         label: def.label,
@@ -284,7 +340,44 @@ function plan(
       },
     });
   }
+  if (input.connectors) out.push(...planConnectors(d, input.connectors));
   return out;
+}
+
+/**
+ * The user's connectors as agents see them: never a key, token or `env`
+ * value. `status`: connected, needs_sign_in, error, not_checked, or local (a
+ * server the agent starts itself, so Pipper can't tell).
+ */
+function connectorsView(d: SettingsDeps) {
+  const connectors = d.connectors?.list() ?? [];
+  const added = new Set(connectors.map((connector) => connector.catalogId));
+  return {
+    connectors: Object.fromEntries(
+      connectors.map((connector) => [
+        connector.id,
+        {
+          name: connector.name,
+          catalog: connector.catalogId,
+          kind: connector.transport === "stdio" ? "local" : "remote",
+          enabled: connector.enabled,
+          status:
+            connector.transport === "stdio"
+              ? "local"
+              : connector.status === "unknown"
+                ? "not_checked"
+                : connector.status,
+          tools: connector.transport === "stdio" ? null : connector.tools.length,
+        },
+      ]),
+    ),
+    connector_catalog: CONNECTOR_CATALOG.filter((entry) => !added.has(entry.id)).map((entry) => ({
+      id: entry.id,
+      name: entry.name,
+      description: entry.description,
+      sign_in: entry.auth.kind === "oauth" ? "browser" : entry.auth.kind,
+    })),
+  };
 }
 
 /** Every setting's current value, grouped by area. */
@@ -304,7 +397,7 @@ export const getSettings = defineOperation({
   tier: "read",
   input: z.strictObject({}),
   async run() {
-    return currentSettings();
+    return { ...currentSettings(), ...connectorsView(requireDeps()) };
   },
 });
 
@@ -333,7 +426,7 @@ export const updateSettings = defineOperation({
   async run(input, ctx): Promise<SettingsUpdateResult> {
     const d = requireDeps();
     const planned = plan(d, input);
-    for (const { def, change } of planned) await def.set(d, change.to);
+    for (const { apply } of planned) await apply();
     const changes = planned.map(({ change }) => change);
     if (changes.length === 0 || ctx.caller.kind !== "agent") {
       return { changeId: null, changes };
@@ -357,6 +450,15 @@ export const undoSettingsChange = defineOperation({
     if (!record) throw new OperationInputError("That settings change no longer exists.");
     if (record.undone) return record;
     for (const item of record.changes) {
+      const connector = CONNECTOR_PATH.exec(item.path);
+      if (connector) {
+        // A connector removed since then has nothing to put back.
+        const connectors = requireConnectors(d);
+        if (connectors.list().some((candidate) => candidate.id === connector[1])) {
+          connectors.setEnabled(connector[1]!, Boolean(item.from));
+        }
+        continue;
+      }
       const def = SETTINGS.find((candidate) => pathOf(candidate) === item.path);
       if (def) await def.set(d, item.from);
     }

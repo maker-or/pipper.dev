@@ -111,7 +111,11 @@ import {
   listWorkspaces as listWorkspacesOperation,
 } from "./operations/workspaces.ts";
 import type { BrowserConfig, InlineWidgetDocument } from "../contracts/acp.ts";
-import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer } from "./mcp-servers";
+import { ConnectorStore } from "./connectors/connector-store.ts";
+import { addConnector, removeConnector, updateConnector } from "./connectors/connector-edits.ts";
+import { ConnectorGateway } from "./connectors/connector-gateway.ts";
+import { ConnectorRequests } from "./connectors/connector-requests.ts";
+import { ensureStdioProxyScript } from "./mcp/stdio-proxy.ts";
 import {
   installAgentInstanceProvider,
   listAgentInstancesForRenderer,
@@ -172,7 +176,7 @@ import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
 import { RemoteAccessController } from "./remote-access.ts";
-import { DesktopIdentity, withSignInParams } from "./desktop-identity.ts";
+import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
 import { RemoteDeviceStore } from "./remote-devices.ts";
 import type { RemoteScope, RemoteTransport } from "../contracts/remote.ts";
 import { ThreadBenchmarkController } from "./thread-benchmark.ts";
@@ -509,17 +513,62 @@ let sleeplessController: SleeplessController | null = null;
 let remoteAccess: RemoteAccessController | null = null;
 let desktopIdentityInstance: DesktopIdentity | null = null;
 
+/** The OS keychain, through Electron's safeStorage. */
+const keychainBox: SecretBox = {
+  available: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (plain) => safeStorage.encryptString(plain),
+  decrypt: (cipher) => safeStorage.decryptString(cipher),
+};
+
 /** Laptop id, sign-in state, and the pipper.dev laptop credential (encrypted at rest). */
 function desktopIdentity(): DesktopIdentity {
   desktopIdentityInstance ??= new DesktopIdentity({
     dir: app.getPath("userData"),
-    secretBox: {
-      available: () => safeStorage.isEncryptionAvailable(),
-      encrypt: (plain) => safeStorage.encryptString(plain),
-      decrypt: (cipher) => safeStorage.decryptString(cipher),
-    },
+    secretBox: keychainBox,
   });
   return desktopIdentityInstance;
+}
+
+let connectors: {
+  store: ConnectorStore;
+  gateway: ConnectorGateway;
+  requests: ConnectorRequests;
+} | null = null;
+
+/**
+ * The user's MCP servers, the gateway that serves the remote ones to
+ * sessions, and the cards agents' `add_connector` calls show.
+ */
+function requireConnectors(): {
+  store: ConnectorStore;
+  gateway: ConnectorGateway;
+  requests: ConnectorRequests;
+} {
+  if (!connectors) {
+    const store = new ConnectorStore(() => getDb(), keychainBox);
+    store.sealPlainEnv();
+    const holder: { requests: ConnectorRequests | null } = { requests: null };
+    const gateway = new ConnectorGateway({
+      store,
+      openExternal: (url) => shell.openExternal(url),
+      stdioShimPath: () =>
+        ensureStdioProxyScript(join(app.getPath("userData"), "connectors-stdio-proxy.mjs")),
+      onChanged: (connector) => {
+        broadcastToWindows("connectors:changed", connector);
+        holder.requests?.connectorChanged(connector.id);
+      },
+      clientVersion: app.getVersion(),
+    });
+    const requests = new ConnectorRequests({
+      db: () => getDb(),
+      store,
+      gateway,
+      onChanged: (request) => broadcastToWindows("connectorRequests:changed", request),
+    });
+    holder.requests = requests;
+    connectors = { store, gateway, requests };
+  }
+  return connectors;
 }
 let authCallbackServer: http.Server | null = null;
 let authCallbackPort: number | null = null;
@@ -2521,6 +2570,15 @@ function registerIpc(): void {
     },
     getAutoInstall: getWorktreeAutoInstall,
     setAutoInstall: setWorktreeAutoInstall,
+    connectors: {
+      list: () => {
+        const { store, gateway } = requireConnectors();
+        return store.list().map((row) => gateway.snapshotOf(row));
+      },
+      setEnabled: (id, enabled) => {
+        requireConnectors().gateway.setEnabled(id, enabled);
+      },
+    },
     changes: settingChanges,
   });
   ipcMain.handle("settings:getChange", (_event, id: string) => settingChanges.get(String(id)));
@@ -2864,12 +2922,96 @@ function registerIpc(): void {
     return browserService.setConfig(partial);
   });
 
-  ipcMain.handle("mcp:list", () => listMcpServers());
-  ipcMain.handle("mcp:create", (_event, input) => createMcpServer(input));
-  ipcMain.handle("mcp:update", (_event, id: string, input) => updateMcpServer(id, input));
-  ipcMain.handle("mcp:delete", (_event, id: string) => {
-    deleteMcpServer(id);
+  ipcMain.handle("mcp:list", () => requireConnectors().store.list());
+  ipcMain.handle("mcp:create", (_event, input) => requireConnectors().store.create(input));
+  ipcMain.handle("mcp:update", (_event, id: string, input) => {
+    const { store, gateway } = requireConnectors();
+    gateway.forget(String(id));
+    return store.update(String(id), input);
   });
+  ipcMain.handle("mcp:delete", (_event, id: string) => {
+    const { store, gateway } = requireConnectors();
+    gateway.forget(String(id));
+    store.remove(String(id));
+  });
+  ipcMain.handle("connectors:list", () => {
+    const { store, gateway } = requireConnectors();
+    return store.list().map((row) => gateway.snapshotOf(row));
+  });
+  ipcMain.handle("connectors:add", (_event, input: unknown) => {
+    const { store, gateway } = requireConnectors();
+    return addConnector(store, gateway, input);
+  });
+  ipcMain.handle("connectors:update", (_event, id: string, input: unknown) => {
+    const { store, gateway } = requireConnectors();
+    return updateConnector(store, gateway, String(id), input);
+  });
+  ipcMain.handle("connectors:remove", (_event, id: string) => {
+    const { store, gateway } = requireConnectors();
+    removeConnector(store, gateway, String(id));
+  });
+  ipcMain.handle("connectors:connect", (_event, id: string) =>
+    requireConnectors().gateway.connect(String(id)),
+  );
+  ipcMain.handle("connectorRequests:find", (_event, ref: unknown) => {
+    if (!ref || typeof ref !== "object") return null;
+    const value = ref as Record<string, unknown>;
+    if (typeof value.id === "string") return requireConnectors().requests.find({ id: value.id });
+    const input = value.input as Record<string, unknown> | undefined;
+    if (typeof value.threadId !== "string" || !input || typeof input !== "object") return null;
+    const text = (field: unknown) => (typeof field === "string" ? field : undefined);
+    return requireConnectors().requests.find({
+      threadId: value.threadId,
+      input: {
+        catalog: text(input.catalog),
+        url: text(input.url),
+        command: text(input.command),
+        args: Array.isArray(input.args)
+          ? input.args.filter((arg): arg is string => typeof arg === "string")
+          : undefined,
+      },
+    });
+  });
+  ipcMain.handle("connectorRequests:get", (_event, ids: unknown) =>
+    requireConnectors().requests.get(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    ),
+  );
+  ipcMain.handle("connectorRequests:connect", (_event, id: string, answer: unknown) => {
+    const values = answer && typeof answer === "object" ? (answer as Record<string, unknown>) : {};
+    return requireConnectors().requests.connect(String(id), {
+      key: typeof values.key === "string" ? values.key : undefined,
+      values:
+        values.values && typeof values.values === "object"
+          ? Object.fromEntries(
+              Object.entries(values.values as Record<string, unknown>).filter(
+                (entry): entry is [string, string] => typeof entry[1] === "string",
+              ),
+            )
+          : undefined,
+    });
+  });
+  ipcMain.handle("connectorRequests:cancel", (_event, id: string) =>
+    requireConnectors().requests.cancel(String(id)),
+  );
+  ipcMain.handle("connectorRequests:decline", (_event, id: string) =>
+    requireConnectors().requests.decline(String(id)),
+  );
+  ipcMain.handle("connectors:signIn", (_event, id: string) =>
+    requireConnectors().gateway.signIn(String(id)),
+  );
+  ipcMain.handle("connectors:cancelSignIn", (_event, id: string) =>
+    requireConnectors().gateway.cancelSignIn(String(id)),
+  );
+  ipcMain.handle("connectors:signOut", (_event, id: string) =>
+    requireConnectors().gateway.signOut(String(id)),
+  );
+  ipcMain.handle("connectors:check", (_event, id: string) =>
+    requireConnectors().gateway.check(String(id)),
+  );
+  ipcMain.handle("connectors:setEnabled", (_event, id: string, enabled: boolean) =>
+    requireConnectors().gateway.setEnabled(String(id), Boolean(enabled)),
+  );
 
   ipcMain.handle(
     "terminal:create",
@@ -3291,6 +3433,7 @@ app.whenReady().then(async () => {
     attention: { isFocused: () => mainWindowFocused },
     notify: osNotifier,
     browser: browserService,
+    connectors: requireConnectors(),
   });
   // Database maintenance waits for agent turns to finish (see R15).
   applicationStorage.setBusyProbe(() => (agentManager?.getRunningThreadIds().length ?? 0) > 0);

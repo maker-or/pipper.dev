@@ -60,6 +60,8 @@ The agentic core is built on the **Agent Client Protocol (ACP)**, not pi-sdk (pi
 - `electron/agent-connection-manager.ts` owns the actual ACP connections; `electron/agent.ts` re-exports it as `AgentManager` for backwards compatibility during the migration off the old pi-sdk-based manager.
 - Renderer-side session state is derived via `src/lib/acp-session-reducer.ts`.
 
+- Harnesses differ in what they do with MCP tools: some never forward tool results to the transcript, some ignore server `instructions`, OpenCode shares MCP servers per directory. Read `docs/harness-differences.md` before building anything that depends on MCP tool results, tool lists or sessions, and add any new difference you find.
+
 Before making any changes to the agentic core, first understand how ACP works and how it's implemented in this app (start with `electron/agent-connection-manager.ts` and `electron/agents/registry.ts`)
 
 Do not rewrite working code unless there is a measurable architectural benefit.

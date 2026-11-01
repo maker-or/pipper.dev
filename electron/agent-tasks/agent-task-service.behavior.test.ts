@@ -30,6 +30,7 @@ import { AgentTaskStore, ThreadProposalStore, ensureAgentTaskSchema } from "./ag
 import {
   AgentTaskService,
   type AgentTaskHost,
+  type AgentTaskServiceOptions,
   type ApprovalAnswer,
   type ConfirmationAnswer,
   type TurnOrigin,
@@ -201,6 +202,9 @@ function makeHost() {
     },
     isTurnInFlight: (threadId) =>
       !staleInFlight.has(threadId) && Boolean(threads.get(threadId)?.inFlight),
+    reloadThreadSession: async (id) => {
+      reloaded.push(id);
+    },
     threadSlice: (threadId) => slices.get(threadId) ?? null,
     lastTurn: (threadId) => {
       const thread = threads.get(threadId);
@@ -377,6 +381,7 @@ function makeHost() {
     workspaces,
     emitted,
     addThread,
+    startTurn,
     bind: (value: AgentTaskService) => {
       service = value;
     },
@@ -411,7 +416,10 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-async function setup(config: Partial<AgentTaskConfig> = {}) {
+async function setup(
+  config: Partial<AgentTaskConfig> = {},
+  extra: Pick<AgentTaskServiceOptions, "connectorRequests"> = {},
+) {
   const db = new DatabaseSync(":memory:");
   ensureAgentTaskSchema(db);
   ensureProvenanceSchema(db);
@@ -446,6 +454,7 @@ async function setup(config: Partial<AgentTaskConfig> = {}) {
     proposals,
     baseDir,
     noteDelayMs: 5,
+    ...extra,
   });
   services.push(service);
   fake.bind(service);
@@ -2019,6 +2028,55 @@ describe("settings tools", () => {
     const { call } = await setup();
     expect(await call("update_settings", { agent_tasks: { notify_parent: true } })).toMatchObject({
       status: "unchanged",
+    });
+  });
+});
+
+describe("connector tools", () => {
+  const asks: Array<{ threadId: string; input: unknown }> = [];
+  const connectorRequests = {
+    ask: (threadId: string, input: unknown) => {
+      asks.push({ threadId, input });
+      return { request_id: "req-1", status: "awaiting_user" };
+    },
+  };
+
+  test("add_connector passes the thread's ask on, only in a turn the user started", async () => {
+    asks.length = 0;
+    const { fake, parent, call } = await setup({}, { connectorRequests });
+
+    expect(await call("add_connector", { catalog: "linear", reason: "File the bug" })).toEqual({
+      request_id: "req-1",
+      status: "awaiting_user",
+    });
+    expect(asks).toEqual([
+      { threadId: parent.threadId, input: { catalog: "linear", reason: "File the bug" } },
+    ]);
+    expect((await call("add_connector", { catalog: "linear" })).error).toMatch(/reason/);
+
+    void fake.startTurn(parent, "agent-task");
+    expect(
+      (await call("add_connector", { catalog: "linear", reason: "From a note" })).error,
+    ).toMatch(/turn the user started/);
+    expect(asks).toHaveLength(1);
+  });
+
+  test("a ready connector reloads the thread after its running turn, then sends the note", async () => {
+    const { fake, parent, service } = await setup({}, { connectorRequests });
+    void fake.startTurn(parent, "user");
+
+    service.connectorReady(parent.threadId, "[Pipper] Linear is connected.");
+    await settleNotes();
+    expect(fake.reloaded).toEqual([]);
+
+    parent.finishTurn!();
+    service.onTurnSettled(parent.threadId, { stopReason: "end_turn" });
+    await settleNotes();
+    expect(fake.reloaded).toEqual([parent.threadId]);
+    expect(fake.sent.at(-1)).toMatchObject({
+      threadId: parent.threadId,
+      message: "[Pipper] Linear is connected.",
+      origin: "agent-task",
     });
   });
 });

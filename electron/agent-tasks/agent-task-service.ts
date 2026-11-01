@@ -65,6 +65,11 @@ import {
   type TurnSummary,
 } from "./agent-task-receipt.ts";
 import type { AgentTaskRow, AgentTaskStore, ThreadProposalStore } from "./agent-task-store.ts";
+import {
+  ADD_CONNECTOR_INPUT,
+  ConnectorRequestInputError,
+  type AddConnectorInput,
+} from "../connectors/connector-requests.ts";
 import type { AnalyticsEventName, AnalyticsProperties } from "../analytics-schema.ts";
 import { categorizeIntent } from "../analytics-sanitize.ts";
 import {
@@ -134,6 +139,11 @@ export interface AgentTaskHost {
     opts: { mode: "follow_up" | "steer" | null; origin: TurnOrigin },
   ): Promise<void>;
   cancelTurn(threadId: string): Promise<void>;
+  /**
+   * End the thread's session so its next turn starts a new one (loading the
+   * conversation) with the MCP servers it has now. Optional for test hosts.
+   */
+  reloadThreadSession?(threadId: string): Promise<void>;
   isTurnInFlight(threadId: string): boolean;
   lastTurn(threadId: string): TurnSummary | null;
   /** The thread's conversation: its live session, else its saved snapshot. */
@@ -164,6 +174,8 @@ export interface AgentTaskServiceOptions {
   host: AgentTaskHost;
   store: AgentTaskStore;
   proposals: ThreadProposalStore;
+  /** `add_connector`'s cards; absent where connectors aren't set up. */
+  connectorRequests?: { ask(threadId: string, input: AddConnectorInput): Record<string, unknown> };
   /** Override the userData directory in tests. */
   baseDir?: string;
   /** Batch window for parent notes. */
@@ -202,6 +214,9 @@ export class AgentTaskService {
   private readonly host: AgentTaskHost;
   private readonly store: AgentTaskStore;
   private readonly proposals: ThreadProposalStore;
+  private readonly connectorRequests: AgentTaskServiceOptions["connectorRequests"];
+  /** Threads to reload, with the note to send, once their turn settles. */
+  private readonly pendingReloads = new Map<string, string>();
   private readonly baseDir: string | undefined;
   private readonly noteDelayMs: number;
   private readonly captureAnalytics: AgentTaskServiceOptions["captureAnalytics"];
@@ -255,6 +270,7 @@ export class AgentTaskService {
     this.host = options.host;
     this.store = options.store;
     this.proposals = options.proposals;
+    this.connectorRequests = options.connectorRequests;
     this.baseDir = options.baseDir;
     this.noteDelayMs = options.noteDelayMs ?? DEFAULT_NOTE_DELAY_MS;
     this.captureAnalytics = options.captureAnalytics;
@@ -456,6 +472,11 @@ export class AgentTaskService {
       void applyPendingMove(threadId).catch((error: unknown) => {
         console.error("[agent-tasks] could not apply a thread move:", error);
       });
+      const note = this.pendingReloads.get(threadId);
+      if (note !== undefined) {
+        this.pendingReloads.delete(threadId);
+        this.connectorReady(threadId, note);
+      }
     }, 0);
     const nextStep = this.wrapUps.get(threadId) ?? null;
     this.wrapUps.delete(threadId);
@@ -575,6 +596,8 @@ export class AgentTaskService {
         return textResult(await this.runOperation(getSettings, args, caller));
       case "update_settings":
         return textResult(await this.updateSettings(caller, args));
+      case "add_connector":
+        return textResult(this.addConnector(caller, args));
       default:
         throw new ToolInputError(`unknown tool: ${name}`);
     }
@@ -961,6 +984,46 @@ export class AgentTaskService {
     });
     void this.deliver(threadId, brief, null).catch((error: unknown) => {
       console.warn("[agent-tasks] could not send the new thread its brief:", error);
+    });
+  }
+
+  private addConnector(
+    caller: TaskThreadInfo,
+    args: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!this.connectorRequests) throw new Error("Connectors aren't available in this Pipper.");
+    const input = parseWith(ADD_CONNECTOR_INPUT, args);
+    if (this.turnOrigins.get(caller.threadId) === "agent-task") {
+      throw new Error(
+        "Only ask for a connector in a turn the user started. This turn was started by another " +
+          "thread: say what you need in your reply or report, and the thread that asked you " +
+          "can ask the user.",
+      );
+    }
+    try {
+      return this.connectorRequests.ask(caller.threadId, input);
+    } catch (error) {
+      if (error instanceof ConnectorRequestInputError) throw new ToolInputError(error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * A connector the thread asked for is ready: reload the thread so its next
+   * session has the tools, then send it the note, which starts that turn. A
+   * running turn finishes first; its session can't take new MCP servers.
+   */
+  connectorReady(threadId: string, note: string): void {
+    if (this.disposed || !this.host.threadInfo(threadId)) return;
+    if (this.host.isTurnInFlight(threadId)) {
+      this.pendingReloads.set(threadId, note);
+      return;
+    }
+    void (async () => {
+      await this.host.reloadThreadSession?.(threadId);
+      await this.deliver(threadId, note, null);
+    })().catch((error: unknown) => {
+      console.warn("[agent-tasks] could not reload a thread for its connector:", error);
     });
   }
 

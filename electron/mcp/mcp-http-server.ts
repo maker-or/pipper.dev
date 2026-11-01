@@ -37,7 +37,9 @@ export interface McpServerInfo {
 }
 
 export interface McpEndpoint {
-  listTools(): McpToolDefinition[];
+  /** Overrides the server's name and instructions for this endpoint (connectors). */
+  info?: () => McpServerInfo;
+  listTools(): McpToolDefinition[] | Promise<McpToolDefinition[]>;
   callTool(name: string, args: Record<string, unknown>): Promise<McpToolResult>;
 }
 
@@ -231,21 +233,26 @@ export class McpHttpServer {
       case "initialize": {
         const requested = (message.params as { protocolVersion?: unknown } | undefined)
           ?.protocolVersion;
+        const info = endpoint.info?.() ?? this.serverInfo;
         return {
           jsonrpc: "2.0",
           id,
           result: {
             protocolVersion: typeof requested === "string" ? requested : "2025-03-26",
             capabilities: { tools: { listChanged: false } },
-            serverInfo: { name: this.serverInfo.name, version: this.serverInfo.version },
-            ...(this.serverInfo.instructions ? { instructions: this.serverInfo.instructions } : {}),
+            serverInfo: { name: info.name, version: info.version },
+            ...(info.instructions ? { instructions: info.instructions } : {}),
           },
         };
       }
       case "ping":
         return { jsonrpc: "2.0", id, result: {} };
       case "tools/list":
-        return { jsonrpc: "2.0", id, result: { tools: endpoint.listTools() } };
+        try {
+          return { jsonrpc: "2.0", id, result: { tools: await endpoint.listTools() } };
+        } catch (err) {
+          return rpcError(id, -32603, err instanceof Error ? err.message : String(err));
+        }
       case "tools/call": {
         const params = (message.params ?? {}) as {
           name?: unknown;

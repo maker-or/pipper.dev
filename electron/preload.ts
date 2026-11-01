@@ -30,6 +30,14 @@ import type {
 } from "../contracts/acp.ts";
 import type { SettingChangeRecord } from "../contracts/settings.ts";
 import type {
+  ConnectorAddInput,
+  ConnectorRequestAnswer,
+  ConnectorRequestRef,
+  ConnectorRequestSnapshot,
+  ConnectorSnapshot,
+  ConnectorUpdateInput,
+} from "../contracts/connectors.ts";
+import type {
   AgentTaskConfig,
   AgentTaskSnapshot,
   ThreadProposalSnapshot,
@@ -578,6 +586,48 @@ const api = {
     create: (input: unknown) => ipcRenderer.invoke("mcp:create", input),
     update: (id: string, input: unknown) => ipcRenderer.invoke("mcp:update", id, input),
     delete: (id: string) => ipcRenderer.invoke("mcp:delete", id),
+  },
+  connectorRequests: {
+    get: (ids: string[]): Promise<ConnectorRequestSnapshot[]> =>
+      ipcRenderer.invoke("connectorRequests:get", ids),
+    find: (ref: ConnectorRequestRef): Promise<ConnectorRequestSnapshot | null> =>
+      ipcRenderer.invoke("connectorRequests:find", ref),
+    connect: (id: string, answer?: ConnectorRequestAnswer): Promise<ConnectorRequestSnapshot> =>
+      ipcRenderer.invoke("connectorRequests:connect", id, answer ?? {}),
+    cancel: (id: string): Promise<void> => ipcRenderer.invoke("connectorRequests:cancel", id),
+    decline: (id: string): Promise<ConnectorRequestSnapshot> =>
+      ipcRenderer.invoke("connectorRequests:decline", id),
+    onChanged: (callback: (request: ConnectorRequestSnapshot) => void) => {
+      const listener = (_event: unknown, request: ConnectorRequestSnapshot) => callback(request);
+      ipcRenderer.on("connectorRequests:changed", listener);
+      return () => {
+        ipcRenderer.removeListener("connectorRequests:changed", listener);
+      };
+    },
+  },
+  connectors: {
+    list: (): Promise<ConnectorSnapshot[]> => ipcRenderer.invoke("connectors:list"),
+    add: (input: ConnectorAddInput): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:add", input),
+    update: (id: string, input: ConnectorUpdateInput): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:update", id, input),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke("connectors:remove", id),
+    connect: (id: string): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:connect", id),
+    signIn: (id: string): Promise<ConnectorSnapshot> => ipcRenderer.invoke("connectors:signIn", id),
+    cancelSignIn: (id: string): Promise<void> => ipcRenderer.invoke("connectors:cancelSignIn", id),
+    signOut: (id: string): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:signOut", id),
+    check: (id: string): Promise<ConnectorSnapshot> => ipcRenderer.invoke("connectors:check", id),
+    setEnabled: (id: string, enabled: boolean): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:setEnabled", id, enabled),
+    onChanged: (callback: (connector: ConnectorSnapshot) => void) => {
+      const listener = (_event: unknown, connector: ConnectorSnapshot) => callback(connector);
+      ipcRenderer.on("connectors:changed", listener);
+      return () => {
+        ipcRenderer.removeListener("connectors:changed", listener);
+      };
+    },
   },
   dialog: {
     pickDirectory: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickDirectory"),

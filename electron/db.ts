@@ -5,6 +5,8 @@ import { ensureThreadSnapshotSchema } from "./thread-snapshot-schema.ts";
 import { ensureAgentTaskSchema } from "./agent-tasks/agent-task-store.ts";
 import { ensureProvenanceSchema } from "./operations/provenance.ts";
 import { ensureSettingChangeSchema } from "./operations/settings.ts";
+import { ensureConnectorRequestSchema } from "./connectors/connector-requests.ts";
+import { ensureConnectorSchema } from "./connectors/connector-store.ts";
 
 let db: DatabaseSync | null = null;
 
@@ -285,6 +287,8 @@ export function getDb(): DatabaseSync {
       updated_at INTEGER
     );
   `);
+  ensureConnectorSchema(db);
+  ensureConnectorRequestSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS inline_widgets (

@@ -7,6 +7,7 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { AgentAccountsSettings } from "@/components/agent-accounts-settings";
+import { ConnectorSettings } from "@/components/connector-settings";
 import { RemoteAccessSettings } from "@/components/remote-access-settings";
 import { SleeplessControl } from "@/components/sleepless-control";
 import { WorkspaceStateGallery } from "@/components/workspace-state-gallery";
@@ -54,6 +55,7 @@ type SectionId =
   | "design"
   | "appearance"
   | "agents"
+  | "connectors"
   | "browser"
   | "accounts"
   | "keyboard"
@@ -65,6 +67,7 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string }> = [
   { id: "appearance", label: "Appearance" },
   { id: "design", label: "Design system" },
   { id: "agents", label: "Agents" },
+  { id: "connectors", label: "Connectors" },
   { id: "browser", label: "Browser" },
   { id: "accounts", label: "Account" },
   { id: "keyboard", label: "Keyboard & trackpad" },
@@ -357,6 +360,10 @@ const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
   agents: {
     title: "Agents",
     blurb: "Choose which coding agents Pipper can use.",
+  },
+  connectors: {
+    title: "Connectors",
+    blurb: "Give every agent other services' tools. Sign in once here; Pipper keeps the keys.",
   },
   browser: {
     title: "Agent browser",
@@ -884,7 +891,7 @@ export function SettingsApp() {
           <SidebarInset className="bg-surface-1">
             <ScrollArea className="h-full min-h-0 flex-1" scrollFade cueSize="tight">
               <main
-                className={`mx-auto w-full min-w-0 flex-1 px-7 py-8 pb-12 ${section === "design" ? "max-w-[1200px]" : "max-w-[640px]"}`}
+                className={`mx-auto w-full min-w-0 flex-1 px-7 py-8 pb-12 ${section === "design" ? "max-w-[1200px]" : section === "connectors" ? "max-w-[760px]" : "max-w-[640px]"}`}
               >
                 <div className="mb-5">
                   <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-foreground">
@@ -898,6 +905,7 @@ export function SettingsApp() {
                 {section === "design" && <WorkspaceStateGallery />}
                 {section === "appearance" && <AppearanceView />}
                 {section === "agents" && <AgentsSettingsSection />}
+                {section === "connectors" && <ConnectorSettings />}
                 {section === "browser" && <BrowserView />}
                 {section === "accounts" && <AccountsView />}
                 {section === "keyboard" && <KeyboardView />}

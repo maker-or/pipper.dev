@@ -1,4 +1,6 @@
 import type { InlineWidgetRef } from "../../contracts/acp.ts";
+import type { ConnectorRequestRef } from "../../contracts/connectors.ts";
+import { connectorRequestFromToolPart, connectorRequestKey } from "./connector-request-links.ts";
 import { settingsChangeFromToolPart } from "./settings-change-links.ts";
 import {
   threadLinkFromToolPart,
@@ -76,7 +78,8 @@ export type MessageBodyBlock =
   | { kind: "widget"; ref: InlineWidgetRef; key: string }
   | { kind: "thread"; link: ThreadLink; key: string }
   | { kind: "proposal"; proposalId: string; key: string }
-  | { kind: "settings"; changeId: string; key: string };
+  | { kind: "settings"; changeId: string; key: string }
+  | { kind: "connector"; ref: ConnectorRequestRef; key: string };
 
 /**
  * An assistant turn's visible body in timeline order: text segments with
@@ -105,6 +108,15 @@ export function buildMessageBodyBlocks(
       if (!seen.has(key)) {
         seen.add(key);
         blocks.push({ kind: "settings", changeId, key });
+      }
+      continue;
+    }
+    const connectorRef = connectorRequestFromToolPart(part, threadId);
+    if (connectorRef) {
+      const key = connectorRequestKey(connectorRef);
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "connector", ref: connectorRef, key });
       }
       continue;
     }

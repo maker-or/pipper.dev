@@ -7,7 +7,8 @@ Each of those operations is defined once and reachable from both the renderer
 nested threads, ACP plans and permission prompts, inline widgets and cards.
 
 Status: steps 1, 2 and 4 of _Migration_ are built (`electron/operations/`),
-and step 3 except the routing guide; the rest is proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
+step 3 except the routing guide, and step 5 except project scope; the rest is
+proposed. Agent tasks (`docs/agent-tasks/design.md`) are the first piece; this
 design extends them to the rest of Pipper's own state.
 
 ## What gets a tool
@@ -77,7 +78,9 @@ hold for agents Pipper doesn't control.
    whether MCP results reach the transcript (Gemini via Antigravity doesn't
    forward them), whether `instructions` reach the model, how permission
    requests name MCP tools, whether it can load or resume sessions. Behaviour
-   that depends on these reads the profile.
+   that depends on these reads the profile. Until the profile exists, the differences
+   found so far, and the rules they lead to, are in
+   `docs/harness-differences.md`.
 9. **A thread outlives its session.** A thread can switch agent, resume or
    reconnect, and gets a new MCP token each time. Ownership and parent links
    are keyed by Pipper's thread id, never the harness session id.
@@ -103,7 +106,7 @@ only when the browser is turned on, as now.
 | `delete_workspace`    | destructive   | Remove a worktree and its threads                                       | New                                                                                         |
 | `get_settings`        | read          | Pipper's settings, connectors and remote-access state                   | New                                                                                         |
 | `update_settings`     | local / grant | Change settings                                                         | New                                                                                         |
-| `add_connector`       | grant         | Add an MCP server (later: a plugin) and start its sign-in               | New                                                                                         |
+| `add_connector`       | grant         | Ask the user to connect a catalog or custom MCP server                  | New                                                                                         |
 | `show_remote_pairing` | grant         | Show a phone-pairing card with a QR code and steps                      | New                                                                                         |
 
 Gone: `list_agents` (see _Choosing the agent and model_) and `wait_for_tasks`
@@ -357,30 +360,163 @@ the user's yes — the `grant` tier.
 
 ### Connectors
 
-A connector is a source of new tools for agents: an MCP server today, a
-plugin (Gmail, Calendar, …) later. Mid-task an agent may decide the best path
-is through one the user hasn't connected; it can propose it instead of giving
-up.
+A connector gives agents another service's tools — Linear, Notion, Sentry, a
+database — over MCP. Pipper connects it once and every thread on every
+harness gets it, so the user doesn't set up the same server in Claude Code,
+Codex and OpenCode one by one. An agent that needs one the user hasn't
+connected asks for it instead of giving up:
 
-- `add_connector` takes `{ kind: "mcp", name, transport, command | url, … }`
-  (later `kind: "plugin", id`). It is `grant`: the user sees a card in the
-  thread that shows exactly what will be added — the command and arguments it
-  runs, or the URL it talks to — and why the agent wants it, with **Connect**
-  and **Don't connect**.
-- **Sign-in happens in the card.** When the connector needs OAuth, the card's
-  **Sign in** button opens the provider's page; Pipper receives and stores the
-  token. The agent only learns "connected" or "not connected". Tokens never
-  appear in a tool result or the transcript.
-- **Saved like the user's own.** The connector is saved through the same path
-  as Settings → MCP (`mcp:create` today), so it shows in settings, can be
-  edited or removed there, and is available to every thread.
-- **When it becomes usable.** The tool list is fixed per session, so the new
-  tools reach new threads at once. For the asking thread, Pipper reloads its
-  session with the new server at the end of the turn, the same way
-  `move_thread` reloads at a new directory, and tells the agent: "Gmail is
-  connected; its tools are available from your next turn."
-- **Removing a connector** is the user's, in settings. Agents can't remove
-  or edit connectors.
+> "File this bug in Linear." → the agent calls `add_connector` → a card in
+> the thread: **Connect** → the user signs in to Linear in the browser →
+> Pipper reloads the thread's session and adds a note → the agent files the
+> issue.
+
+**Today.** The `mcp_servers` table and `mcp:*` IPC store servers, and
+`toAcpMcpServers` hands them to every session as given. But nothing in the
+renderer uses them, HTTP servers get no headers (so nothing that needs a
+sign-in works), `env` is stored in plain text, and stdio servers are dropped
+for agents that don't advertise HTTP or SSE MCP, though ACP requires every
+agent to take stdio.
+
+#### Two kinds
+
+- **Remote** (`url`): an HTTPS MCP server, most behind OAuth. Pipper is the
+  MCP client. It connects upstream, signs in, keeps and refreshes the tokens,
+  and serves the connector's tools to each session from its own local
+  endpoint, the way it serves `pipper-agents` (HTTP, or the stdio shim for
+  harnesses without HTTP MCP). The harness never sees a token.
+- **Local** (`command`): a stdio server the harness starts per session in the
+  thread's directory, as today. Its `env` values are stored encrypted and
+  decrypted only into the session's server list. They do reach the server
+  process, which needs them; the card says the command runs on this computer
+  with the user's permissions.
+
+Remote connectors go through Pipper rather than straight to the harness
+because:
+
+- Secrets stay in Pipper (see _What gets a tool_). ACP's `headers` would hand
+  the token to the harness process.
+- One sign-in and one refresh serve every harness and thread. Harnesses
+  differ in MCP OAuth support, and none can show a sign-in page through ACP.
+- Harnesses without HTTP MCP get remote connectors through the stdio shim.
+- Each call is checked when it's made, so a connector turned off or signed out
+  mid-session fails with an error that says so (principle 4).
+
+The upstream side uses `@modelcontextprotocol/sdk`: its client, streamable
+HTTP with the SSE fallback, and its OAuth helpers (protected-resource and
+authorization-server discovery, dynamic client registration, PKCE, refresh).
+The redirect lands on the loopback listener the Clerk sign-in already uses
+(`http://127.0.0.1:<port>/connectors/callback`). A server that takes an API
+key instead of OAuth gets a key field in the card; Pipper stores the key
+encrypted and sends it as a header.
+
+OpenCode keeps MCP servers per directory (see step 2), so connector endpoints
+use the same per-directory share key as `pipper-agents`.
+
+#### Catalog
+
+Pipper ships a short catalog of well-known remote servers — id, name, icon,
+URL, how it signs in: Linear, Notion, Sentry, GitHub, Atlassian, Stripe, and
+so on. `add_connector({ catalog: "linear" })` is the call the description
+steers toward; the card shows the service's icon and a URL Pipper vouches
+for. A custom URL or command is allowed, and its card says it isn't in
+Pipper's catalog.
+
+For now this is what a "plugin" is: a catalog entry. Bundles of a connector
+with skills or instructions wait until something needs them.
+
+#### `add_connector`
+
+- Input: `catalog`, or `name` with `url` (remote) or `command` and `args`
+  (local); and `reason`, one line the card shows ("To file the bug you
+  described"). No secrets: the card asks the user for any key or `env` value.
+- Returns at once (principle 5): `{ request_id, status: "awaiting_user",
+next }`, where `next` says to end the turn or carry on with something
+  else, and that a note will come when it's connected. Nothing is saved until
+  the user clicks **Connect**.
+- Already connected: `{ status: "connected", tools }`, and whether this thread
+  has them yet. A request for the same connector still waiting on the user
+  returns that one, so a retry doesn't stack cards.
+- Refused in a turn another thread started, like `create_thread`: a subthread
+  says what it needs in its report, and the parent asks.
+
+#### The card
+
+One card carries the request from ask to connected. It is drawn from the tool
+output, like a proposal card, and kept in `connector_requests`.
+
+- **Requested**: icon, name, the URL or the full command line, the agent's
+  reason, a "Not in Pipper's catalog" line for custom ones, and any key or
+  `env` fields. **Connect** / **Don't connect**.
+- **Signing in**: **Connect** opens the provider's page in the browser; the
+  card shows "Waiting for Linear…" with **Cancel**.
+- **Connected**: "Linear is connected · 23 tools", and when this thread gets
+  them.
+- **Declined**, **Failed** (the error, with **Try again**), **Expired** (after a
+  week, like proposals).
+
+Key and `env` fields go from the card to main over IPC and never touch the
+transcript. **Connect** is the user's own act: it runs `connectors.add` as
+the user.
+
+#### After it connects
+
+- The connector is saved and on, shows in Settings → Connectors, and is in
+  every session that starts from then on.
+- **The asking thread** reloads once its turn settles, like `move_thread`
+  (load, then resume), then gets a note: "Linear is connected. Its tools are
+  available now." The note starts a turn, so the agent picks up where it
+  stopped. A harness that can't load or resume isn't reloaded — a fresh
+  session would lose the conversation — and the note says the tools reach new
+  threads instead.
+- **Other threads** get it at their next session. They aren't reloaded.
+
+#### Settings → Connectors
+
+A new section in the settings window:
+
+- Each connector: icon, name, URL or command, status (**Connected · 23 tools**,
+  **Needs sign-in**, **Error**, **Off**), and who added it (you, or a link to
+  the thread that asked).
+- **Add connector**: pick from the catalog, or a custom URL or command with its
+  keys and `env`.
+- Per connector: on/off, **Sign in again**, **Edit** (custom ones), **Remove**.
+- Scope: every project by default, or only one.
+
+#### In `get_settings` and `update_settings`
+
+- `get_settings` adds `connectors: [{ id, name, kind, status, enabled, tools,
+project }]`: a count of tools, no keys, no tokens.
+- `update_settings` takes `connectors.<id>.enabled`. Turning one off is
+  `local`, on is `grant`; both show in the settings-change card with Undo.
+- Adding is `add_connector`; editing and removing stay the user's.
+
+#### When a sign-in lapses
+
+A refresh that fails marks the connector **Needs sign-in**. A call to it
+returns "Linear needs the user to sign in again; Pipper shows a sign-in card
+in this thread", and Pipper puts the card, in its **Signing in** state, in
+that thread once.
+
+#### Permissions
+
+Connector tools aren't Pipper's. Pipper's auto-allow for its own tools
+(principle 6) doesn't cover them, and the harness's permission mode applies
+as to any MCP tool. Their endpoints are named for the connector (`linear`),
+never `pipper-*`. Tool annotations (`readOnlyHint`, `destructiveHint`) pass
+through unchanged.
+
+#### Storage
+
+- `mcp_servers` gains `enabled`, `project_id`, `catalog_id`, `auth`
+  (`none`, `oauth` or `key`), `status`, `last_error`, `added_by_thread_id` and
+  `tools_json` (the last `tools/list`, served to each new session).
+- `connector_secrets`: per connector, one blob encrypted with `safeStorage` —
+  the OAuth client registration, tokens, keys and `env` values. The renderer
+  and tools never read it. Existing plain-text `env` moves here on first
+  start.
+- `connector_requests`: the cards (thread, input, state, connector, created
+  at).
 
 ### Remote access
 
@@ -487,7 +623,7 @@ pieces are variants of existing cards.
 | The agent runs a command               | ACP terminal output, through Pipper's terminal manager                               | Yes                                |
 | A `grant` call                         | `AgentQuestionCard`, showing exactly what is granted                                 | Yes (used by `start_subthread`)    |
 | A destructive call on someone else's   | `AgentQuestionCard`, destructive variant: red hold-to-confirm button                 | New variant                        |
-| A connector needs sign-in              | `AgentQuestionCard` with a **Sign in** button                                        | New variant                        |
+| An agent asks for a connector          | A connector card: Connect, sign-in, connected; a note when it's ready                | New card                           |
 | Phone pairing                          | A pairing card: QR code, steps, paired devices                                       | New card                           |
 | A setting changes                      | A line in the thread, with undo for local changes                                    | New                                |
 | An agent creates a thread or workspace | Appears in the sidebar without taking focus                                          | Yes                                |
@@ -742,7 +878,49 @@ if Pipper adopts Effect more broadly.
      guide as a setting, connectors and remote-access state in
      `get_settings` (steps 5 and 6). The settings window doesn't refresh
      while open when an agent changes something.
-5. Connectors: `add_connector`, the sign-in card, session reload at turn end.
+5. Connectors (see _Connectors_), in this order:
+   - **Built:** the gateway (`electron/connectors/`). `ConnectorStore` adds
+     `enabled`, `status`, `last_error` and `tools_json` to `mcp_servers` and
+     seals `env`, headers and OAuth state in `connector_secrets`; plain-text
+     `env` moves there on first start. `ConnectorGateway` connects upstream
+     with `@modelcontextprotocol/sdk` (streamable HTTP, SSE fallback), serves
+     each enabled remote connector to sessions under its own name, and
+     checks every call. A sign-in registers Pipper with the server, opens its
+     page, and takes the redirect on a loopback listener; without one,
+     Pipper only uses and refreshes the tokens it has and never registers.
+     Local connectors now reach agents without HTTP MCP too. IPC:
+     `connectors:list`, `signIn`, `cancelSignIn`, `signOut`, `check`,
+     `setEnabled`, and a `connectors:changed` event. Checked against
+     DeepWiki (tools and a call) and Linear, Notion and Sentry (needs sign-in,
+     then their sign-in page).
+   - **Built:** Settings → Connectors and the catalog
+     (`contracts/connector-catalog.ts`, `src/components/connector-settings.tsx`).
+     17 remote servers, grouped by category, each checked to answer and to let
+     Pipper register with a loopback redirect (Figma doesn't, so it's left
+     out); GitHub takes a personal access token sent as a header. Logos come
+     from svgl.app and ship in `src/assets/connector-logos/`, so Settings
+     makes no network call; services without one show their initial. Custom
+     URLs (https, or http on localhost) and commands, with headers and `env`
+     edited by name. `mcp_servers` gains `catalog_id`; snapshots say when a
+     sign-in page is open (`signingIn`).
+   - **Built:** `add_connector` (`electron/connectors/connector-requests.ts`)
+     and its card (`src/components/connector-request-card.tsx`), kept in
+     `connector_requests`. A retry returns the waiting card; one already
+     connected returns `connected`. Refused in a turn another thread started.
+     Once connected, the asking thread reloads after its turn (as
+     `move_thread` does) and gets a note. Keys and `env` values go from the
+     card to main.
+   - **Built:** `get_settings` lists `connectors` (status, on or off, tool
+     count) and `connector_catalog` (entries not added); `update_settings`
+     takes `connectors.<id>.enabled` (on is a grant, both undoable). A
+     connector that needs a sign-in tells the agent, in its server
+     instructions and in failed calls, to call `add_connector`, whose card
+     then signs in.
+   - Not yet: scope by project; the sign-in card appearing on its own when a
+     sign-in lapses mid-thread (the agent's `add_connector` call shows it
+     instead); a sign-in page that doesn't reach Pipper's loopback (a server
+     that only allows HTTPS redirects); not reloading a harness that can't
+     load or resume (it starts a new session, as after `move_thread`).
 6. Remote access: `show_remote_pairing` and the pairing card.
 7. Merge `pipper-browser` into `pipper`.
 
@@ -750,5 +928,8 @@ if Pipper adopts Effect more broadly.
 
 - **Guide length.** The routing guide sits in every session's context. Cap
   it (a few hundred words) and say so in the editor.
-- **Plugins.** What a plugin is beyond an MCP server (bundled auth, a curated
-  catalog, skills) decides `add_connector`'s `kind: "plugin"` shape.
+- **Catalog upkeep.** Which servers ship, and whether the list ships with
+  the app or is fetched, so a new entry doesn't wait for a release.
+- **The same server twice.** A user who already has Linear in Claude Code's
+  own config gets its tools twice. Pipper could read each harness's MCP
+  config and skip duplicates; not planned yet.

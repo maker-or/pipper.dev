@@ -50,7 +50,10 @@ import {
   type LiveConnection,
 } from "./connection-lifecycle.ts";
 import type { BrowserService } from "./browser/browser-service.ts";
-import { listMcpServers, toAcpMcpServers } from "./mcp-servers.ts";
+import { toAcpMcpServers } from "./mcp-servers.ts";
+import type { ConnectorGateway } from "./connectors/connector-gateway.ts";
+import type { ConnectorRequests } from "./connectors/connector-requests.ts";
+import type { ConnectorStore } from "./connectors/connector-store.ts";
 import { AgentTaskService, type AgentTaskHost } from "./agent-tasks/agent-task-service.ts";
 import { AgentTaskStore, ThreadProposalStore } from "./agent-tasks/agent-task-store.ts";
 import { summarizeLastTurn } from "./agent-tasks/agent-task-receipt.ts";
@@ -369,6 +372,11 @@ export class AgentConnectionManager {
   /** Client-hosted `pipper-agents` tools: threads start other agents as nested task threads. */
   private readonly tasks: AgentTaskService;
   private readonly browser: BrowserService | null;
+  private readonly connectors: {
+    store: ConnectorStore;
+    gateway: ConnectorGateway;
+    requests?: ConnectorRequests;
+  } | null;
   /** Dedup key for the last broadcast running-threads set. */
   private lastRunningThreadsKey = "";
   /** Per tool-call start timestamps for `tool_call_finished` timing, keyed `${sessionId}:${toolCallId}`. */
@@ -417,10 +425,17 @@ export class AgentConnectionManager {
     catalogPath?: string;
     /** Headless browser exposed to sessions over MCP; omitted in tests. */
     browser?: BrowserService | null;
+    /** The user's connectors (MCP servers); omitted in tests. */
+    connectors?: {
+      store: ConnectorStore;
+      gateway: ConnectorGateway;
+      requests?: ConnectorRequests;
+    } | null;
     /** Task rows; defaults to the app database (tests inject one). */
     agentTaskStore?: AgentTaskStore;
   }) {
     this.browser = options.browser ?? null;
+    this.connectors = options.connectors ?? null;
     // Downloads from agent pages are approved in the session's thread, like
     // any other permission an agent asks for.
     this.browser?.setPermissionRequester(async ({ sessionId, title, detail }) => {
@@ -484,8 +499,13 @@ export class AgentConnectionManager {
       host: this.agentTaskHost(),
       store: options.agentTaskStore ?? new AgentTaskStore(() => getDb()),
       proposals: new ThreadProposalStore(() => getDb()),
+      connectorRequests: this.connectors?.requests,
       captureAnalytics: (name, properties) => this.captureAnalytics?.(name, properties),
     });
+    if (this.connectors?.requests) {
+      this.connectors.requests.onReady = (threadId, note) =>
+        this.tasks.connectorReady(threadId, note);
+    }
     void this.tasks.init().catch((error: unknown) => {
       console.warn("[agent-tasks] could not load task state:", error);
     });
@@ -598,6 +618,7 @@ export class AgentConnectionManager {
           { background: true, origin },
         ),
       cancelTurn: (threadId) => this.abortThread(threadId),
+      reloadThreadSession: (threadId) => this.reloadThreadSession(threadId),
       isTurnInFlight: (threadId) => Boolean(this.sessions.get(threadId)?.promptInFlight),
       lastTurn: (threadId) => {
         const runtime = this.sessions.get(threadId);
@@ -2239,9 +2260,10 @@ export class AgentConnectionManager {
     return {};
   }
 
-  private mcpServersForConnection(live: LiveConnection): Array<Record<string, unknown>> {
-    const caps = live.agentCapabilities.mcpCapabilities;
-    return toAcpMcpServers(listMcpServers(), caps);
+  /** Local connectors, which the harness starts itself in the session's directory. */
+  private localConnectorServers(): Array<Record<string, unknown>> {
+    const store = this.connectors?.store;
+    return store ? toAcpMcpServers(store.list(), (row) => store.env(row)) : [];
   }
 
   /**
@@ -2258,7 +2280,7 @@ export class AgentConnectionManager {
     bind: (sessionId: string) => void;
     release: () => void;
   }> {
-    let servers = this.mcpServersForConnection(live);
+    let servers = this.localConnectorServers();
     let tasksToken: string | null = null;
     let browserToken: string | null = null;
     // Harnesses that keep MCP servers per directory get one endpoint per
@@ -2287,15 +2309,31 @@ export class AgentConnectionManager {
     } catch (error) {
       console.warn("[browser] could not attach browser MCP endpoint", error);
     }
+    let remote: { bind: (sessionId: string) => void; release: () => void } | null = null;
+    try {
+      if (this.connectors) {
+        const attached = await this.connectors.gateway.attachMcpServers(
+          servers,
+          live.agentCapabilities,
+          shareKey,
+        );
+        servers = attached.servers;
+        remote = attached;
+      }
+    } catch (error) {
+      console.warn("[connectors] could not attach remote connectors", error);
+    }
     return {
       servers,
       bind: (sessionId) => {
         if (tasksToken) this.tasks.bindSession(tasksToken, sessionId);
         if (browserToken) this.browser?.bindSession(browserToken, sessionId);
+        remote?.bind(sessionId);
       },
       release: () => {
         if (tasksToken) this.tasks.releaseTokenForSession(tasksToken);
         if (browserToken) this.browser?.releaseTokenForSession(browserToken);
+        remote?.release();
       },
     };
   }
@@ -2338,6 +2376,7 @@ export class AgentConnectionManager {
   private releaseSessionMcp(sessionId: string): void {
     this.tasks.releaseSessionMcp(sessionId);
     this.browser?.releaseSessionMcp(sessionId);
+    this.connectors?.gateway.releaseSession(sessionId);
   }
 
   /**
@@ -4072,6 +4111,7 @@ export class AgentConnectionManager {
     this.terminalManager.killAll();
     this.tasks.dispose();
     this.browser?.dispose();
+    this.connectors?.gateway.dispose();
     const flushed = await waitBounded(
       Promise.all([this.flushAllSnapshots(), this.catalogs.flush()]),
       snapshotFlushMs,

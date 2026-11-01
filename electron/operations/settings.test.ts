@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "vitest";
 import { DatabaseSync } from "node:sqlite";
 import type { AgentTaskConfig } from "../../contracts/agent-tasks.ts";
 import type { BrowserConfig } from "../../contracts/acp.ts";
+import type { ConnectorSnapshot } from "../../contracts/connectors.ts";
 import { DEFAULT_AGENT_TASK_CONFIG } from "../agent-tasks/agent-task-config.ts";
 import { callAsAgent, runAsUser, type AgentContext } from "./define.ts";
 import {
@@ -25,6 +26,16 @@ function fakeSettings() {
       downloads: "ask",
     } as BrowserConfig,
     autoInstall: true,
+    connectors: [
+      connector({ id: "c-linear", name: "Linear", catalogId: "linear", tools: 23 }),
+      connector({
+        id: "c-pg",
+        name: "Postgres",
+        transport: "stdio",
+        enabled: false,
+        status: "unknown",
+      }),
+    ],
   };
   configureSettingsOperations({
     getAgentTasks: () => state.agentTasks,
@@ -35,9 +46,39 @@ function fakeSettings() {
     setAutoInstall: (enabled) => {
       state.autoInstall = enabled;
     },
+    connectors: {
+      list: () => state.connectors,
+      setEnabled: (id, enabled) => {
+        state.connectors = state.connectors.map((c) => (c.id === id ? { ...c, enabled } : c));
+      },
+    },
     changes: new SettingChangeStore(() => db),
   });
   return state;
+}
+
+function connector(
+  fields: Omit<Partial<ConnectorSnapshot>, "tools"> & { id: string; name: string; tools?: number },
+): ConnectorSnapshot {
+  const { tools = 0, ...rest } = fields;
+  return {
+    catalogId: null,
+    transport: "http",
+    url: "https://mcp.example/mcp",
+    command: null,
+    args: [],
+    envNames: ["SECRET_NAME"],
+    headerNames: [],
+    enabled: true,
+    status: "connected",
+    lastError: null,
+    signedIn: true,
+    signingIn: false,
+    tools: Array.from({ length: tools }, (_, i) => ({ name: `tool_${i}` })),
+    createdAt: 0,
+    updatedAt: 0,
+    ...rest,
+  };
 }
 
 function agent(threadId = "caller"): AgentContext {
@@ -162,5 +203,69 @@ describe("settings", () => {
     await expect(
       undoSettingsChange.run({ change: outcome.result.changeId! }, agent()),
     ).rejects.toThrow(/Only the user/);
+  });
+
+  test("get_settings lists the user's connectors without secrets, and the catalog they lack", async () => {
+    fakeSettings();
+    const settings = await runAsUser(getSettings, {});
+    expect(settings.connectors).toEqual({
+      "c-linear": {
+        name: "Linear",
+        catalog: "linear",
+        kind: "remote",
+        enabled: true,
+        status: "connected",
+        tools: 23,
+      },
+      "c-pg": {
+        name: "Postgres",
+        catalog: null,
+        kind: "local",
+        enabled: false,
+        status: "local",
+        tools: null,
+      },
+    });
+    expect(JSON.stringify(settings)).not.toContain("SECRET_NAME");
+    const catalog = settings.connector_catalog.map((entry) => entry.id);
+    expect(catalog).not.toContain("linear");
+    expect(settings.connector_catalog).toContainEqual(
+      expect.objectContaining({ id: "github", sign_in: "key" }),
+    );
+    expect(settings.connector_catalog).toContainEqual(
+      expect.objectContaining({ id: "notion", sign_in: "browser" }),
+    );
+  });
+
+  test("turning a connector off applies at once; on needs a grant; undo puts it back", async () => {
+    const state = fakeSettings();
+    const off = await callAsAgent(
+      updateSettings,
+      { connectors: { "c-linear": { enabled: false } } },
+      agent(),
+    );
+    if (off.status !== "done") throw new Error("expected done");
+    expect(off.result.changes).toMatchObject([
+      { path: "connectors.c-linear.enabled", label: "Linear connector", widens: false },
+    ]);
+    expect(state.connectors[0]!.enabled).toBe(false);
+
+    const on = await callAsAgent(
+      updateSettings,
+      { connectors: { "c-pg": { enabled: true } } },
+      agent(),
+    );
+    expect(on).toMatchObject({
+      status: "needs_grant",
+      grant: { changes: ["Postgres connector: off → on"] },
+    });
+    expect(state.connectors[1]!.enabled).toBe(false);
+
+    await runAsUser(undoSettingsChange, { change: off.result.changeId });
+    expect(state.connectors[0]!.enabled).toBe(true);
+
+    await expect(
+      callAsAgent(updateSettings, { connectors: { nope: { enabled: true } } }, agent()),
+    ).rejects.toThrow(/c-linear, c-pg/);
   });
 });

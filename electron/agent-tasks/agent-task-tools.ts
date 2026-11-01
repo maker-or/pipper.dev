@@ -4,6 +4,8 @@ import { NEXT_STEP_LIMITS } from "../../contracts/next-step.ts";
 import type { McpToolDefinition } from "../mcp/mcp-http-server.ts";
 import { toolInputSchema } from "../operations/define.ts";
 import { SETTINGS_UPDATE_INPUT } from "../operations/settings.ts";
+import { CONNECTOR_CATALOG } from "../../contracts/connector-catalog.ts";
+import { ADD_CONNECTOR_INPUT } from "../connectors/connector-requests.ts";
 
 export const AGENT_TASK_SERVER_NAME = "pipper-agents";
 
@@ -28,6 +30,12 @@ export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "- move_thread moves your own thread (or one you started) to another workspace from its next turn.",
   "- Don't start a subthread for something you can do in a few tool calls yourself.",
   "- update_settings changes Pipper's settings only when the user asks for it. Never widen what agents can do on your own initiative.",
+  "",
+  "Connectors (other services' tools, such as Linear or Sentry, connected once in Pipper for every thread):",
+  "- When the user asks which services, connectors or integrations you have, call get_settings and answer from its connectors and connector_catalog, not from your tool list or installed CLIs: your tools only show connectors that were on when this thread started. Say which are connected, which need a sign-in, and which Pipper can connect, and offer add_connector for one they want.",
+  "- When the user asks for something a service's tools would do and you don't have them, don't give up or ask for an API key: call get_settings to see the user's connectors and Pipper's catalog, then add_connector. The user connects it from a card; you get a note when its tools are ready.",
+  "- A connector with status needs_sign_in has no working tools until the user signs in again: call add_connector for it, which shows them the sign-in card.",
+  "- Never ask the user to paste a key, token or password into the chat; the card takes it.",
 ].join("\n");
 
 export const WRAP_UP_TOOL: McpToolDefinition = {
@@ -238,8 +246,27 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
       name: "get_settings",
       description:
         "Pipper's settings that agents can change, grouped by area: agent_tasks (subthreads " +
-        "and these tools), browser (browser tools for agents) and workspaces.",
+        "and these tools), browser (browser tools for agents) and workspaces. Also the user's " +
+        "connectors (status, on or off, tool count; never keys) and connector_catalog, the " +
+        "services Pipper can connect that they haven't added. Call it when the user asks what " +
+        "services or connectors you have: your tool list doesn't show connectors added after " +
+        "this thread started.",
       inputSchema: toolInputSchema(GET_SETTINGS_INPUT),
+    },
+    {
+      name: "add_connector",
+      description:
+        "Ask the user to connect a service whose tools you need: Pipper shows a card under " +
+        "your reply, the user presses Connect (and signs in, or pastes a key into the card), " +
+        "and Pipper reloads your thread with the tools and sends you a note. Returns at once " +
+        'with status "awaiting_user"; end your turn or carry on. "connected" means the user ' +
+        "already has it. Use catalog when the service is listed; otherwise name with url (a " +
+        "remote MCP server) or command (a local one). Only when the user asked for the work " +
+        "it's for, in a turn they started.\n\nCatalog:\n" +
+        CONNECTOR_CATALOG.map(
+          (entry) => `- ${entry.id} (${entry.name}): ${entry.description}`,
+        ).join("\n"),
+      inputSchema: toolInputSchema(ADD_CONNECTOR_INPUT),
     },
     {
       name: "update_settings",
