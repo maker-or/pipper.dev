@@ -8,6 +8,7 @@ import {
   ClockCounterClockwiseIcon,
   PlusIcon,
 } from "@phosphor-icons/react";
+import type { Project } from "../../contracts/projects.ts";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/project-store";
 import { useAgentStore } from "@/store/agent-store";
@@ -38,8 +39,13 @@ function formatTimestamp(ts: number | undefined): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function ProjectThreadsDropdown() {
-  const activeProject = useProjectStore((s) => s.activeProject);
+/**
+ * The project's thread history. `project` overrides the active project (the
+ * hybrid shell passes a draft's project while drafting).
+ */
+export function ProjectThreadsDropdown({ project }: { project?: Project | null } = {}) {
+  const storeProject = useProjectStore((s) => s.activeProject);
+  const activeProject = project === undefined ? storeProject : project;
   const activeThreadId = useAgentStore((s) => s.snapshot?.threadId);
   const agentTasks = useAgentStore((s) => s.agentTasks);
   const queryClient = useQueryClient();

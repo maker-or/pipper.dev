@@ -98,6 +98,19 @@ export function extractProjectId(content: ComposerContent): string | null {
   return id;
 }
 
+/**
+ * The project a draft's composer content targets. Where the shell owns the
+ * project (advanced and hybrid hide the @project chip), the content carries no
+ * project, so the draft keeps the one the shell gave it; reading the chipless
+ * content would clear it on every keystroke and send into the wrong project.
+ */
+export function draftProjectFromContent(
+  content: ComposerContent,
+  shell: { ownsProject: boolean; draftProjectId: string | null },
+): string | null {
+  return shell.ownsProject ? shell.draftProjectId : extractProjectId(content);
+}
+
 /** Last agent token wins. */
 export function extractAgentId(content: ComposerContent): string | null {
   let id: string | null = null;

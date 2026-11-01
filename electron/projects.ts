@@ -35,3 +35,9 @@ export function createProject(input: { name: string; path: string; icon: string 
 
   return row;
 }
+
+export function removeProject(id: string): void {
+  const db = getDb();
+  const result = db.prepare("DELETE FROM projects WHERE id = ?").run(id);
+  if (Number(result.changes) === 0) throw new Error("Project not found.");
+}

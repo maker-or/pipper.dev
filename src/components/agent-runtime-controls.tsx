@@ -42,6 +42,8 @@ interface AgentRuntimeControlsProps {
   onStop?: () => void;
   /** Running subthreads, shown at the start of the right-hand group. */
   subthreads?: ReactNode;
+  /** Workspace picker (hybrid shell), shown after the model. */
+  workspace?: ReactNode;
 }
 
 export function AgentRuntimeControls({
@@ -64,6 +66,7 @@ export function AgentRuntimeControls({
   isStopping = false,
   onStop,
   subthreads,
+  workspace,
 }: AgentRuntimeControlsProps) {
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -92,7 +95,7 @@ export function AgentRuntimeControls({
 
   const hasReasoningLevels = reasoningLevels.length > 0;
   const hasModelPicker = Boolean(modelName && modelId && modelItems.length > 0 && onModelChange);
-  if (!hasReasoningLevels && !contextUsage && !modelName && !isStreaming) return null;
+  if (!hasReasoningLevels && !contextUsage && !modelName && !isStreaming && !workspace) return null;
 
   return (
     <div ref={rootRef} className="relative flex w-full items-center justify-between gap-3">
@@ -123,6 +126,7 @@ export function AgentRuntimeControls({
             <span className="truncate">{modelName}</span>
           </Button>
         )}
+        {workspace}
       </div>
 
       <AnimatePresence>

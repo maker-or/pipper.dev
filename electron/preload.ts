@@ -239,6 +239,8 @@ const api = {
   },
   projects: {
     list: (): Promise<Project[]> => ipcRenderer.invoke("projects:list"),
+    delete: (projectId: string): Promise<{ activeProjectId: string | null }> =>
+      ipcRenderer.invoke("projects:delete", projectId),
     create: (input: CreateProjectInput): Promise<Project> =>
       ipcRenderer.invoke("projects:create", input),
     getActive: (): Promise<Project | null> => ipcRenderer.invoke("projects:getActive"),
@@ -270,6 +272,13 @@ const api = {
       ipcRenderer.on("projects:listChanged", listener);
       return () => {
         ipcRenderer.removeListener("projects:listChanged", listener);
+      };
+    },
+    onDeleted: (callback: (projectId: string) => void) => {
+      const listener = (_event: any, projectId: string) => callback(projectId);
+      ipcRenderer.on("projects:deleted", listener);
+      return () => {
+        ipcRenderer.removeListener("projects:deleted", listener);
       };
     },
   },
@@ -320,7 +329,8 @@ const api = {
       projectId: string;
       path: string;
       branch: string;
-    }): Promise<{ thread: Thread; worktree: Worktree }> =>
+      activate?: boolean;
+    }): Promise<{ thread: Thread | null; worktree: Worktree }> =>
       ipcRenderer.invoke("worktrees:switchBranch", input),
     continue: (input: { projectId: string; path: string }): Promise<Worktree> =>
       ipcRenderer.invoke("worktrees:continue", input),
@@ -626,6 +636,13 @@ const api = {
       ipcRenderer.on("connectors:changed", listener);
       return () => {
         ipcRenderer.removeListener("connectors:changed", listener);
+      };
+    },
+    onRemoved: (callback: (id: string) => void) => {
+      const listener = (_event: unknown, id: string) => callback(id);
+      ipcRenderer.on("connectors:removed", listener);
+      return () => {
+        ipcRenderer.removeListener("connectors:removed", listener);
       };
     },
   },

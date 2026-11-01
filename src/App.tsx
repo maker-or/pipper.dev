@@ -45,15 +45,19 @@ import {
 } from "@/lib/monitor-runtime-observer";
 import { useMonitorTabSync } from "@/lib/monitor-tab-sync";
 import { AdvancedShell } from "@/components/advanced-shell";
+import { HybridShell } from "@/components/hybrid-shell";
 import { useShowPreviewWorkspace } from "@/lib/file-preview-actions";
 import { PreviewLayer } from "@/components/file-preview/preview-layer";
 import { normalizeWorkspacePath } from "../contracts/workspace-scope.ts";
-import { useUiModeStore } from "@/store/ui-mode-store";
+import { useUiModeStore, workspaceFollowsThread } from "@/store/ui-mode-store";
 
 const EMPTY_WORKTREES: Worktree[] = [];
 
 export default function App() {
   const uiMode = useUiModeStore((state) => state.mode);
+  // Basic and hybrid follow the displayed thread's workspace; advanced follows
+  // the workspace selected in its sidebar.
+  const followsThreadMode = workspaceFollowsThread(uiMode);
   const { activeProject, loadActiveProject, isLoading, error: projectError } = useProjectStore();
   const snapshotThreadId = useAgentStore((state) => state.snapshot?.threadId ?? null);
   const snapshotCwd = useAgentStore((state) => state.snapshot?.cwd ?? null);
@@ -395,7 +399,7 @@ export default function App() {
   const storedWorktreePath = currentProject
     ? selectedWorktreePathByProject[currentProject.id]
     : undefined;
-  const followsThread = uiMode === "basic" && !draft && snapshotThreadId != null;
+  const followsThread = followsThreadMode && !draft && snapshotThreadId != null;
   const targetWorktreePath =
     draft && draft.projectId === currentProject?.id
       ? (draft.worktreePath ?? currentProject?.path)
@@ -415,10 +419,11 @@ export default function App() {
     null;
   const selectedWorktreePath =
     selectedWorktree?.path ?? targetWorktreePath ?? currentProject?.path ?? null;
-  // Previews follow the workspace the file tree lists. The advanced shell
-  // reports its own workspace, so this one stays out of it.
+  // Previews follow the workspace the file tree lists (in hybrid, the displayed
+  // thread's). The advanced shell reports its own workspace, so this one stays
+  // out of it.
   useShowPreviewWorkspace(
-    uiMode === "basic",
+    followsThreadMode,
     chromeProject?.id ?? null,
     chromeProject ? normalizeWorkspacePath(selectedWorktreePath, chromeProject.path) : null,
   );
@@ -562,7 +567,7 @@ export default function App() {
   // switch, project switch, cross-workspace activation) hides the previous
   // sessions without stopping them and shows the target workspace's terminals.
   const terminalWorkspace = resolveTerminalWorkspace({
-    preferThread: uiMode === "basic" && !draft,
+    preferThread: followsThreadMode && !draft,
     thread: { threadId: snapshotThreadId, projectId: snapshotProjectId, cwd: snapshotCwd },
     project: activeProject,
     selectedPath: selectedWorktreePath,
@@ -631,6 +636,10 @@ export default function App() {
 
   if (uiMode === "advanced") {
     return <AdvancedShell />;
+  }
+
+  if (uiMode === "hybrid") {
+    return <HybridShell />;
   }
 
   return (

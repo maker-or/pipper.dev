@@ -1,14 +1,18 @@
 import { create } from "zustand";
 
-export type UiMode = "basic" | "advanced";
+export type UiMode = "basic" | "advanced" | "hybrid";
 
 const STORAGE_KEY = "pipper.ui.mode";
+
+function isUiMode(value: string | null): value is UiMode {
+  return value === "basic" || value === "advanced" || value === "hybrid";
+}
 
 function readMode(): UiMode | null {
   if (typeof window === "undefined") return null;
   try {
     const value = window.localStorage.getItem(STORAGE_KEY);
-    return value === "advanced" || value === "basic" ? value : null;
+    return isUiMode(value) ? value : null;
   } catch {
     return null;
   }
@@ -31,11 +35,11 @@ export const useUiModeStore = create<UiModeState>((set) => ({
   },
 }));
 
-if (typeof window !== "undefined") {
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("storage", (event) => {
     if (event.key !== STORAGE_KEY) return;
     const mode = event.newValue;
-    if (mode === "advanced" || mode === "basic") {
+    if (isUiMode(mode)) {
       useUiModeStore.setState({ mode });
     }
   });
@@ -43,4 +47,28 @@ if (typeof window !== "undefined") {
 
 export function hasSavedUiMode(): boolean {
   return readMode() !== null;
+}
+
+/**
+ * Whether the shell picks the project for the composer (the sidebar in
+ * advanced and hybrid), so drafts carry no @project chip.
+ */
+export function shellOwnsProject(mode: UiMode): boolean {
+  return mode !== "basic";
+}
+
+/**
+ * Whether the active thread's changes open as their own tab (hybrid), like a
+ * file preview, rather than as a split beside the thread (basic).
+ */
+export function diffOpensAsTab(mode: UiMode): boolean {
+  return mode === "hybrid";
+}
+
+/**
+ * Whether the workspace follows the displayed thread (basic and hybrid) rather
+ * than a workspace the user selected in the sidebar (advanced).
+ */
+export function workspaceFollowsThread(mode: UiMode): boolean {
+  return mode !== "advanced";
 }

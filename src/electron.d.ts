@@ -162,6 +162,7 @@ declare global {
       };
       projects: {
         list: () => Promise<Project[]>;
+        delete: (projectId: string) => Promise<{ activeProjectId: string | null }>;
         create: (input: CreateProjectInput) => Promise<Project>;
         getActive: () => Promise<Project | null>;
         /** `requestId` lets the caller abandon the scan via `cancelListFiles`. */
@@ -178,6 +179,7 @@ declare global {
         setActive: (projectId: string) => Promise<void>;
         onActiveChanged: (callback: (projectId: string) => void) => () => void;
         onListChanged: (callback: (project: Project) => void) => () => void;
+        onDeleted?: (callback: (projectId: string) => void) => () => void;
       };
       files: {
         stat: (target: FilePreviewTarget) => Promise<FilePreviewInfo>;
@@ -202,7 +204,9 @@ declare global {
           projectId: string;
           path: string;
           branch: string;
-        }) => Promise<{ thread: Thread; worktree: Worktree }>;
+          /** False keeps the displayed thread; the default opens one in the worktree. */
+          activate?: boolean;
+        }) => Promise<{ thread: Thread | null; worktree: Worktree }>;
         archive: (input: { projectId: string; path: string }) => Promise<WorkspaceGitActionResult>;
         restore: (input: { projectId: string; path: string }) => Promise<WorkspaceGitActionResult>;
         continue: (input: { projectId: string; path: string }) => Promise<Worktree>;
@@ -405,6 +409,7 @@ declare global {
         check: (id: string) => Promise<ConnectorSnapshot>;
         setEnabled: (id: string, enabled: boolean) => Promise<ConnectorSnapshot>;
         onChanged: (callback: (connector: ConnectorSnapshot) => void) => () => void;
+        onRemoved: (callback: (id: string) => void) => () => void;
       };
       dialog: {
         pickDirectory: () => Promise<string | null>;

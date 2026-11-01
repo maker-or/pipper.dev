@@ -14,6 +14,9 @@ import { ChatMessage } from "@/components/ui/chat-message";
 import { ThreadComposer, initialDraftContent } from "@/components/thread-composer";
 import { ConversationTurnIdentity } from "@/components/conversation-turn-identity";
 import { AgentRuntimeControls } from "@/components/agent-runtime-controls";
+import { ComposerWorktreePicker } from "@/components/composer-worktree-picker";
+import { pickThreadWorktree } from "@/lib/worktree-pick";
+import { newDraftWorktreePath } from "@/lib/draft-worktree";
 import { AgentAuthBanner } from "@/components/agent-auth-actions";
 import type { MentionProvider } from "@/components/mention-popover";
 import { useIcon } from "@/lib/icon-context";
@@ -24,15 +27,17 @@ import { useAgentStore } from "@/store/agent-store";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useModelCatalogStore } from "@/store/model-catalog-store";
 import { useWorktreeStore } from "@/store/worktree-store";
-import { useUiModeStore } from "@/store/ui-mode-store";
+import { shellOwnsProject, useUiModeStore } from "@/store/ui-mode-store";
 import { useIsDiffSplit, useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { useDiffStore, type DiffTurnSummary } from "@/store/diff-store";
 import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import type { ComposerContent } from "../../contracts/composer.ts";
+import type { Worktree } from "../../contracts/worktrees.ts";
 import {
   assertCreatable,
   blankContent,
   buildContent,
+  draftProjectFromContent,
   extractModelId,
   extractModelToken,
   extractProjectId,
@@ -801,18 +806,20 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     (state) => state.markDraftUserEditedProject,
   );
   const isDraftMode = draft != null;
-  // Advanced workspace UI: the selected workspace already fixes the project
-  // (and worktree), so the @project composer chip is redundant and hidden.
-  const isAdvancedUI = useUiModeStore((state) => state.mode) === "advanced";
+  // Advanced and hybrid UI: the sidebar already fixes the project, so the
+  // @project composer chip is redundant and hidden.
+  const uiMode = useUiModeStore((state) => state.mode);
+  const projectFromShell = shellOwnsProject(uiMode);
+  const isHybridUI = uiMode === "hybrid";
   const liveComposerProject = useMemo<ComposerProjectContext | null>(() => {
-    if (isDraftMode || isAdvancedUI) return null;
+    if (isDraftMode || projectFromShell) return null;
     const projectId = snapshot?.projectId ?? activeProject?.id ?? null;
     if (!projectId) return null;
     return (
       projectsList.find((project) => project.id === projectId) ??
       (activeProject?.id === projectId ? activeProject : null)
     );
-  }, [activeProject, isAdvancedUI, isDraftMode, projectsList, snapshot?.projectId]);
+  }, [activeProject, projectFromShell, isDraftMode, projectsList, snapshot?.projectId]);
   const isDiffSplit = useIsDiffSplit();
   const selectedWorktreePathByProject = useWorktreeStore(
     (state) => state.selectedWorktreePathByProject,
@@ -832,10 +839,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       // created. Bind only untouched drafts so their project/CWD context is
       // still auto-populated without overwriting user choices.
       if (!draft?.projectId && !draft?.dirty && activeProject) {
-        const worktreePath = normalizeWorkspacePath(
-          selectedWorktreePathByProject[activeProject.id],
-          activeProject.path,
-        );
+        const worktreePath = newDraftWorktreePath(activeProject);
         beginDraft({
           projectId: activeProject.id,
           previousActiveProjectId: activeProject.id,
@@ -846,9 +850,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     }
     if (requestedThreadId || snapshot?.threadId) return;
     const project = activeProject;
-    const worktreePath = project
-      ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
-      : null;
+    const worktreePath = newDraftWorktreePath(project);
     beginDraft({
       projectId: project?.id ?? null,
       previousActiveProjectId: project?.id ?? null,
@@ -887,7 +889,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
             icon: projectObj?.icon ?? null,
           }
         : null;
-    const content = initialDraftContent(isAdvancedUI ? null : softProject);
+    const content = initialDraftContent(projectFromShell ? null : softProject);
     // Soft-default agent into draft state (no @agent chip — model-first UX).
     // Prefer the currently connected agent when it is in the user's pool.
     const registry = useAgentRegistryStore.getState();
@@ -901,17 +903,19 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     if (pool.length > 0) {
       const connectedId = useAgentStore.getState().state?.agentId ?? null;
       const preferred = (connectedId ? pool.find((a) => a.id === connectedId) : null) ?? pool[0]!;
-      setDraftAgent(preferred.id);
+      // A soft default, not the user's pick: an untouched draft still closes
+      // without a discard prompt.
+      setDraftAgent(preferred.id, { markDirty: false });
     }
     setDraftContent(content);
     requestAnimationFrame(() => composerTextareaRef.current?.focus());
-  }, [draft, projectsList, activeProject, isAdvancedUI, setDraftAgent]);
+  }, [draft, projectsList, activeProject, projectFromShell, setDraftAgent]);
 
   // External chrome (title-bar project switcher) can change draft.projectId;
   // keep the composer chip in sync without wiping free text. Also clear agent
   // when the project identity changes so @agent is offered again.
   useEffect(() => {
-    if (!draft || isAdvancedUI) return;
+    if (!draft || projectFromShell) return;
     const contentProject = extractProjectId(draftContent);
     if ((draft.projectId ?? null) === (contentProject ?? null)) return;
     if (draft.projectId) {
@@ -946,23 +950,24 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       setDraftContent((prev) => removeEntityKind(prev, "project"));
     }
     // Only react to store project id and the UI mode — not every content
-    // keystroke. Returning to Basic must re-add the chip the Advanced-mode
+    // keystroke. Returning to Basic must re-add the chip the Advanced/Hybrid
     // strip below removed, or the first send fails with `missing_project`.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: store → chip bridge
-  }, [draft?.projectId, isAdvancedUI]);
-  // Advanced UI keeps no project chip: the workspace owns the project context.
+  }, [draft?.projectId, projectFromShell]);
+  // Advanced and hybrid keep no project chip: the sidebar owns the project context.
   // Strip any legacy chip that arrives (e.g. restored content) without wiping text.
   useEffect(() => {
-    if (!isAdvancedUI || !draft) return;
+    if (!projectFromShell || !draft) return;
     if (extractProjectId(draftContent) == null) return;
     setDraftContent((prev) => removeEntityKind(prev, "project"));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: one-way chip strip
-  }, [isAdvancedUI, draft, draftContent]);
+  }, [projectFromShell, draft, draftContent]);
 
   // Keep draft store fields aligned with chips so chrome can bind.
   const handleDraftContentChange = (next: ComposerContent) => {
-    const prevProject = extractProjectId(draftContent);
-    const nextProject = extractProjectId(next);
+    const shell = { ownsProject: projectFromShell, draftProjectId: draft?.projectId ?? null };
+    const prevProject = draftProjectFromContent(draftContent, shell);
+    const nextProject = draftProjectFromContent(next, shell);
     let content = next;
     // Switching project invalidates a prior model pick; agent is inferred from
     // the model (or the soft default in draft.agentId), not a user chip step.
@@ -1695,8 +1700,8 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   const handleDraftSend = async (content: ComposerContent, files: File[]) => {
     const check = assertCreatable(content, {
       defaultAgentId: draft?.agentId ?? null,
-      // Advanced UI: no project chip — the workspace owns the project context.
-      defaultProjectId: isAdvancedUI ? (draft?.projectId ?? activeProject?.id ?? null) : null,
+      // Advanced and hybrid: no project chip — the sidebar owns the project context.
+      defaultProjectId: projectFromShell ? (draft?.projectId ?? activeProject?.id ?? null) : null,
     });
     if (!check.ok) {
       const description =
@@ -2205,6 +2210,32 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   }, [visibleAgentError]);
   const runtimeControlsDisabled =
     isRuntimeActionPending || isSwitchingThread || isConnecting || !snapshot;
+  // Hybrid shell: the composer rail picks the worktree. A draft binds the
+  // worktree it will be created in; a live thread moves to it (between turns).
+  const worktreePickerProjectId = isDraftMode
+    ? (draft?.projectId ?? null)
+    : (snapshot?.projectId ?? null);
+  const worktreePickerProject = worktreePickerProjectId
+    ? (projectsList.find((project) => project.id === worktreePickerProjectId) ??
+      (activeProject?.id === worktreePickerProjectId ? activeProject : null))
+    : null;
+  const worktreePickerPath = isDraftMode ? (draft?.worktreePath ?? null) : (snapshot?.cwd ?? null);
+  const handleWorktreePick = (worktree: Worktree) =>
+    pickThreadWorktree(worktree, {
+      draft: isDraftMode,
+      threadId: snapshot?.threadId ?? null,
+    });
+  const worktreePicker =
+    isHybridUI && worktreePickerProject?.path ? (
+      <ComposerWorktreePicker
+        projectId={worktreePickerProject.id}
+        projectPath={worktreePickerProject.path}
+        currentPath={worktreePickerPath}
+        disabled={!isDraftMode && runtimeControlsDisabled}
+        onSelect={handleWorktreePick}
+      />
+    ) : null;
+
   const composerDisabled = isDraftMode
     ? false
     : isSwitchingThread ||
@@ -2826,7 +2857,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                           onSend={(content, files) => void handleDraftSend(content, files)}
                           disabled={composerDisabled}
                           isSubmitting={isSubmitting}
-                          projects={isAdvancedUI ? [] : draftProjectItems}
+                          projects={projectFromShell ? [] : draftProjectItems}
                           agents={[]}
                           models={modelMentionItems}
                           modelProviders={modelProviderItems}
@@ -2839,7 +2870,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                           showImageAttach={false}
                           appearance="plain"
                           hideSendButton
-                          hideProjectChip={isAdvancedUI}
+                          hideProjectChip={projectFromShell}
                           textareaRef={composerTextareaRef}
                           onTextareaKeyDown={handleComposerKeyDown}
                         />
@@ -2939,7 +2970,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
 
             <div data-pipper-id="composer-rail" className="relative z-20 shrink-0 mt-6 px-3 py-2">
               <div className="mx-auto flex min-h-9 w-full max-w-4xl items-center">
-                {!isDraftMode && (
+                {isDraftMode ? (
+                  worktreePicker
+                ) : (
                   <AgentRuntimeControls
                     reasoningLevels={thoughtLevelValues}
                     currentReasoningIndex={currentThoughtIndex}
@@ -2975,6 +3008,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                         onOpenThread={(childThreadId) => void selectThread(childThreadId)}
                       />
                     }
+                    workspace={worktreePicker}
                   />
                 )}
               </div>

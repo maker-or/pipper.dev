@@ -47,6 +47,14 @@ describe("workspace-view-store draft", () => {
     expect(useWorkspaceViewStore.getState().draft).toBeNull();
   });
 
+  test("moving an empty draft to another project from the shell isn't an edit", () => {
+    useWorkspaceViewStore.getState().beginDraft({ projectId: "p1" });
+    useWorkspaceViewStore.getState().setDraftProject("p2", "/p2", { markDirty: false });
+    const draft = useWorkspaceViewStore.getState().draft;
+    expect(draft?.projectId).toBe("p2");
+    expect(draft?.dirty).toBe(false);
+  });
+
   test("completed draft carries the created thread to the tab bar", () => {
     useWorkspaceViewStore.getState().beginDraft({ projectId: "p1" });
     useWorkspaceViewStore.getState().completeDraft("new-thread");

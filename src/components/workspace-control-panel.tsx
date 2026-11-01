@@ -29,6 +29,7 @@ import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import { WorkspacePrDetail, type PrStatusItem } from "@/components/workspace-pr-detail";
 import { openFilePreview } from "@/lib/file-preview-actions";
 import { SplitButton, type SplitMenuItem } from "@/components/workspace-split-button";
+import { hasTeamChanges, prBlocker, workspaceGitTone } from "@/lib/workspace-git-status";
 
 /**
  * Local git poll. Only reads the worktree (subprocesses, no network and no
@@ -131,17 +132,6 @@ function actionLabel(kind: string): string {
   }
 }
 
-/**
- * Header tone is git truth:
- * - neutral: no PR yet (fresh worktree or work in progress)
- * - action:  PR open but something blocks merging (dirty tree, draft,
- *            checks running or failing)
- * - ready:   PR open, tree clean, checks green — merge is the next step
- * - merged:  the branch's PR landed — delete the workspace or continue on
- *            a fresh branch
- * - stale:   no PR and nothing of the user's own to save or share, but the
- *            base branch has moved on — catching up is the next step
- */
 import type { HeaderTone } from "@/lib/workspace-tone";
 import { WorkspaceStateAction, WorkspaceStateSurface } from "@/components/workspace-state";
 
@@ -155,34 +145,9 @@ export {
   toneWash,
 } from "@/lib/workspace-tone";
 
-function headerTone(status: WorkspaceGitStatus, dirtyCount: number): HeaderTone {
-  if (!status.openPrNumber) {
-    if (status.mergedPrNumber) return "merged";
-    // An idle workspace the team has moved past: the only thing to do here
-    // is catch up. With unsaved or unpushed work the header stays neutral
-    // and the primary button (save/share) keeps the user's own work first.
-    const idle = dirtyCount === 0 && status.ahead === 0;
-    return idle && hasTeamChanges(status) ? "stale" : "neutral";
-  }
-  if (status.isDraftPr) return "action";
-  if (dirtyCount > 0 || status.ahead > 0) return "action";
-  if (status.checksState === "passing") return "ready";
-  if (status.checksState === "none" || status.checksState === "unknown") return "ready";
-  return "action";
-}
-
-/**
- * Whether the base branch carries work this workspace still needs.
- *
- * A merged workspace is always "behind" its base and has nothing to catch up
- * on: once its own PR lands, the base contains that very work (plus the merge
- * commit), so `behindBase` counts the workspace's own landed changes.
- */
-export function hasTeamChanges(status: WorkspaceGitStatus): boolean {
-  if (status.behindBase === 0) return false;
-  const merged = !status.openPrNumber && status.mergedPrNumber !== null;
-  return !merged;
-}
+// The tone and "team has changes" rules live with the shared git status code
+// so every shell colors a workspace the same way.
+export { hasTeamChanges };
 
 /** Plain-language name for the base branch a workspace branched from. */
 function baseBranchLabel(status: WorkspaceGitStatus): string {
@@ -190,13 +155,6 @@ function baseBranchLabel(status: WorkspaceGitStatus): string {
 }
 
 /** Why PR creation is unavailable, or null when it is possible. */
-function prBlocker(status: WorkspaceGitStatus): string | null {
-  if (status.remoteHost !== "github.com") return "PRs need a GitHub remote";
-  if (!status.ghAvailable) return "Install the GitHub CLI (gh) to create PRs";
-  if (status.prDataState !== "fresh") return "Refresh GitHub before creating a PR";
-  return null;
-}
-
 /** Git work currently delegated to this workspace's agent thread. */
 type AgentTask = "commit" | "commitPush" | "getLatest";
 
@@ -511,8 +469,7 @@ export function WorkspaceControlPanel({
   const unpushed = status?.ahead ?? 0;
   const behind = status ? hasTeamChanges(status) : false;
   const busy = action !== null || agentTask !== null;
-  const tone: HeaderTone =
-    status?.repoState === "ready" ? headerTone(status, dirtyCount) : "neutral";
+  const tone: HeaderTone = status?.repoState === "ready" ? workspaceGitTone(status) : "neutral";
   // Default tab follows what the tone is about: merge/check state → Check,
   // local work → Changes.
   const tab: PanelTab =

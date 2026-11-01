@@ -1,5 +1,5 @@
 import type { DiffTurnSummary } from "@/store/diff-store";
-import { useDiffStore } from "@/store/diff-store";
+import { openDiffView } from "@/lib/diff-actions";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table";
 
@@ -12,7 +12,6 @@ function fileName(path: string): string {
 }
 
 export function DiffSummaryCard({ summary }: DiffSummaryCardProps) {
-  const openDiff = useDiffStore((state) => state.open);
   const visibleFiles = summary.files.slice(0, 6);
   const remainingFiles = summary.files.length - visibleFiles.length;
 
@@ -34,7 +33,7 @@ export function DiffSummaryCard({ summary }: DiffSummaryCardProps) {
           type="button"
           variant="tertiary"
           size="sm"
-          onClick={openDiff}
+          onClick={openDiffView}
           aria-label="Open latest changes"
         >
           Open

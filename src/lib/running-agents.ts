@@ -38,13 +38,13 @@ function knownThreads(): Thread[] {
 }
 
 /**
- * Live map of workspace → running agent ids for a project.
+ * Every running thread the renderer can attribute to a project and workspace.
  *
  * A thread can be running in a workspace whose threads were never paged into
  * the renderer, so ids that are not already known are fetched once by id and
  * remembered for the session.
  */
-export function useRunningAgentsByWorkspace(project: Project | null): Map<string | null, string[]> {
+function useRunningThreads(): { threads: Thread[]; runningThreadIds: readonly string[] } {
   const runningThreadIds = useAgentStore((state) => state.runningThreadIds);
   const threads = useThreadStore((state) => state.threads);
   const [resolved, setResolved] = useState<Thread[]>([]);
@@ -73,11 +73,40 @@ export function useRunningAgentsByWorkspace(project: Project | null): Map<string
     };
   }, [runningThreadIds, resolved]);
 
+  return { threads: [...threads, ...resolved], runningThreadIds };
+}
+
+/** Live map of workspace → running agent ids for a project. */
+export function useRunningAgentsByWorkspace(project: Project | null): Map<string | null, string[]> {
+  const { threads, runningThreadIds } = useRunningThreads();
   if (!project) return new Map();
   return groupRunningAgentsByWorkspace({
-    threads: [...threads, ...resolved],
+    threads,
     runningThreadIds,
     projectId: project.id,
     projectPath: project.path,
   });
+}
+
+/** Which agents are mid-turn in each project, across all of its workspaces. */
+export function groupRunningAgentsByProject(input: {
+  threads: Thread[];
+  runningThreadIds: readonly string[];
+}): Map<string, string[]> {
+  const running = new Set(input.runningThreadIds);
+  const byProject = new Map<string, string[]>();
+  const seen = new Set<string>();
+  for (const thread of input.threads) {
+    if (!running.has(thread.id) || seen.has(thread.id)) continue;
+    seen.add(thread.id);
+    const agents = byProject.get(thread.project_id) ?? [];
+    if (!agents.includes(thread.agent_id)) agents.push(thread.agent_id);
+    byProject.set(thread.project_id, agents);
+  }
+  return byProject;
+}
+
+/** Live map of project id → running agent ids. */
+export function useRunningAgentsByProject(): Map<string, string[]> {
+  return groupRunningAgentsByProject(useRunningThreads());
 }

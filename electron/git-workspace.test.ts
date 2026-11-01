@@ -192,6 +192,34 @@ describe("getWorkspaceGitStatus", () => {
     expect(status.aheadOfBase).toBe(0);
     expect(status.baseFetchedAt).toBeNull();
   });
+
+  test("totals the branch's lines against the base, ignoring what the base gained since", async () => {
+    await initProjectRepo(dir, { name: "Test", email: "test@example.com" });
+    writeFileSync(join(dir, "a.txt"), "one\ntwo\n");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-m", "base"]);
+    git(dir, ["checkout", "-b", "side"]);
+    // Committed: one line replaced.
+    writeFileSync(join(dir, "a.txt"), "one\nTWO\n");
+    git(dir, ["commit", "-am", "edit"]);
+    // The base moves on afterwards; none of that is the branch's change.
+    git(dir, ["checkout", "main"]);
+    writeFileSync(join(dir, "main.txt"), "1\n2\n3\n");
+    git(dir, ["add", "-A"]);
+    git(dir, ["commit", "-m", "main moved"]);
+    git(dir, ["checkout", "side"]);
+    // Uncommitted: a tracked line added and an untracked file of two lines.
+    writeFileSync(join(dir, "a.txt"), "one\nTWO\nthree\n");
+    writeFileSync(join(dir, "new.txt"), "x\ny\n");
+    const status = await getWorkspaceGitStatus(dir);
+    expect(status.branchLines).toEqual({ additions: 4, deletions: 1 });
+  });
+
+  test("names the GitHub repository from the origin remote", async () => {
+    await initProjectRepo(dir, { name: "Test", email: "test@example.com" });
+    git(dir, ["remote", "add", "origin", "git@github.com:maker-or/pipper.dev.git"]);
+    expect((await getWorkspaceGitStatus(dir)).repository).toBe("maker-or/pipper.dev");
+  });
 });
 
 describe("project repo state and initialization", () => {

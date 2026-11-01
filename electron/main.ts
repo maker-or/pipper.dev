@@ -26,7 +26,7 @@ import {
   updateWorkspaceSelection,
 } from "./launch-state";
 import { pickWorkspaceThread } from "../contracts/workspace-scope.ts";
-import { createProject, getProject, listProjects } from "./projects";
+import { createProject, getProject, listProjects, removeProject } from "./projects";
 import {
   canOpenExternally,
   FILE_PREVIEW_SCHEME,
@@ -155,6 +155,7 @@ import {
   setTabEventObserver,
 } from "./open-tabs";
 import { isActivationSuperseded } from "./activation.ts";
+import { activateProjectSelection } from "./project-activation.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
 import {
   captureAnalytics,
@@ -1879,6 +1880,42 @@ function registerIpc(): void {
 
   ipcMain.handle("projects:list", () => listProjects());
 
+  ipcMain.handle("projects:delete", async (_event, projectId: string) => {
+    requireAuthenticatedUserForLaunch();
+    const project = getProject(projectId);
+    if (!project) throw new Error("Project not found.");
+
+    const wasActive = getActiveProjectId() === projectId;
+    const fallback = wasActive ? listProjects().find((item) => item.id !== projectId) : null;
+    if (fallback) await requireAgentManager().activateProject(fallback.id);
+
+    // Delete threads through the normal lifecycle so provider sessions, open
+    // tabs, snapshots, and running agent tasks are cleaned up before the
+    // project's cascading database delete.
+    const projectThreads = listThreads().filter((thread) => thread.project_id === projectId);
+    for (const thread of projectThreads) {
+      if (!getThread(thread.id)) continue;
+      await runAsUser(deleteThreadOperation, { thread: thread.id });
+    }
+
+    removeProject(projectId);
+    let activeProjectId = getActiveProjectId();
+    if (wasActive && !fallback) {
+      setActiveProjectId("");
+      await updateLaunchSelection({ projectId: null, threadId: null });
+      activeProjectId = null;
+    }
+
+    broadcastToWindows("projects:deleted", projectId);
+    if (wasActive && !fallback) {
+      createLaunchWindow("list");
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+      }, 0);
+    }
+    return { activeProjectId };
+  });
+
   ipcMain.handle("github:getStatus", async () => {
     requireAuthenticatedUserForLaunch();
     const { getGitHubCliStatus } = await import("./github-onboarding.ts");
@@ -2087,11 +2124,19 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "worktrees:switchBranch",
-    async (_event, input: { projectId: string; path: string; branch: string }) => {
+    async (
+      _event,
+      input: { projectId: string; path: string; branch: string; activate?: boolean },
+    ) => {
       const project = getProject(input.projectId);
       if (!project) throw new Error(`Project not found: ${input.projectId}`);
 
       const worktree = await switchWorktreeBranch(project.path, input.path, input.branch);
+      // Every picker showing this worktree's branch re-reads it.
+      broadcastToWindows("worktrees:changed", { projectId: project.id });
+      // The hybrid shell switches the displayed thread's branch in place; it
+      // must not swap the thread on screen for another one in that worktree.
+      if (input.activate === false) return { thread: null, worktree };
       try {
         const { thread } = await activateProjectWorktree(input.projectId, worktree.path);
         return { thread, worktree };
@@ -2503,12 +2548,16 @@ function registerIpc(): void {
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
-    const previousProjectId = getActiveProjectId();
-    setActiveProjectId(projectId);
     try {
-      await requireAgentManager().activateProject(projectId);
+      const { superseded } = await activateProjectSelection({
+        projectId,
+        getActiveProjectId,
+        setActiveProjectId,
+        activate: (id) => requireAgentManager().activateProject(id),
+      });
+      // A newer click took over; it announces its own project.
+      if (superseded) return;
     } catch (err) {
-      if (previousProjectId) setActiveProjectId(previousProjectId);
       console.error(`[Main] Failed to activate project ${projectId} in agent manager:`, err);
       throw err;
     }
@@ -2949,6 +2998,7 @@ function registerIpc(): void {
   ipcMain.handle("connectors:remove", (_event, id: string) => {
     const { store, gateway } = requireConnectors();
     removeConnector(store, gateway, String(id));
+    broadcastToWindows("connectors:removed", String(id));
   });
   ipcMain.handle("connectors:connect", (_event, id: string) =>
     requireConnectors().gateway.connect(String(id)),

@@ -5,6 +5,7 @@ import { PreviewOption } from "@/components/preview-option";
 
 const MODE_OPTIONS: Array<{ value: UiMode; label: string }> = [
   { value: "basic", label: "Basic" },
+  { value: "hybrid", label: "Hybrid" },
   { value: "advanced", label: "Advanced" },
 ];
 
@@ -125,6 +126,44 @@ function AdvancedPreview({ scheme }: { scheme: "light" | "dark" }) {
   );
 }
 
+/** Hybrid layout: a rail of project cards and the centered tab bar, no panel. */
+function HybridPreview({ scheme }: { scheme: "light" | "dark" }) {
+  const surface = SURFACES[scheme];
+  return (
+    <div
+      className="relative aspect-[7/5] w-full overflow-hidden"
+      style={{ backgroundColor: surface.bg }}
+    >
+      <div
+        className="absolute inset-y-0 left-0 w-[25%]"
+        style={{ backgroundColor: surface.rail, borderRight: `1px solid ${surface.border}` }}
+      >
+        <div className="absolute inset-x-[13%] inset-y-[12%] flex gap-[9%]">
+          <div className="flex w-1/2 flex-col gap-[9%]">
+            <span
+              className="aspect-[4/5] w-full rounded-[4px]"
+              style={{ backgroundColor: surface.card }}
+            />
+            <span
+              className="aspect-square w-full rounded-[4px]"
+              style={{ backgroundColor: surface.card }}
+            />
+          </div>
+          <div className="mt-[14%] flex w-1/2 flex-col gap-[9%]">
+            <span
+              className="aspect-square w-full rounded-[4px]"
+              style={{ backgroundColor: surface.card }}
+            />
+          </div>
+        </div>
+      </div>
+      <div className="absolute inset-y-0 left-[25%] right-0">
+        <TabBar surface={surface} />
+      </div>
+    </div>
+  );
+}
+
 /**
  * Visual layout chooser mirroring the theme picker.
  *
@@ -171,6 +210,8 @@ export function WorkspaceModePicker({
         >
           {option.value === "basic" ? (
             <BasicPreview scheme={resolvedTheme} />
+          ) : option.value === "hybrid" ? (
+            <HybridPreview scheme={resolvedTheme} />
           ) : (
             <AdvancedPreview scheme={resolvedTheme} />
           )}

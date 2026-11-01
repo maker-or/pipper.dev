@@ -252,6 +252,43 @@ export function parseNumstat(
   return stats;
 }
 
+/**
+ * Parse `git diff --shortstat` ("3 files changed, 10 insertions(+), 2
+ * deletions(-)"). Either count is left out when zero; empty output is no
+ * change at all. Exported for tests.
+ */
+export function parseShortstat(out: string): { additions: number; deletions: number } {
+  const additions = out.match(/(\d+) insertions?\(\+\)/);
+  const deletions = out.match(/(\d+) deletions?\(-\)/);
+  return {
+    additions: additions ? Number(additions[1]) : 0,
+    deletions: deletions ? Number(deletions[1]) : 0,
+  };
+}
+
+/**
+ * Lines the workspace changes against the base: the working tree (tracked
+ * files) diffed against the merge base, plus untracked files' line counts.
+ * Measured from the merge base so commits the team landed on the base since
+ * the branch forked don't count as this branch's deletions.
+ */
+async function branchLineTotals(
+  cwd: string,
+  base: string,
+  files: WorkspaceGitFile[],
+  lineStats: Map<string, LineStats>,
+): Promise<{ additions: number; deletions: number } | null> {
+  const mergeBase = await tryGit(cwd, ["merge-base", base, "HEAD"]);
+  if (!mergeBase) return null;
+  const out = await tryGit(cwd, ["diff", "--shortstat", mergeBase]);
+  if (out === null) return null;
+  const totals = parseShortstat(out);
+  for (const file of files) {
+    if (file.status === "untracked") totals.additions += lineStats.get(file.path)?.additions ?? 0;
+  }
+  return totals;
+}
+
 /** Line count for an untracked file; null for binaries/oversized/unreadable. */
 function countFileLines(absolutePath: string): number | null {
   try {
@@ -589,6 +626,12 @@ export function parseGitHubRepo(remoteUrl: string): { owner: string; name: strin
   return { owner: match[1]!, name: match[2]! };
 }
 
+/** "owner/name" for a GitHub remote; null for any other host or no remote. */
+function repositoryName(remoteUrl: string | null): string | null {
+  const repo = remoteUrl ? parseGitHubRepo(remoteUrl) : null;
+  return repo ? `${repo.owner}/${repo.name}` : null;
+}
+
 /** One round-trip for everything the panel shows about the branch's PR. */
 const PR_QUERY = `
 query($owner: String!, $name: String!, $branch: String!) {
@@ -596,7 +639,7 @@ query($owner: String!, $name: String!, $branch: String!) {
     pullRequests(headRefName: $branch, states: [OPEN, MERGED], first: 5,
                  orderBy: { field: UPDATED_AT, direction: DESC }) {
       nodes {
-        number title body isDraft state url isCrossRepository
+        number title body isDraft state url isCrossRepository additions deletions
         commits(last: 1) { nodes { commit {
           deployments(last: 10) { nodes {
             environment state latestStatus { state environmentUrl logUrl }
@@ -631,6 +674,8 @@ export interface GhPrNode {
   url?: string | null;
   /** True when the head branch lives in a fork rather than this repository. */
   isCrossRepository?: boolean | null;
+  additions?: number | null;
+  deletions?: number | null;
   commits?: {
     nodes?: Array<{
       commit?: {
@@ -791,6 +836,8 @@ export function summarizePrNodes(nodes: GhPrNode[]): PrSummary {
     body: (node.body ?? "").slice(0, PR_BODY_MAX),
     isDraft: node.isDraft ?? false,
     state: open ? "open" : "merged",
+    additions: typeof node.additions === "number" ? node.additions : null,
+    deletions: typeof node.deletions === "number" ? node.deletions : null,
     deployments: (commit?.deployments?.nodes ?? []).map(deploymentOf),
     comments: [...issueComments, ...reviewComments],
   };
@@ -1083,7 +1130,9 @@ async function computeWorkspaceGitStatus(
     untracked: 0,
     files: [],
     truncated: false,
+    branchLines: null,
     remoteHost: null,
+    repository: null,
     ghAvailable,
     openPrNumber: null,
     openPrUrl: null,
@@ -1123,27 +1172,33 @@ async function computeWorkspaceGitStatus(
     // the remote-tracking refs; the next poll picks up this one's result.
     void refreshBaseBranch(worktreePath, { base, upstream });
     // Round 2: reads that depend on round 1, plus the gh network round-trip.
-    const [baseCount, behindBaseCount, counts, lineStats, prLookup] = await Promise.all([
-      // Commits beyond the base branch: what a PR would contain.
-      base ? tryGit(worktreePath, ["rev-list", "--count", `${base}..HEAD`]) : null,
-      // Commits on the base this branch lacks: what "Get latest" would bring in.
-      base ? tryGit(worktreePath, ["rev-list", "--count", `HEAD..${base}`]) : null,
-      upstream
-        ? tryGit(worktreePath, ["rev-list", "--left-right", "--count", "HEAD...@{u}"])
-        : null,
-      collectLineStats(worktreePath, files, combinedNumstat, repoRoot ?? worktreePath),
-      origin.host === "github.com" && ghAvailable
-        ? lookupPr(worktreePath, branch, origin.url, {
-            force: forcePrRefresh,
-            published: upstream !== null,
-          })
-        : {
-            summary: NO_PR,
-            dataState: "unavailable" as const,
-            updatedAt: null,
-            refreshing: false,
-          },
-    ]);
+    const [baseCount, behindBaseCount, counts, { stats: lineStats, branchLines }, prLookup] =
+      await Promise.all([
+        // Commits beyond the base branch: what a PR would contain.
+        base ? tryGit(worktreePath, ["rev-list", "--count", `${base}..HEAD`]) : null,
+        // Commits on the base this branch lacks: what "Get latest" would bring in.
+        base ? tryGit(worktreePath, ["rev-list", "--count", `HEAD..${base}`]) : null,
+        upstream
+          ? tryGit(worktreePath, ["rev-list", "--left-right", "--count", "HEAD...@{u}"])
+          : null,
+        collectLineStats(worktreePath, files, combinedNumstat, repoRoot ?? worktreePath).then(
+          async (stats) => ({
+            stats,
+            branchLines: base ? await branchLineTotals(worktreePath, base, files, stats) : null,
+          }),
+        ),
+        origin.host === "github.com" && ghAvailable
+          ? lookupPr(worktreePath, branch, origin.url, {
+              force: forcePrRefresh,
+              published: upstream !== null,
+            })
+          : {
+              summary: NO_PR,
+              dataState: "unavailable" as const,
+              updatedAt: null,
+              refreshing: false,
+            },
+      ]);
     const pr = prLookup.summary;
     const aheadOfBase = baseCount && Number.isFinite(Number(baseCount)) ? Number(baseCount) : 0;
     const behindBase =
@@ -1185,7 +1240,9 @@ async function computeWorkspaceGitStatus(
       untracked,
       files: filesWithLines,
       truncated,
+      branchLines,
       remoteHost: origin.host,
+      repository: repositoryName(origin.url),
       ghAvailable,
       openPrNumber: pr.number,
       openPrUrl: pr.url,

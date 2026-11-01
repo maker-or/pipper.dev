@@ -55,7 +55,7 @@ const MAX_RUNNING_AGENT_MARKS = 4;
 
 const EMPTY_AGENT_IDS: string[] = [];
 
-function cardHeight(path: string, selected: boolean): number {
+export function cardHeight(path: string, selected: boolean): number {
   let hash = 0;
   for (let i = 0; i < path.length; i++) hash = (hash * 31 + path.charCodeAt(i)) >>> 0;
   const base = CARD_HEIGHTS[hash % CARD_HEIGHTS.length];
@@ -235,14 +235,13 @@ function ProjectTabs({
   );
 }
 
-/** A single workspace rendered as a card in the grid. */
 /**
  * Agent marks for the threads currently mid-turn in a workspace — the only
  * signal that work is happening somewhere other than the workspace on screen.
  * One mark per distinct agent, capped so a busy workspace cannot push the
  * name out of the way.
  */
-function RunningAgents({ agentIds }: { agentIds: string[] }) {
+export function RunningAgents({ agentIds }: { agentIds: string[] }) {
   if (agentIds.length === 0) return null;
   const shown = agentIds.slice(0, MAX_RUNNING_AGENT_MARKS);
   const overflow = agentIds.length - shown.length;
@@ -265,6 +264,7 @@ function RunningAgents({ agentIds }: { agentIds: string[] }) {
   );
 }
 
+/** A single workspace rendered as a card in the grid. */
 function WorkspaceCard({
   worktree,
   selected,
