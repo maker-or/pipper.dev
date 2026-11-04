@@ -26,7 +26,13 @@ import {
   updateWorkspaceSelection,
 } from "./launch-state";
 import { pickWorkspaceThread } from "../contracts/workspace-scope.ts";
-import { createProject, getProject, listProjects, removeProject } from "./projects";
+import {
+  createProject,
+  getProject,
+  listProjects,
+  removeProject,
+  reorderProjects,
+} from "./projects";
 import {
   canOpenExternally,
   FILE_PREVIEW_SCHEME,
@@ -197,6 +203,8 @@ import { resolveLauncherUpdateManifestUrl } from "./launcher-update-config.ts";
 import { runShutdownSteps } from "./bounded-shutdown.ts";
 import { waitForPidsToExit } from "./child-process.ts";
 import { killAllProviderProcessesSync } from "./provider-processes.ts";
+import { popupNativeMenu } from "./native-menu.ts";
+import { parseNativeMenuRequest } from "../contracts/native-menu.ts";
 import {
   PIPPER_LAUNCHER_MAC_MANIFEST_URL,
   PIPPER_LAUNCHER_WINDOWS_MANIFEST_URL,
@@ -454,6 +462,7 @@ let mainWindow: BrowserWindow | null = null;
 let launchWindow: BrowserWindow | null = null;
 let monitorWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let themeLabWindow: BrowserWindow | null = null;
 let agentManager: AgentManager | null = null;
 let browserService: BrowserService | null = null;
 /**
@@ -998,7 +1007,7 @@ function makeWorkspacePeerPredicate(threadId: string): ((id: string) => boolean)
 }
 
 function resolveRendererUrl(
-  page: "main" | "launch" | "monitor" | "settings",
+  page: "main" | "launch" | "monitor" | "settings" | "theme-lab",
   stage?: string,
 ): string {
   const base = process.env["ELECTRON_RENDERER_URL"];
@@ -1010,14 +1019,18 @@ function resolveRendererUrl(
         ? `${base}/monitor.html`
         : page === "settings"
           ? `${base}/settings.html`
-          : base;
+          : page === "theme-lab"
+            ? `${base}/theme-lab.html`
+            : base;
   if (stage) {
     url += `?stage=${stage}`;
   }
   return url;
 }
 
-function resolveRendererFile(page: "main" | "launch" | "monitor" | "settings"): string {
+function resolveRendererFile(
+  page: "main" | "launch" | "monitor" | "settings" | "theme-lab",
+): string {
   const fileName =
     page === "launch"
       ? "launch.html"
@@ -1025,7 +1038,9 @@ function resolveRendererFile(page: "main" | "launch" | "monitor" | "settings"): 
         ? "monitor.html"
         : page === "settings"
           ? "settings.html"
-          : "index.html";
+          : page === "theme-lab"
+            ? "theme-lab.html"
+            : "index.html";
   return join(mainDir, "../renderer", fileName);
 }
 
@@ -1056,11 +1071,13 @@ const PIPPER_DOCS_URL_PREFIXES = ["https://www.pipper.dev/docs/", "https://pippe
 // Workspace panel links to the branch's pull request. Only PR pages — not
 // arbitrary GitHub URLs — so a crafted `gh` response can't open anything else.
 const GITHUB_PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+\/?$/;
+/** A repository's home page, opened from the session panel. */
+const GITHUB_REPO_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
 
 function isAllowedExternalUrl(inputUrl: string): boolean {
   if (inputUrl === "https://cli.github.com/") return true;
   if (isAllowedClerkAuthUrl(inputUrl)) return true;
-  if (GITHUB_PR_URL.test(inputUrl)) return true;
+  if (GITHUB_PR_URL.test(inputUrl) || GITHUB_REPO_URL.test(inputUrl)) return true;
   // Onboarding verification cards link failing agents to their setup guide.
   return PIPPER_DOCS_URL_PREFIXES.some((prefix) => inputUrl.startsWith(prefix));
 }
@@ -1177,7 +1194,7 @@ async function prepareBenchmarkLaunchState(): Promise<string | null> {
   });
   const project =
     listProjects().find((candidate) => candidate.path === projectPath) ??
-    createProject({ name: "Thread Benchmark", path: projectPath, icon: "gauge" });
+    createProject({ name: "Thread Benchmark", path: projectPath, icon: "pentagon" });
   setSelectedAgentIds(["pipper-mock"]);
   await markLaunchComplete(project.id);
   setActiveProjectId(project.id);
@@ -1256,7 +1273,7 @@ function getAuthCallbackUrl(): string {
 
 function loadInto(
   win: BrowserWindow,
-  page: "main" | "launch" | "monitor" | "settings",
+  page: "main" | "launch" | "monitor" | "settings" | "theme-lab",
   stage?: string,
 ): Promise<void> {
   logStartupMilestone("loadInto:start", `page=${page}${stage ? ` stage=${stage}` : ""}`);
@@ -1419,6 +1436,49 @@ function createSettingsWindow(): void {
   });
 
   void loadInto(settingsWindow, "settings");
+}
+
+/** A temporary window for tuning the git-state colours against the shell. */
+function createThemeLabWindow(): void {
+  if (themeLabWindow && !themeLabWindow.isDestroyed()) {
+    if (themeLabWindow.isMinimized()) themeLabWindow.restore();
+    themeLabWindow.show();
+    themeLabWindow.focus();
+    return;
+  }
+
+  themeLabWindow = new BrowserWindow({
+    width: 1440,
+    height: 880,
+    minWidth: 1100,
+    minHeight: 640,
+    title: "Theme lab",
+    show: false,
+    icon: getIconPath(),
+    backgroundColor: "#171717",
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 18 } }
+      : {}),
+    webPreferences: {
+      preload: join(mainDir, "../preload/index.js"),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  themeLabWindow.on("ready-to-show", () => {
+    themeLabWindow?.show();
+    themeLabWindow?.focus();
+  });
+
+  themeLabWindow.on("closed", () => {
+    themeLabWindow = null;
+  });
+
+  themeLabWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+  void loadInto(themeLabWindow, "theme-lab");
 }
 
 function createMonitorWindow(): void {
@@ -1638,6 +1698,10 @@ function buildAppMenu(): void {
                 click: () => createSettingsWindow(),
               },
               {
+                label: "Theme Lab…",
+                click: () => createThemeLabWindow(),
+              },
+              {
                 label: "Send Test Notification",
                 click: () => {
                   osNotifier({
@@ -1710,6 +1774,10 @@ function buildAppMenu(): void {
               label: "Settings…",
               accelerator: "CommandOrControl+,",
               click: () => createSettingsWindow(),
+            },
+            {
+              label: "Theme Lab…",
+              click: () => createThemeLabWindow(),
             },
             { type: "separator" },
             { role: "quit" },
@@ -1880,6 +1948,13 @@ function registerIpc(): void {
 
   ipcMain.handle("projects:list", () => listProjects());
 
+  ipcMain.handle("projects:reorder", (_event, ids: unknown) => {
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) {
+      throw new Error("Invalid project order.");
+    }
+    return reorderProjects(ids);
+  });
+
   ipcMain.handle("projects:delete", async (_event, projectId: string) => {
     requireAuthenticatedUserForLaunch();
     const project = getProject(projectId);
@@ -2047,6 +2122,13 @@ function registerIpc(): void {
       return project;
     },
   );
+
+  ipcMain.handle("menu:popup", async (event, raw: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const request = parseNativeMenuRequest(raw);
+    if (!win || !request) return null;
+    return popupNativeMenu(win, request);
+  });
 
   ipcMain.handle("dialog:pickDirectory", async () => {
     const win = launchWindow ?? mainWindow ?? BrowserWindow.getFocusedWindow();
@@ -2630,6 +2712,7 @@ function registerIpc(): void {
     },
     changes: settingChanges,
   });
+  ipcMain.handle("themeLab:open", () => createThemeLabWindow());
   ipcMain.handle("settings:getChange", (_event, id: string) => settingChanges.get(String(id)));
   ipcMain.handle("settings:undoChange", (_event, id: string) =>
     runAsUser(undoSettingsChange, { change: String(id) }),

@@ -6,7 +6,7 @@ import { useWorkspaceViewStore } from "@/store/workspace-view-store";
  * Background threads whose agent run finished while the user was looking at
  * a different thread, oldest completion first.
  *
- * The advanced shell surfaces the head of this queue in a persistent dock and
+ * The shell surfaces the head of this queue in a persistent dock and
  * announces each arrival with a toast. An entry leaves the queue the moment
  * the user views that thread — by the dock arrow, the toast button, or an
  * ordinary tab click — so the queue never asks for a second acknowledgement.
@@ -64,7 +64,7 @@ export function completedBackgroundThreads(
 /**
  * Feed the queue from the agent store's running-thread set and drain it as
  * the user views queued threads. Returns an unsubscribe function; the
- * advanced shell keeps exactly one watcher alive while mounted.
+ * shell keeps exactly one watcher alive while mounted.
  */
 export function startThreadCompletionWatcher(onCompleted?: (threadId: string) => void): () => void {
   let previousRunning = useAgentStore.getState().runningThreadIds;

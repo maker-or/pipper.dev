@@ -5,17 +5,9 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 import { useShowPreviewWorkspace } from "./file-preview-actions";
 import { previewWorkspaceKey, usePreviewStore } from "@/store/preview-store";
 
-// The basic shell (App) stays mounted around the advanced shell, like here:
-// React runs the child's effects first, so a parent that still reported its
-// own workspace would overwrite the visible advanced shell's.
-function AdvancedShell() {
-  useShowPreviewWorkspace(true, "project", "/wt/feature");
+function Shell({ worktreePath }: { worktreePath: string | null }) {
+  useShowPreviewWorkspace("project", worktreePath);
   return null;
-}
-
-function BasicShell({ mode }: { mode: "basic" | "advanced" }) {
-  useShowPreviewWorkspace(mode === "basic", "project", null);
-  return mode === "advanced" ? <AdvancedShell /> : null;
 }
 
 let root: Root;
@@ -34,12 +26,12 @@ afterEach(() => {
   container.remove();
 });
 
-test("the preview follows the shell on screen, not the one wrapped around it", () => {
-  act(() => root.render(<BasicShell mode="advanced" />));
+test("the preview follows the workspace on screen", () => {
+  act(() => root.render(<Shell worktreePath="/wt/feature" />));
   expect(usePreviewStore.getState().shownWorkspaceKey).toBe(
     previewWorkspaceKey("project", "/wt/feature"),
   );
 
-  act(() => root.render(<BasicShell mode="basic" />));
+  act(() => root.render(<Shell worktreePath={null} />));
   expect(usePreviewStore.getState().shownWorkspaceKey).toBe(previewWorkspaceKey("project", null));
 });

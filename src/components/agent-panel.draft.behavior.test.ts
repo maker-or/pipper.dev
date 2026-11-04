@@ -98,19 +98,6 @@ describe("draft thread creation behavior", () => {
     expect(useWorkspaceViewStore.getState().draft?.dirty).toBe(true);
   });
 
-  test("typing in a shell-owned draft keeps the project the shell gave it", async () => {
-    const { draftProjectFromContent } = await import("@/lib/composer-tokens");
-    // Hybrid moved the draft to p2; the composer hides the chip, so typed
-    // content carries no project.
-    const typed = buildContent([], "fix the bug");
-    expect(draftProjectFromContent(typed, { ownsProject: true, draftProjectId: "p2" })).toBe("p2");
-    // Basic reads the project from its chip.
-    const chipped = buildContent([{ kind: "project", id: "p3", label: "P3" }], "fix the bug");
-    expect(draftProjectFromContent(chipped, { ownsProject: false, draftProjectId: "p2" })).toBe(
-      "p3",
-    );
-  });
-
   test("title is derived from first message text", () => {
     expect(titleFromText("Ship draft UX")).toBe("Ship draft UX");
   });

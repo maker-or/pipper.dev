@@ -1,8 +1,8 @@
 import { useCallback, useState } from "react";
 import { ArrowLeft, FolderOpen } from "lucide-react";
-import type { Project } from "../../contracts/projects.ts";
+import type { Project, ProjectShapeId } from "../../contracts/projects.ts";
 import { Button } from "@/components/ui/button";
-import { IconPicker } from "@/components/ui/icon-picker";
+import { ShapePicker } from "@/components/project-shape";
 import { InputGroup, InputField } from "@/components/ui/input-group";
 import { cn } from "@/lib/utils";
 
@@ -22,7 +22,7 @@ export function AddProjectForm({
   disabledReason,
 }: AddProjectFormProps) {
   const [name, setName] = useState("");
-  const [icon, setIcon] = useState<string | undefined>();
+  const [shape, setShape] = useState<ProjectShapeId | undefined>();
   const [path, setPath] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -63,8 +63,8 @@ export function AddProjectForm({
       setError("Enter a project name.");
       return;
     }
-    if (!icon) {
-      setError("Select an icon.");
+    if (!shape) {
+      setError("Choose a shape.");
       return;
     }
     if (!path) {
@@ -79,7 +79,7 @@ export function AddProjectForm({
       const project = await window.omni.projects.create({
         name: trimmedName,
         path,
-        icon,
+        icon: shape,
       });
       onCreated(project);
     } catch (err) {
@@ -89,9 +89,9 @@ export function AddProjectForm({
       setIsSubmitting(false);
       onBusyChange?.(false);
     }
-  }, [disabled, disabledReason, icon, name, onBusyChange, onCreated, path]);
+  }, [disabled, disabledReason, name, onBusyChange, onCreated, path, shape]);
 
-  const canSubmit = !disabled && name.trim().length > 0 && icon != null && path.length > 0;
+  const canSubmit = !disabled && name.trim().length > 0 && shape != null && path.length > 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -115,8 +115,8 @@ export function AddProjectForm({
       </header>
 
       <div className="flex flex-col gap-1">
-        <span className="text-[13px] text-muted-foreground pl-3">Icon</span>
-        <IconPicker value={icon} onValueChange={setIcon} />
+        <span className="text-[13px] text-muted-foreground pl-3">Shape</span>
+        <ShapePicker value={shape} onValueChange={setShape} disabled={disabled || isSubmitting} />
       </div>
 
       <InputGroup className="w-full">

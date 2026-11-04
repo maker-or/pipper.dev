@@ -40,9 +40,7 @@ interface AgentRuntimeControlsProps {
   isStreaming?: boolean;
   isStopping?: boolean;
   onStop?: () => void;
-  /** Running subthreads, shown at the start of the right-hand group. */
-  subthreads?: ReactNode;
-  /** Workspace picker (hybrid shell), shown after the model. */
+  /** Workspace picker, shown after the model. */
   workspace?: ReactNode;
 }
 
@@ -65,7 +63,6 @@ export function AgentRuntimeControls({
   isStreaming = false,
   isStopping = false,
   onStop,
-  subthreads,
   workspace,
 }: AgentRuntimeControlsProps) {
   const [reasoningOpen, setReasoningOpen] = useState(false);
@@ -154,7 +151,6 @@ export function AgentRuntimeControls({
       </AnimatePresence>
 
       <div className="flex shrink-0 items-center gap-1.5">
-        {subthreads}
         {hasReasoningLevels && (
           <Button
             type="button"

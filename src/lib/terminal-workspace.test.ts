@@ -5,7 +5,7 @@ const project = { id: "project-a", path: "/project-a" };
 
 describe("new terminal workspace", () => {
   test.each(["/project-a", "/project-a/worktrees/current"])(
-    "basic UI follows the current thread cwd %s while selection still names another workspace",
+    "follows the current thread cwd %s while selection still names another workspace",
     (cwd) => {
       expect(
         resolveTerminalWorkspace({
@@ -18,7 +18,7 @@ describe("new terminal workspace", () => {
     },
   );
 
-  test("basic UI follows the thread before the active project mirror catches up", () => {
+  test("follows the thread before the active project mirror catches up", () => {
     expect(
       resolveTerminalWorkspace({
         preferThread: true,
@@ -29,7 +29,7 @@ describe("new terminal workspace", () => {
     ).toEqual({ projectId: "project-b", cwd: "/project-b" });
   });
 
-  test("advanced UI uses the selected workspace while an older thread remains loaded", () => {
+  test("a draft uses the selected workspace while an older thread remains loaded", () => {
     expect(
       resolveTerminalWorkspace({
         preferThread: false,

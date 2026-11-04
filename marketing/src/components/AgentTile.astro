@@ -1,0 +1,88 @@
+---
+/**
+ * One of the four agent tiles from the "@agent" section: a coloured square
+ * with a darker glyph. Shared by that section and the footer. Size it from
+ * the outside; set `--agent-tile-radius` to change the corner.
+ */
+interface Props {
+    variant: 0 | 1 | 2 | 3;
+    class?: string;
+    style?: string;
+}
+
+const { variant, class: className, style } = Astro.props;
+---
+
+<span class:list={["agent-tile", `agent-tile--${variant}`, className]} style={style} aria-hidden="true">
+    {
+        variant === 0 && (
+            <svg class="agent-glyph" width="139" height="133" viewBox="0 0 139 133" fill="none" role="presentation">
+                <path
+                    d="M63.1362 1.93107C66.6799 -0.643566 71.4784 -0.643561 75.022 1.93107L133.99 44.7737C137.534 47.3484 139.016 51.912 137.663 56.0778L115.139 125.399C113.786 129.565 109.903 132.385 105.523 132.385H32.635C28.2547 132.385 24.3727 129.565 23.0191 125.399L0.495382 56.0778C-0.858183 51.912 0.624639 47.3484 4.16832 44.7737L63.1362 1.93107Z"
+                    fill="#088139"
+                />
+            </svg>
+        )
+    }
+    {
+        variant === 1 && (
+            <svg class="agent-glyph" width="161" height="150" viewBox="0 0 161 150" fill="none" role="presentation">
+                <rect width="161" height="50" rx="25" fill="#B1620D" />
+                <rect y="50" width="161" height="50" rx="25" fill="#B1620D" />
+                <rect y="100" width="161" height="50" rx="25" fill="#B1620D" />
+            </svg>
+        )
+    }
+    {
+        variant === 2 && (
+            <svg class="agent-glyph" width="128" height="128" viewBox="0 0 128 128" fill="none" role="presentation">
+                <circle cx="96" cy="32" r="32" fill="#5F92FE" />
+                <circle cx="32" cy="32" r="32" fill="#5F92FE" />
+                <circle cx="32" cy="96" r="32" fill="#5F92FE" />
+                <circle cx="96" cy="96" r="32" fill="#5F92FE" />
+                <rect width="63" height="70" transform="translate(34 32)" fill="#5F92FE" />
+            </svg>
+        )
+    }
+    {
+        variant === 3 && (
+            <svg class="agent-glyph" width="147" height="145" viewBox="0 0 147 145" fill="none" role="presentation">
+                <path
+                    d="M54.4823 9.7498C63.6334 -3.25253 82.9076 -3.25253 92.0587 9.7498V9.7498C96.6426 16.2628 104.273 19.9373 112.223 19.4603V19.4603C128.094 18.5081 140.111 33.5772 135.651 48.8387V48.8387C133.417 56.4834 135.302 64.7397 140.631 70.658V70.658C151.271 82.473 146.982 101.264 132.27 107.292V107.292C124.9 110.312 119.62 116.933 118.316 124.79V124.79C115.712 140.475 98.3471 148.838 84.4607 141.094V141.094C77.5049 137.215 69.0362 137.215 62.0803 141.094V141.094C48.1939 148.838 30.8285 140.475 28.2252 124.79V124.79C26.9211 116.933 21.6409 110.312 14.2712 107.292V107.292C-0.441472 101.264 -4.73037 82.473 5.90965 70.658V70.658C11.2394 64.7397 13.1238 56.4834 10.8898 48.8387V48.8387C6.42976 33.5772 18.447 18.5081 34.3182 19.4603V19.4603C42.2684 19.9373 49.8984 16.2628 54.4823 9.7498V9.7498Z"
+                    fill="#A23EEB"
+                />
+            </svg>
+        )
+    }
+</span>
+
+<style>
+    /* No position here, so a parent can place tiles absolutely. */
+    .agent-tile {
+        display: grid;
+        aspect-ratio: 1;
+        place-items: center;
+        border-radius: var(--agent-tile-radius, 1.08rem);
+    }
+
+    .agent-tile--0 {
+        background: #27b45c;
+    }
+    .agent-tile--1 {
+        background: #ffb24f;
+    }
+    .agent-tile--2 {
+        background: #86aff1;
+    }
+    .agent-tile--3 {
+        background: #b247ee;
+    }
+
+    .agent-glyph {
+        position: relative;
+        display: block;
+        width: 72%;
+        height: auto;
+        max-height: 76%;
+    }
+</style>

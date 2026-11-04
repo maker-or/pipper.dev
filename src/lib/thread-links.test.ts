@@ -11,11 +11,16 @@ function toolPart(name: string, outputPreview: string, status = "completed") {
 const CREATED = `{ "status": "started", "thread_id": "${ID}", "title": "Explore", "agent_id": "claude" }`;
 
 describe("threadLinkFromToolPart", () => {
-  test("reads the thread from a create_thread or start_subthread result, by any server prefix", () => {
+  test("reads the thread from a create_thread result, by any server prefix", () => {
     expect(threadLinkFromToolPart(toolPart("pipper-agents_create_thread", CREATED))).toEqual({
       threadId: ID,
-      kind: "thread",
     });
+    expect(threadLinkFromToolPart(toolPart("mcp__pipper-agents__create_thread", CREATED))).toEqual({
+      threadId: ID,
+    });
+  });
+
+  test("a subthread gets no link in the conversation; the session panel lists it", () => {
     expect(
       threadLinkFromToolPart(
         toolPart(
@@ -23,7 +28,12 @@ describe("threadLinkFromToolPart", () => {
           `{ "thread_id": "${ID}", "status": "starting" }`,
         ),
       ),
-    ).toEqual({ threadId: ID, kind: "subthread" });
+    ).toBeNull();
+    const blocks = buildMessageBodyBlocks([
+      { type: "text", text: "Handing this off." },
+      toolPart("start_subthread", `{ "thread_id": "${ID}", "status": "starting" }`),
+    ]);
+    expect(blocks.map((block) => block.kind)).toEqual(["text"]);
   });
 
   test("ignores failed or running calls, other tools and results without a thread", () => {

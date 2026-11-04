@@ -27,8 +27,7 @@ import { useAgentStore } from "@/store/agent-store";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useModelCatalogStore } from "@/store/model-catalog-store";
 import { useWorktreeStore } from "@/store/worktree-store";
-import { shellOwnsProject, useUiModeStore } from "@/store/ui-mode-store";
-import { useIsDiffSplit, useWorkspaceViewStore } from "@/store/workspace-view-store";
+import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { useDiffStore, type DiffTurnSummary } from "@/store/diff-store";
 import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import type { ComposerContent } from "../../contracts/composer.ts";
@@ -37,7 +36,6 @@ import {
   assertCreatable,
   blankContent,
   buildContent,
-  draftProjectFromContent,
   extractModelId,
   extractModelToken,
   extractProjectId,
@@ -49,7 +47,6 @@ import {
   setFreeText,
   stripEntityKinds,
   titleFromText,
-  upsertEntity,
 } from "@/lib/composer-tokens";
 import { selectThread } from "@/lib/thread-actions";
 import { invalidateProjectFiles, useProjectFileIndex } from "@/lib/project-file-index";
@@ -66,6 +63,8 @@ import { AgentSlashCommandMenu } from "@/components/agent-slash-command-menu";
 import { AgentContinueMenu } from "@/components/agent-continue-menu";
 import { AgentQuestionCard, AgentQuestionDock } from "@/components/agent-question";
 import { cn } from "@/lib/utils";
+import { surfaceBgClass } from "@/lib/surface-classes";
+import { useSurface } from "@/lib/surface-context";
 import { isInstanceSelected } from "@/lib/agent-selection";
 import { beginRendererInteraction } from "@/lib/monitor-runtime-observer";
 import { toast } from "@/components/ui/toast";
@@ -93,7 +92,7 @@ import {
 import { CONTINUE_COMMAND, matchAgentCommands, mergeAgentCommands } from "@/lib/agent-commands";
 import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subthread-orchestration";
 import { SubthreadComposer, type SubthreadComposerSubmit } from "@/components/subthread-composer";
-import { AgentTaskOrigin, SubthreadOrbs } from "@/components/agent-task-activity";
+import { AgentTaskOrigin } from "@/components/agent-task-activity";
 import { DiffSummaryCard } from "@/components/diff-summary-card";
 import { NextStepCard } from "@/components/next-step-card";
 import { nextStepFromParts } from "@/lib/next-step";
@@ -111,31 +110,6 @@ const messageTimeFormatter = new Intl.DateTimeFormat("en-US", {
 const iconButtonClass =
   "inline-flex size-6 items-center justify-center rounded-full  text-muted-foreground/60 hover:text-foreground hover:bg-hover transition-colors duration-100 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const COMPOSER_TURN_MARKER = <ConversationTurnIdentity role="user" emphasis="composer" />;
-
-type ComposerProjectContext = {
-  id: string;
-  name: string;
-  icon?: string | null;
-};
-
-function withProjectChip(
-  content: ComposerContent,
-  project: ComposerProjectContext,
-): ComposerContent {
-  const entities = getEntityTokens(content).filter((entity) => entity.kind !== "project");
-  return buildContent(
-    [
-      {
-        kind: "project",
-        id: project.id,
-        label: project.name,
-        icon: project.icon,
-      },
-      ...entities,
-    ],
-    getFreeText(content),
-  );
-}
 
 type ConversationScrollMode = "reading" | "anchoring" | "following";
 type PendingScrollAction = {
@@ -713,6 +687,7 @@ export interface AgentPanelProps {
 
 export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   "use no memo";
+  const surface = useSurface();
   const { activeProject } = useProjectStore();
   const { threads, loadProjectThreads } = useThreadStore();
   const {
@@ -798,29 +773,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   const draft = useWorkspaceViewStore((state) => state.draft);
   const beginDraft = useWorkspaceViewStore((state) => state.beginDraft);
   const completeDraft = useWorkspaceViewStore((state) => state.completeDraft);
-  const setDraftProject = useWorkspaceViewStore((state) => state.setDraftProject);
   const setDraftAgent = useWorkspaceViewStore((state) => state.setDraftAgent);
   const setDraftModel = useWorkspaceViewStore((state) => state.setDraftModel);
   const setDraftDirty = useWorkspaceViewStore((state) => state.setDraftDirty);
-  const markDraftUserEditedProject = useWorkspaceViewStore(
-    (state) => state.markDraftUserEditedProject,
-  );
   const isDraftMode = draft != null;
-  // Advanced and hybrid UI: the sidebar already fixes the project, so the
-  // @project composer chip is redundant and hidden.
-  const uiMode = useUiModeStore((state) => state.mode);
-  const projectFromShell = shellOwnsProject(uiMode);
-  const isHybridUI = uiMode === "hybrid";
-  const liveComposerProject = useMemo<ComposerProjectContext | null>(() => {
-    if (isDraftMode || projectFromShell) return null;
-    const projectId = snapshot?.projectId ?? activeProject?.id ?? null;
-    if (!projectId) return null;
-    return (
-      projectsList.find((project) => project.id === projectId) ??
-      (activeProject?.id === projectId ? activeProject : null)
-    );
-  }, [activeProject, projectFromShell, isDraftMode, projectsList, snapshot?.projectId]);
-  const isDiffSplit = useIsDiffSplit();
   const selectedWorktreePathByProject = useWorktreeStore(
     (state) => state.selectedWorktreePathByProject,
   );
@@ -876,20 +832,8 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     }
     if (draftBootstrappedRef.current) return;
     draftBootstrappedRef.current = true;
-    const projectObj =
-      draft.projectId != null
-        ? (projectsList.find((p) => p.id === draft.projectId) ??
-          (activeProject?.id === draft.projectId ? activeProject : null))
-        : null;
-    const softProject =
-      draft.projectId != null
-        ? {
-            id: draft.projectId,
-            name: projectObj?.name ?? "Project",
-            icon: projectObj?.icon ?? null,
-          }
-        : null;
-    const content = initialDraftContent(projectFromShell ? null : softProject);
+    // The shell owns the project, so a draft opens with no @project chip.
+    const content = initialDraftContent(null);
     // Soft-default agent into draft state (no @agent chip — model-first UX).
     // Prefer the currently connected agent when it is in the user's pool.
     const registry = useAgentRegistryStore.getState();
@@ -909,93 +853,30 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     }
     setDraftContent(content);
     requestAnimationFrame(() => composerTextareaRef.current?.focus());
-  }, [draft, projectsList, activeProject, projectFromShell, setDraftAgent]);
+  }, [draft, setDraftAgent]);
 
-  // External chrome (title-bar project switcher) can change draft.projectId;
-  // keep the composer chip in sync without wiping free text. Also clear agent
-  // when the project identity changes so @agent is offered again.
+  // The shell owns the project context, so drafts keep no project chip. Strip
+  // any legacy chip that arrives (e.g. restored content) without wiping text.
   useEffect(() => {
-    if (!draft || projectFromShell) return;
-    const contentProject = extractProjectId(draftContent);
-    if ((draft.projectId ?? null) === (contentProject ?? null)) return;
-    if (draft.projectId) {
-      const projectObj =
-        projectsList.find((p) => p.id === draft.projectId) ??
-        (activeProject?.id === draft.projectId ? activeProject : null);
-      const name = projectObj?.name ?? "Project";
-      const icon = projectObj?.icon ?? null;
-      setDraftContent((prev) => {
-        let next = upsertEntity(prev, {
-          kind: "project",
-          id: draft.projectId!,
-          label: name,
-          icon,
-        });
-        if (contentProject != null && contentProject !== draft.projectId) {
-          next = removeEntityKind(removeEntityKind(next, "agent"), "model");
-          // Keep a soft-default agent so send still works without an @agent chip.
-          const registry = useAgentRegistryStore.getState();
-          const pool = registry.agents.filter(
-            (a) =>
-              (registry.selectedAgentIds.length === 0 ||
-                isInstanceSelected(a, registry.selectedAgentIds)) &&
-              a.available !== false,
-          );
-          setDraftAgent(pool[0]?.id ?? null);
-          setDraftModel(null);
-        }
-        return next;
-      });
-    } else {
-      setDraftContent((prev) => removeEntityKind(prev, "project"));
-    }
-    // Only react to store project id and the UI mode — not every content
-    // keystroke. Returning to Basic must re-add the chip the Advanced/Hybrid
-    // strip below removed, or the first send fails with `missing_project`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: store → chip bridge
-  }, [draft?.projectId, projectFromShell]);
-  // Advanced and hybrid keep no project chip: the sidebar owns the project context.
-  // Strip any legacy chip that arrives (e.g. restored content) without wiping text.
-  useEffect(() => {
-    if (!projectFromShell || !draft) return;
+    if (!draft) return;
     if (extractProjectId(draftContent) == null) return;
     setDraftContent((prev) => removeEntityKind(prev, "project"));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: one-way chip strip
-  }, [projectFromShell, draft, draftContent]);
+  }, [draft, draftContent]);
 
   // Keep draft store fields aligned with chips so chrome can bind.
   const handleDraftContentChange = (next: ComposerContent) => {
-    const shell = { ownsProject: projectFromShell, draftProjectId: draft?.projectId ?? null };
-    const prevProject = draftProjectFromContent(draftContent, shell);
-    const nextProject = draftProjectFromContent(next, shell);
-    let content = next;
-    // Switching project invalidates a prior model pick; agent is inferred from
-    // the model (or the soft default in draft.agentId), not a user chip step.
-    if (nextProject !== prevProject && prevProject != null) {
-      content = removeEntityKind(removeEntityKind(content, "agent"), "model");
-    }
+    const content = next;
     setDraftContent(content);
-    setDraftProject(nextProject);
     // Prefer explicit agent chip / model.owner; keep soft default when neither
     // is present so multi-agent drafts still create without an @agent step.
     const inferredAgent = resolveAgentId(content);
     if (inferredAgent) setDraftAgent(inferredAgent);
     setDraftModel(extractModelId(content));
-    if (nextProject !== prevProject) {
-      markDraftUserEditedProject();
-      // A draft project chip is only a creation target. Activating the project
-      // in main would restore its last thread while this draft is still open.
-      if (!isDraftMode && nextProject && window.omni?.projects?.setActive) {
-        void window.omni.projects.setActive(nextProject).catch(() => {
-          /* soft-sync is best-effort */
-        });
-      }
-    }
     // Once the user types or changes chips, stay dirty until send/discard.
     // Never flip dirty back to false mid-edit (would skip discard confirm).
     const becameDirty =
       Boolean(extractTextContent(content)) ||
-      nextProject !== (draft?.projectId ?? null) ||
       (inferredAgent != null && inferredAgent !== (draft?.agentId ?? null)) ||
       extractModelId(content) !== (draft?.modelId ?? null);
     if (becameDirty || draft?.dirty) setDraftDirty(true);
@@ -1685,23 +1566,20 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       if (!trimmed && !sendFiles.length && !editState?.images.length) return;
     }
     await handleSend(trimmed || getFreeText(textOnly), sendFiles);
-    setLiveContent(
-      liveComposerProject ? withProjectChip(blankContent(), liveComposerProject) : blankContent(),
-    );
+    setLiveContent(blankContent());
     setInputValue("");
   };
 
   const handleLiveContentChange = (next: ComposerContent) => {
-    const content = liveComposerProject ? withProjectChip(next, liveComposerProject) : next;
-    setLiveContent(content);
-    setInputValue(getFreeText(content));
+    setLiveContent(next);
+    setInputValue(getFreeText(next));
   };
 
   const handleDraftSend = async (content: ComposerContent, files: File[]) => {
     const check = assertCreatable(content, {
       defaultAgentId: draft?.agentId ?? null,
-      // Advanced and hybrid: no project chip — the sidebar owns the project context.
-      defaultProjectId: projectFromShell ? (draft?.projectId ?? activeProject?.id ?? null) : null,
+      // No project chip: the shell owns the project context.
+      defaultProjectId: draft?.projectId ?? activeProject?.id ?? null,
     });
     if (!check.ok) {
       const description =
@@ -2225,16 +2103,15 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       draft: isDraftMode,
       threadId: snapshot?.threadId ?? null,
     });
-  const worktreePicker =
-    isHybridUI && worktreePickerProject?.path ? (
-      <ComposerWorktreePicker
-        projectId={worktreePickerProject.id}
-        projectPath={worktreePickerProject.path}
-        currentPath={worktreePickerPath}
-        disabled={!isDraftMode && runtimeControlsDisabled}
-        onSelect={handleWorktreePick}
-      />
-    ) : null;
+  const worktreePicker = worktreePickerProject?.path ? (
+    <ComposerWorktreePicker
+      projectId={worktreePickerProject.id}
+      projectPath={worktreePickerProject.path}
+      currentPath={worktreePickerPath}
+      disabled={!isDraftMode && runtimeControlsDisabled}
+      onSelect={handleWorktreePick}
+    />
+  ) : null;
 
   const composerDisabled = isDraftMode
     ? false
@@ -2245,16 +2122,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       isAborting ||
       Boolean(editState && isStreaming);
 
-  const draftProjectItems = useMemo(
-    () =>
-      projectsList.map((p) => ({
-        id: p.id,
-        label: p.name,
-        description: "path" in p && typeof p.path === "string" ? p.path : undefined,
-        icon: p.icon ?? null,
-      })),
-    [projectsList],
-  );
   // Draft agent picker: prefer the user's selected agents, but never show an
   // empty list when other available agents exist (common when registry loaded
   // late or selectedAgentIds is still empty).
@@ -2421,16 +2288,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     });
   }, [inputValue, isDraftMode]);
 
-  // Keep the project entity bound to the active thread internally. The live
-  // composer hides it because an existing thread already fixes the project.
-  useEffect(() => {
-    if (isDraftMode || !liveComposerProject) return;
-    setLiveContent((prev) => {
-      if (extractProjectId(prev) === liveComposerProject.id) return prev;
-      return withProjectChip(prev, liveComposerProject);
-    });
-  }, [isDraftMode, liveComposerProject]);
-
   const handleReasoningChange = (value: string) => {
     if (!thoughtLevelConfigId) return;
     setConfigOption(thoughtLevelConfigId, value).catch((err) => {
@@ -2465,7 +2322,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   return (
     <section
       data-pipper-id="agent-panel"
-      className="relative z-20 h-full w-full flex flex-col bg-surface-1  overflow-visible"
+      className={cn(
+        "relative z-20 flex h-full w-full flex-col overflow-visible",
+        surfaceBgClass(surface),
+      )}
     >
       <AgentQuestionDock activeSessionId={activeSessionId} />
       {previewImage && (
@@ -2494,10 +2354,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
             }
             className={cn(
               "relative z-10 flex min-h-0 w-full flex-1 flex-col",
-              // A full-bleed conversation reads badly, so the global view caps
-              // it to a centred column. Inside the diff split the panel is
-              // already narrow, so it uses the full width.
-              !isDiffSplit && "mx-auto w-full max-w-4xl xl:max-w-5xl",
+              // A full-bleed conversation reads badly, so it is capped to a
+              // centred column.
+              "mx-auto w-full max-w-4xl xl:max-w-5xl",
             )}
           >
             <div
@@ -2857,7 +2716,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                           onSend={(content, files) => void handleDraftSend(content, files)}
                           disabled={composerDisabled}
                           isSubmitting={isSubmitting}
-                          projects={projectFromShell ? [] : draftProjectItems}
+                          projects={[]}
                           agents={[]}
                           models={modelMentionItems}
                           modelProviders={modelProviderItems}
@@ -2870,7 +2729,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                           showImageAttach={false}
                           appearance="plain"
                           hideSendButton
-                          hideProjectChip={projectFromShell}
+                          hideProjectChip
                           textareaRef={composerTextareaRef}
                           onTextareaKeyDown={handleComposerKeyDown}
                         />
@@ -3000,14 +2859,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                     sessionTokens={snapshot?.stats?.used}
                     sessionCost={snapshot?.stats?.cost?.amount}
                     rateLimit={snapshot?.usage?.rateLimit}
-                    subthreads={
-                      <SubthreadOrbs
-                        tasks={agentTasks}
-                        agents={registryAgents}
-                        parentThreadId={threadId || null}
-                        onOpenThread={(childThreadId) => void selectThread(childThreadId)}
-                      />
-                    }
                     workspace={worktreePicker}
                   />
                 )}

@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
 import { cn } from "@/lib/utils";
+import { surfaceBgClass } from "@/lib/surface-classes";
+import { useSurface } from "@/lib/surface-context";
 import { useDiffTabShown } from "@/lib/diff-actions";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 
@@ -14,13 +16,15 @@ const DiffView = lazy(() =>
  * screen, so switching away and back keeps the scroll position.
  */
 export function DiffLayer() {
+  const surface = useSurface();
   const shown = useDiffTabShown();
   const visible = useWorkspaceViewStore((state) => state.mode === "diff");
   if (!shown) return null;
   return (
     <section
       className={cn(
-        "absolute inset-0 flex flex-col overflow-hidden bg-surface-1 p-2",
+        "absolute inset-0 flex flex-col overflow-hidden p-2",
+        surfaceBgClass(surface),
         visible ? "z-30 visible" : "-z-10 invisible pointer-events-none",
       )}
       aria-hidden={!visible}

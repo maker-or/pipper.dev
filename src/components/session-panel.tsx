@@ -1,25 +1,39 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { CaretRight, GitPullRequest, GithubLogo, PlusMinus } from "@phosphor-icons/react";
-import type { ConnectorSnapshot } from "../../contracts/connectors.ts";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
+import { CaretRight, GithubLogo, X } from "@phosphor-icons/react";
+import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
+import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import type { WorkspaceGitStatus } from "../../contracts/git.ts";
 import type { Project } from "../../contracts/projects.ts";
 import { BranchSwitcher, WorktreeSwitcher } from "@/components/session-workspace-switchers";
+import { agentLogoKey, ProviderLogo } from "@/components/provider-logos";
 import { Button } from "@/components/ui/button";
 import { toast } from "@/components/ui/toast";
+import { useWorkspaceActions } from "@/components/workspace-actions";
+import { WorkspacePrDetail } from "@/components/workspace-pr-detail";
+import {
+  ChangesSourceMenu,
+  WorkspaceChangesList,
+  WorkspaceFilesTab,
+  WorkspaceTabBar,
+  useWorkspaceChanges,
+  type ChangesSource,
+  type WorkspacePanelTab,
+} from "@/components/workspace-tabs";
+import { taskInFlight, taskStatusText } from "@/lib/agent-task-tree";
 import { errorToast } from "@/lib/error-toast";
+import { selectThread } from "@/lib/thread-actions";
 import { formatTokenCount } from "@/lib/format-tokens";
 import { cn } from "@/lib/utils";
 import { prBlocker, useWorkspaceGitStatus, workspaceGitTone } from "@/lib/workspace-git-status";
 import type { HeaderTone } from "@/lib/workspace-tone";
 import { WorkspaceStateSurface } from "@/components/workspace-state";
+import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useAgentStore } from "@/store/agent-store";
+import { useDismissedSubthreadsStore } from "@/store/dismissed-subthreads-store";
 import { useDiffStore } from "@/store/diff-store";
 import { useProjectStore } from "@/store/project-store";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
-
-function lastSegment(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
-}
 
 function formatCount(value: number): string {
   return value.toLocaleString();
@@ -48,19 +62,49 @@ function Row({
   children,
   trailing,
   title,
+  onClick,
 }: {
   icon: ReactNode;
   children: ReactNode;
   trailing?: ReactNode;
   title?: string;
+  /** Makes the row a button. */
+  onClick?: () => void;
 }) {
-  return (
-    <div className="flex min-h-7 items-center gap-2.5 text-[13px]" title={title}>
+  const content = (
+    <>
       <span className="grid size-4 shrink-0 place-items-center text-muted-foreground">{icon}</span>
       <div className="min-w-0 flex-1 truncate text-foreground">{children}</div>
       {trailing ? <div className="shrink-0 text-muted-foreground">{trailing}</div> : null}
-    </div>
+    </>
   );
+  if (!onClick) {
+    return (
+      <div className="flex min-h-7 items-center gap-2.5 text-[13px]" title={title}>
+        {content}
+      </div>
+    );
+  }
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      // Same footprint as the switcher rows above it.
+      className="-mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 text-left text-[13px] outline-none transition-colors duration-80 hover:bg-hover focus-visible:ring-1 focus-visible:ring-ring"
+    >
+      {content}
+    </button>
+  );
+}
+
+/** Opens a GitHub repository ("owner/name") in the browser. */
+function openRepository(repository: string) {
+  window.omni.shell
+    .openExternal(`https://github.com/${repository}`)
+    .catch((err) =>
+      toast(errorToast(err instanceof Error ? err.message : "Could not open the repository.")),
+    );
 }
 
 /** A section heading that expands its body, with a value on the right. */
@@ -101,64 +145,6 @@ function Disclosure({
   );
 }
 
-/** Connectors as main reports them, following changes and removals live. */
-function useConnectors(): ConnectorSnapshot[] | null {
-  const [connectors, setConnectors] = useState<ConnectorSnapshot[] | null>(null);
-  useEffect(() => {
-    const api = window.omni?.connectors;
-    if (!api) return;
-    let live = true;
-    api
-      .list()
-      .then((list) => live && setConnectors(list))
-      .catch(() => live && setConnectors([]));
-    const offChanged = api.onChanged((next) =>
-      setConnectors((current) => {
-        const list = current ?? [];
-        return list.some((item) => item.id === next.id)
-          ? list.map((item) => (item.id === next.id ? next : item))
-          : [...list, next].sort((a, b) => a.name.localeCompare(b.name));
-      }),
-    );
-    const offRemoved = api.onRemoved?.((id) =>
-      setConnectors((current) => current?.filter((item) => item.id !== id) ?? current),
-    );
-    return () => {
-      live = false;
-      offChanged();
-      offRemoved?.();
-    };
-  }, []);
-  return connectors;
-}
-
-function connectorTone(connector: ConnectorSnapshot): { dot: string; label: string } {
-  if (!connector.enabled) return { dot: "bg-muted-foreground/40", label: "Off" };
-  switch (connector.status) {
-    case "connected":
-      return { dot: "bg-emerald-500", label: "Connected" };
-    case "needs_sign_in":
-      return { dot: "bg-amber-500", label: "Needs sign-in" };
-    case "error":
-      return { dot: "bg-red-400", label: connector.lastError ?? "Error" };
-    default:
-      return { dot: "bg-muted-foreground/40", label: "Not checked" };
-  }
-}
-
-function checksDot(state: WorkspaceGitStatus["checksState"]): string | null {
-  switch (state) {
-    case "passing":
-      return "bg-emerald-500";
-    case "failing":
-      return "bg-red-400";
-    case "pending":
-      return "bg-amber-500";
-    default:
-      return null;
-  }
-}
-
 export interface SessionWorkspace {
   draft: boolean;
   project: Project | null;
@@ -167,7 +153,7 @@ export interface SessionWorkspace {
   isStreaming: boolean;
   status: WorkspaceGitStatus | null;
   refresh: (force?: boolean) => Promise<void>;
-  /** Git-state tone of the workspace, as the advanced shell colors it. */
+  /** Git-state tone of the workspace, which colors the header and project card. */
   tone: HeaderTone;
 }
 
@@ -220,19 +206,219 @@ export function useSessionWorkspace(projects: Project[]): SessionWorkspace {
 }
 
 /**
- * The hybrid shell's right-hand session panel: where the displayed thread (or
- * draft) runs, how full its context is, the connectors its agent can reach,
- * and its workspace's changes and pull request. Every value comes from state
+ * One subthread: its agent and title, opening its thread on click. A finished
+ * one dims and stays until closed; its close button shows on hover or focus.
+ */
+function SubthreadRow({
+  task,
+  agents,
+  onDismiss,
+}: {
+  task: AgentTaskSnapshot;
+  agents: AcpAgentDescriptor[];
+  onDismiss: (taskId: string) => void;
+}) {
+  const agent = agents.find((item) => item.id === task.agentId);
+  const agentName = agent?.displayName ?? task.agentId;
+  const childThreadId = task.childThreadId;
+  const status = taskStatusText(task);
+  // Running, starting or waiting on the user: still in flight.
+  const finished = !taskInFlight(task);
+  return (
+    <div className="group/subthread -mx-1.5 flex min-h-8 items-center gap-1 rounded-md pr-1 transition-colors duration-80 hover:bg-hover">
+      <button
+        type="button"
+        disabled={!childThreadId}
+        onClick={() => childThreadId && void selectThread(childThreadId)}
+        title={`${task.title} · ${agentName} · ${status}`}
+        className="flex min-h-8 min-w-0 flex-1 items-center gap-2.5 rounded-md pl-1.5 text-left text-[13px] outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none"
+      >
+        <span className="grid size-4 shrink-0 place-items-center text-foreground">
+          <ProviderLogo provider={agentLogoKey(agent, task.agentId)} label={agentName} size={16} />
+        </span>
+        <span
+          className={cn(
+            "min-w-0 flex-1 truncate",
+            finished ? "text-muted-foreground" : "text-foreground",
+          )}
+        >
+          {task.title}
+        </span>
+      </button>
+      {finished ? (
+        <button
+          type="button"
+          onClick={() => onDismiss(task.taskId)}
+          aria-label={`Close ${task.title}`}
+          title="Close"
+          // Always laid out, so the title keeps its width when it shows.
+          className="grid size-6 shrink-0 place-items-center rounded-md text-muted-foreground opacity-0 outline-none transition-[opacity,color,background-color] duration-80 hover:bg-hover hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover/subthread:opacity-100 group-focus-within/subthread:opacity-100"
+        >
+          <X size={12} weight="bold" />
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The subthreads a thread started, oldest first. Each drops in as it starts;
+ * a finished one stays until the user closes it. Nothing when none are left.
+ */
+export function SessionSubthreads({
+  tasks,
+  agents,
+  threadId,
+  dismissedIds,
+  onDismiss,
+}: {
+  tasks: AgentTaskSnapshot[];
+  agents: AcpAgentDescriptor[];
+  threadId: string | null;
+  dismissedIds: readonly string[];
+  onDismiss: (taskId: string) => void;
+}) {
+  const prefersReducedMotion = useReducedMotion();
+  const subthreads = useMemo(() => {
+    if (!threadId) return [];
+    const dismissed = new Set(dismissedIds);
+    return tasks
+      .filter((task) => task.parentThreadId === threadId && !dismissed.has(task.taskId))
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }, [tasks, threadId, dismissedIds]);
+  if (subthreads.length === 0) return null;
+  return (
+    <section
+      className="flex flex-col gap-0.5 border-t border-border px-4 py-3"
+      aria-label="Subthreads"
+      data-pipper-id="session-subthreads"
+    >
+      <h3 className="pb-0.5 text-[12px] font-medium text-muted-foreground">Subthreads</h3>
+      <ul className="flex flex-col">
+        <AnimatePresence initial={false}>
+          {subthreads.map((task) => (
+            <motion.li
+              key={task.taskId}
+              initial={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, y: -8 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={prefersReducedMotion ? { opacity: 0 } : { opacity: 0, height: 0 }}
+              transition={
+                prefersReducedMotion
+                  ? { duration: 0.12 }
+                  : { type: "spring", duration: 0.32, bounce: 0.15 }
+              }
+              className="overflow-hidden"
+            >
+              <SubthreadRow task={task} agents={agents} onDismiss={onDismiss} />
+            </motion.li>
+          ))}
+        </AnimatePresence>
+      </ul>
+    </section>
+  );
+}
+
+/** Title for the PR the header's action is about to open. */
+function PrForm({
+  initialTitle,
+  creating,
+  blocker,
+  dirty,
+  onCancel,
+  onCreate,
+}: {
+  initialTitle: string;
+  creating: boolean;
+  blocker: string | null;
+  dirty: boolean;
+  onCancel: () => void;
+  onCreate: (title: string) => void;
+}) {
+  const [title, setTitle] = useState(initialTitle);
+  return (
+    <Section title="New PR">
+      {dirty ? (
+        <p className="text-[12px] text-amber-500">
+          Uncommitted changes are not included — commit first to add them.
+        </p>
+      ) : null}
+      <input
+        value={title}
+        onChange={(event) => setTitle(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !creating && blocker === null) onCreate(title);
+          if (event.key === "Escape") onCancel();
+        }}
+        placeholder="PR title"
+        aria-label="PR title"
+        disabled={creating}
+        autoFocus
+        className="h-8 rounded-md bg-transparent px-2 text-[13px] text-foreground outline-none ring-1 ring-border placeholder:text-muted-foreground/60 focus:ring-ring"
+      />
+      <div className="mt-1 flex gap-1.5">
+        <Button type="button" size="sm" variant="ghost" disabled={creating} onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="primary"
+          className="flex-1"
+          disabled={creating || blocker !== null}
+          title={blocker ?? undefined}
+          onClick={() => onCreate(title)}
+        >
+          {creating ? "Creating…" : "Create PR"}
+        </Button>
+      </div>
+    </Section>
+  );
+}
+
+/**
+ * The shell's right-hand session panel: a git-state header with the PR, the one next step and where the
+ * thread runs, then Check (the PR, the subthreads the thread started and how
+ * full its context is), Changes and Files. Every value comes from state
  * Pipper already keeps; a section with nothing to show is left out.
  */
 export function SessionPanel({ session }: { session: SessionWorkspace }) {
   const { draft, project, cwd, threadId, isStreaming, status, refresh, tone } = session;
   const threadTitle = useAgentStore((state) => state.state?.title ?? null);
   const usage = useAgentStore((state) => (draft ? null : (state.state?.usage ?? null)));
-  const connectors = useConnectors();
+  const agentTasks = useAgentStore((state) => state.agentTasks);
+  const agents = useAgentRegistryStore((state) => state.agents);
+  const dismissedSubthreads = useDismissedSubthreadsStore((state) => state.taskIds);
+  const dismissSubthread = useDismissedSubthreadsStore((state) => state.dismiss);
   const [contextOpen, setContextOpen] = useState(false);
-  const [connectorsOpen, setConnectorsOpen] = useState(false);
-  const [creatingPr, setCreatingPr] = useState(false);
+  const [prFormOpen, setPrFormOpen] = useState(false);
+  const [tab, setTab] = useState<WorkspacePanelTab>("check");
+  const [changesSource, setChangesSource] = useState<ChangesSource>("git");
+
+  const git = status?.repoState === "ready" ? status : null;
+  const workspaceName = threadTitle?.trim() || git?.branch || null;
+  const openPrForm = useCallback(() => {
+    setPrFormOpen(true);
+    // The form sits under the changes it would carry.
+    setTab("changes");
+  }, []);
+  const actions = useWorkspaceActions({
+    project,
+    worktreePath: cwd,
+    workspaceName,
+    status: git,
+    refresh,
+    onOpenPrForm: openPrForm,
+    onContinued: () => refresh(true),
+    // Deleting the workspace would take this thread, and the panel, with it.
+    showDelete: false,
+  });
+  const { changes, turnCount } = useWorkspaceChanges(project, cwd, git, changesSource);
+
+  // A PR form and a picked tab belong to the workspace they were opened for.
+  useEffect(() => {
+    setPrFormOpen(false);
+    setTab("check");
+  }, [project?.id, cwd]);
 
   if (!project || !cwd) {
     return (
@@ -242,185 +428,202 @@ export function SessionPanel({ session }: { session: SessionWorkspace }) {
     );
   }
 
-  const git = status?.repoState === "ready" ? status : null;
   const contextPercent =
     usage && usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : null;
-  const connected = connectors?.filter((item) => item.enabled && item.status === "connected");
-  const pr = git?.pr?.state === "open" ? git.pr : null;
   const dirty = git ? git.staged + git.unstaged + git.untracked : 0;
-  const onBase = git?.branch != null && git.baseBranch?.replace(/^origin\//, "") === git.branch;
-  const canOfferPr = git != null && !pr && !onBase && git.branch != null && git.aheadOfBase > 0;
-  // A branch with nothing against its base has no changes row to show.
+  // A branch with nothing against its base has no totals to show.
   const branchLines =
     git?.branchLines && (git.branchLines.additions > 0 || git.branchLines.deletions > 0)
       ? git.branchLines
       : null;
-  const blocker = git
-    ? (prBlocker(git) ?? (dirty > 0 ? "Commit your changes first; a PR carries commits" : null))
-    : null;
-
-  const createPr = async () => {
-    if (!git || creatingPr) return;
-    setCreatingPr(true);
-    try {
-      // A PR covers the whole branch: publish local commits first.
-      if (!git.upstream || git.ahead > 0) {
-        await window.omni.git.push({ projectId: project.id, path: cwd });
-      }
-      const result = await window.omni.git.createPr({
-        projectId: project.id,
-        path: cwd,
-        title: threadTitle?.trim() || git.branch || project.name,
-      });
-      if (result.url) void window.omni.shell.openExternal(result.url).catch(() => {});
-    } catch (err) {
-      toast(errorToast(err instanceof Error ? err.message : "Could not create the PR."));
-    } finally {
-      await refresh(true);
-      setCreatingPr(false);
-    }
-  };
+  const hasPr = git != null && (git.openPrNumber ?? git.mergedPrNumber) != null;
+  // The base branch itself (usually the project folder on main) never gets a
+  // PR, and committing straight to it isn't a step to offer at a glance: the
+  // header and Check are about branch work.
+  const onBase =
+    git?.branch != null && git.baseBranch?.replace(/^origin\//, "") === git.branch && !hasPr;
+  const quickAction = onBase ? null : actions.quickAction;
 
   return (
-    <div className="flex flex-col pb-3" data-pipper-id="session-panel">
-      <WorkspaceStateSurface
-        tone={tone}
-        variant="header"
-        className="flex flex-col gap-1 rounded-none border-b border-border px-4 pb-3 pt-3"
-        data-pipper-id="session-panel-header"
+    <div className="flex h-full flex-col" data-pipper-id="session-panel">
+      <div
+        className={cn(
+          "flex min-h-0 flex-1 flex-col",
+          // The file tree scrolls itself; everything else scrolls the panel.
+          tab === "files" ? "overflow-hidden" : "overflow-y-auto pb-3",
+        )}
       >
-        <WorktreeSwitcher project={project} cwd={cwd} draft={draft} threadId={threadId} />
-        {git?.repository ? <Row icon={<GithubLogo size={16} />}>{git.repository}</Row> : null}
-        {git ? (
-          <BranchSwitcher
-            project={project}
-            cwd={cwd}
-            branch={git.branch}
-            draft={draft}
-            threadId={threadId}
-            busy={!draft && isStreaming}
-            onSwitched={() => void refresh()}
-          />
-        ) : null}
-      </WorkspaceStateSurface>
-
-      {usage && contextPercent !== null ? (
-        <Disclosure
-          label="Context"
-          open={contextOpen}
-          onToggle={() => setContextOpen((open) => !open)}
-          value={
-            <>
-              <span className="tabular-nums">{contextPercent}%</span>
-              <span
-                aria-hidden="true"
-                className="h-1.5 w-10 overflow-hidden rounded-full bg-muted-foreground/20"
-              >
-                <span
-                  className="block h-full rounded-full bg-foreground/70"
-                  style={{ width: `${contextPercent}%` }}
-                />
-              </span>
-            </>
-          }
+        <WorkspaceStateSurface
+          tone={tone}
+          variant="header"
+          className="flex shrink-0 flex-col gap-3 rounded-none px-4 pb-5 pt-4"
+          data-pipper-id="session-panel-header"
         >
-          <p className="text-[12px] text-muted-foreground">
-            {formatTokenCount(usage.used)} of {formatTokenCount(usage.size)} tokens used
-          </p>
-          {usage.cost ? (
-            <p className="text-[12px] text-muted-foreground">
-              {usage.cost.amount.toLocaleString(undefined, {
-                style: "currency",
-                currency: usage.cost.currency,
-              })}{" "}
-              this session
-            </p>
-          ) : null}
-        </Disclosure>
-      ) : null}
-
-      {connectors && connectors.length > 0 ? (
-        <Disclosure
-          label="Connectors"
-          open={connectorsOpen}
-          onToggle={() => setConnectorsOpen((open) => !open)}
-          value={`${connected?.length ?? 0} connected`}
-        >
-          {connectors.map((connector) => {
-            const tone = connectorTone(connector);
-            return (
-              <Row
-                key={connector.id}
-                icon={<span className={cn("size-1.5 rounded-full", tone.dot)} />}
-                title={tone.label}
-              >
-                {connector.name}
-              </Row>
-            );
-          })}
-        </Disclosure>
-      ) : null}
-
-      {git && (branchLines || pr) ? (
-        <Section title="Changes">
-          {branchLines ? (
-            <Row
-              icon={<PlusMinus size={16} />}
-              trailing={
-                canOfferPr ? (
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="secondary"
-                    disabled={creatingPr || blocker !== null}
-                    title={blocker ?? undefined}
-                    onClick={() => void createPr()}
-                  >
-                    {creatingPr ? "Creating…" : "Create PR"}
-                  </Button>
-                ) : undefined
-              }
-            >
-              <span className="text-muted-foreground">{lastSegment(cwd)}</span>{" "}
-              <LineTotals additions={branchLines.additions} deletions={branchLines.deletions} />
-            </Row>
-          ) : null}
-          {pr ? (
-            <button
-              type="button"
-              onClick={() => void window.omni.shell.openExternal(pr.url).catch(() => {})}
-              title="Open pull request on GitHub"
-              className="-mx-1.5 flex items-start gap-2.5 rounded-md px-1.5 py-1 text-left text-[13px] outline-none transition-colors duration-80 hover:bg-hover focus-visible:ring-1 focus-visible:ring-ring"
-            >
-              <GitPullRequest
-                size={16}
-                className={cn(
-                  "mt-0.5 shrink-0",
-                  pr.isDraft ? "text-muted-foreground" : "text-emerald-500",
-                )}
+          {/* The next step and the PR, joined into one pill. */}
+          {quickAction ? <div className="flex min-h-7 items-center">{quickAction}</div> : null}
+          <div className="flex flex-col gap-0.5">
+            <WorktreeSwitcher project={project} cwd={cwd} draft={draft} threadId={threadId} />
+            {git ? (
+              <BranchSwitcher
+                project={project}
+                cwd={cwd}
+                branch={git.branch}
+                draft={draft}
+                threadId={threadId}
+                busy={!draft && isStreaming}
+                onSwitched={() => void refresh()}
               />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-foreground">{pr.title}</span>
-                <span className="block truncate text-muted-foreground">
-                  {git.repository ? `${git.repository.split("/").at(-1)} ` : ""}#{pr.number}
-                  {pr.additions != null && pr.deletions != null ? (
-                    <>
-                      {" "}
-                      <LineTotals additions={pr.additions} deletions={pr.deletions} />
-                    </>
-                  ) : null}
-                </span>
-              </span>
-              {checksDot(git.checksState) ? (
-                <span
-                  className={cn("mt-2 size-1.5 shrink-0 rounded-full", checksDot(git.checksState))}
-                  title={`Checks ${git.checksState}`}
+            ) : null}
+            {git?.repository ? (
+              <Row
+                icon={<GithubLogo size={16} weight="duotone" />}
+                title={`Open ${git.repository} on GitHub`}
+                onClick={() => git.repository && openRepository(git.repository)}
+                trailing={
+                  branchLines ? (
+                    <LineTotals
+                      additions={branchLines.additions}
+                      deletions={branchLines.deletions}
+                    />
+                  ) : undefined
+                }
+              >
+                {git.repository}
+              </Row>
+            ) : null}
+          </div>
+        </WorkspaceStateSurface>
+
+        {/* Three sections, each set off by a divider: the git state (the only
+            one tinted), the subthreads, and the tabs with their content. */}
+        <SessionSubthreads
+          tasks={agentTasks}
+          agents={agents}
+          threadId={threadId}
+          dismissedIds={dismissedSubthreads}
+          onDismiss={dismissSubthread}
+        />
+        <div className="border-t border-border px-4 py-3">
+          <WorkspaceTabBar
+            tab={tab}
+            onTabChange={setTab}
+            trailing={
+              tab === "changes" && git ? (
+                <ChangesSourceMenu
+                  source={changesSource}
+                  onSourceChange={setChangesSource}
+                  turnCount={turnCount}
+                  gitCount={git.files.length}
                 />
-              ) : null}
-            </button>
-          ) : null}
-        </Section>
-      ) : null}
+              ) : null
+            }
+          />
+        </div>
+
+        {actions.error || actions.notice ? (
+          <p
+            className={cn(
+              "border-b border-border px-4 py-2 text-[12px]",
+              actions.error ? "text-destructive" : "text-emerald-500",
+            )}
+            role={actions.error ? "alert" : "status"}
+          >
+            {actions.error ?? actions.notice}
+          </p>
+        ) : null}
+
+        {tab === "files" ? (
+          <WorkspaceFilesTab project={project} worktreePath={cwd} />
+        ) : tab === "changes" ? (
+          <>
+            <div className="flex flex-col gap-2 px-4 py-3">
+              {git ? (
+                <WorkspaceChangesList
+                  project={project}
+                  worktreePath={cwd}
+                  status={git}
+                  source={changesSource}
+                  changes={changes}
+                />
+              ) : (
+                <p className="text-[12px] text-muted-foreground">
+                  This folder isn’t a git repository.
+                </p>
+              )}
+            </div>
+            {prFormOpen && git ? (
+              <PrForm
+                initialTitle={threadTitle?.trim() || git.branch || ""}
+                creating={actions.action === "pr"}
+                blocker={prBlocker(git)}
+                dirty={dirty > 0}
+                onCancel={() => setPrFormOpen(false)}
+                onCreate={(title) =>
+                  void actions.createPr({ title }).then((created) => {
+                    // Keep the title on failure so a retry does not start over.
+                    if (created) setPrFormOpen(false);
+                  })
+                }
+              />
+            ) : null}
+          </>
+        ) : (
+          <>
+            {git && !onBase ? (
+              <Section>
+                {git.pr ? (
+                  <WorkspacePrDetail
+                    status={git}
+                    items={actions.prStatusItems}
+                    onAddComments={git.pr.state === "open" ? actions.addCommentsToChat : undefined}
+                  />
+                ) : (
+                  <p className="text-[12px] text-muted-foreground">
+                    {git.openPrNumber
+                      ? `Could not load details for PR #${git.openPrNumber}.`
+                      : "No pull request for this branch yet."}
+                  </p>
+                )}
+              </Section>
+            ) : null}
+
+            {usage && contextPercent !== null ? (
+              <Disclosure
+                label="Context"
+                open={contextOpen}
+                onToggle={() => setContextOpen((open) => !open)}
+                value={
+                  <>
+                    <span className="tabular-nums">{contextPercent}%</span>
+                    <span
+                      aria-hidden="true"
+                      className="h-1.5 w-10 overflow-hidden rounded-full bg-muted-foreground/20"
+                    >
+                      <span
+                        className="block h-full rounded-full bg-foreground/70"
+                        style={{ width: `${contextPercent}%` }}
+                      />
+                    </span>
+                  </>
+                }
+              >
+                <p className="text-[12px] text-muted-foreground">
+                  {formatTokenCount(usage.used)} of {formatTokenCount(usage.size)} tokens used
+                </p>
+                {usage.cost ? (
+                  <p className="text-[12px] text-muted-foreground">
+                    {usage.cost.amount.toLocaleString(undefined, {
+                      style: "currency",
+                      currency: usage.cost.currency,
+                    })}{" "}
+                    this session
+                  </p>
+                ) : null}
+              </Disclosure>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }

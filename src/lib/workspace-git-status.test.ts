@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import type { WorkspaceGitStatus } from "../../contracts/git.ts";
-import { workspaceGitTone } from "./workspace-git-status";
+import { hasTeamChanges, workspaceGitTone } from "./workspace-git-status";
 
 function status(patch: Partial<WorkspaceGitStatus> = {}): WorkspaceGitStatus {
   return {
@@ -62,5 +62,24 @@ describe("workspaceGitTone", () => {
 
   test("a workspace git couldn't read stays neutral", () => {
     expect(workspaceGitTone(status({ repoState: "broken", openPrNumber: 4 }))).toBe("neutral");
+  });
+});
+
+describe("hasTeamChanges", () => {
+  test("announces base commits a live workspace does not have", () => {
+    expect(hasTeamChanges(status({ behindBase: 3 }))).toBe(true);
+    expect(hasTeamChanges(status({ behindBase: 2, openPrNumber: 9 }))).toBe(true);
+  });
+
+  test("stays quiet when the base has not moved", () => {
+    expect(hasTeamChanges(status({ behindBase: 0 }))).toBe(false);
+  });
+
+  test("stays quiet once the workspace's own PR has merged", () => {
+    // Merging puts this branch's work (plus the merge commit) on the base, so
+    // behindBase counts the user's own landed changes.
+    expect(hasTeamChanges(status({ behindBase: 4, openPrNumber: null, mergedPrNumber: 12 }))).toBe(
+      false,
+    );
   });
 });

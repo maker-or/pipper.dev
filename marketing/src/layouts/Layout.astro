@@ -1,6 +1,30 @@
 ---
 import Analytics from "@vercel/analytics/astro";
 import "../styles/global.css";
+import AgentTile from "../components/AgentTile.astro";
+import { projectShapePath } from "../../../src/lib/project-shapes.ts";
+
+// The footer's brand mark: the flower from the app's project shapes.
+const brandMark = projectShapePath("flower");
+
+// The "@agent" tiles, sprinkled along the footer's bottom edge: `x` is a
+// percentage across, `y` how far the tile's bottom sits above the edge (rem,
+// negative sinks it), `size` in rem.
+const FOOTER_TILES: Array<{ variant: 0 | 1 | 2 | 3; x: number; y: number; size: number; rotate: number }> = [
+    { variant: 0, x: 1, y: -1.6, size: 5.6, rotate: -12 },
+    { variant: 2, x: 8.5, y: 3.2, size: 3.4, rotate: 9 },
+    { variant: 1, x: 14, y: -2.4, size: 6.6, rotate: 6 },
+    { variant: 3, x: 23, y: 2.2, size: 4, rotate: -14 },
+    { variant: 2, x: 30, y: -2, size: 5.8, rotate: -4 },
+    { variant: 0, x: 39, y: 4.6, size: 3.2, rotate: 16 },
+    { variant: 3, x: 45, y: -3, size: 6.8, rotate: 10 },
+    { variant: 1, x: 55, y: 1.6, size: 4.2, rotate: -8 },
+    { variant: 0, x: 62, y: -2.2, size: 6, rotate: 4 },
+    { variant: 2, x: 71, y: 3.8, size: 3.6, rotate: -18 },
+    { variant: 3, x: 77, y: -1.6, size: 5.2, rotate: -6 },
+    { variant: 1, x: 86, y: -2.8, size: 6.4, rotate: 12 },
+    { variant: 0, x: 94.5, y: 2.6, size: 3.8, rotate: -10 },
+];
 const {
     title = "pipper",
     description = "pipper — self-improving agent interface",
@@ -140,11 +164,54 @@ const isCanvasPage = [
             {
                 !hideFooter && (
                     <footer class="site-footer">
-                        <span>© {new Date().getFullYear()} pipper code</span>
-                        <nav class="site-footer-nav" aria-label="Legal">
-                            <a href="/legal/terms/">Terms</a>
-                            <a href="/legal/privacy/">Privacy</a>
-                        </nav>
+                        <div class="site-footer-inner">
+                            <a href="/" class="site-footer-brand">
+                                <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+                                    <path d={brandMark} />
+                                </svg>
+                                pipper
+                            </a>
+                            <nav class="site-footer-links" aria-label="Footer">
+                                <div class="site-footer-group">
+                                    <h2>Product</h2>
+                                    <a href="/download">Download</a>
+                                    <a href="/docs/agents">Docs</a>
+                                    <a href="/blog">Blog</a>
+                                </div>
+                                <div class="site-footer-group">
+                                    <h2>Community</h2>
+                                    <a
+                                        href="https://github.com/maker-or/omni"
+                                        target="_blank"
+                                        rel="noopener noreferrer">GitHub</a
+                                    >
+                                    <a
+                                        href="https://discord.gg/S928NjYv"
+                                        target="_blank"
+                                        rel="noopener noreferrer">Discord</a
+                                    >
+                                </div>
+                                <div class="site-footer-group">
+                                    <h2>Legal</h2>
+                                    <a href="/legal/terms/">Terms</a>
+                                    <a href="/legal/privacy/">Privacy</a>
+                                </div>
+                            </nav>
+                            <p class="site-footer-copyright">
+                                © {new Date().getFullYear()} pipper code. All rights reserved.
+                            </p>
+                        </div>
+                        <div class="site-footer-scatter" aria-hidden="true">
+                            {
+                                FOOTER_TILES.map((tile) => (
+                                    <AgentTile
+                                        variant={tile.variant}
+                                        class="site-footer-tile"
+                                        style={`--x:${tile.x}%;--y:${tile.y}rem;--size:${tile.size}rem;--rotate:${tile.rotate}deg`}
+                                    />
+                                ))
+                            }
+                        </div>
                     </footer>
                 )
             }
@@ -203,47 +270,130 @@ const isCanvasPage = [
         outline-offset: 4px;
     }
 
+    /* A full-width band on the page's own background: brand and links in a
+       centred row, then the "@agent" tiles sprinkled along the bottom edge. */
     .site-footer {
-        display: flex;
-        width: min(calc(100% - 3rem), 120rem);
-        margin: 0 auto;
-        padding: 0.75rem 0 2rem;
-        align-items: center;
-        justify-content: space-between;
-        gap: 1rem;
+        position: relative;
+        width: 100%;
+        margin-top: clamp(3rem, 8vw, 7rem);
+        overflow: hidden;
+        border-top: 1px solid #e4e2de;
+        /* No fill of its own: each page's background runs through it. */
+        background: transparent;
+        color: #1f1f1f;
         font-family: "Figtree Variable", sans-serif;
-        font-size: 0.8rem;
-        color: currentColor;
-        opacity: 0.75;
         flex-shrink: 0;
     }
 
-    .site-footer-nav {
-        display: flex;
-        align-items: center;
-        gap: 1.25rem;
+    .site-footer-inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        width: min(calc(100% - 2 * clamp(1.25rem, 6vw, 5rem)), 72rem);
+        column-gap: 2.5rem;
+        margin: 0 auto;
+        padding: clamp(2.5rem, 5vw, 4rem) 0 0;
     }
 
-    .site-footer-nav a {
+    .site-footer-brand {
+        display: inline-flex;
+        align-self: start;
+        align-items: center;
+        gap: 0.55rem;
         color: currentColor;
+        font-size: 1.45rem;
+        font-weight: 620;
+        letter-spacing: -0.055em;
+        text-decoration: none;
+    }
+
+    .site-footer-brand svg {
+        width: 1.6rem;
+        height: 1.6rem;
+        fill: #ffa946;
+    }
+
+    .site-footer-links {
+        display: flex;
+        grid-column: 2;
+        gap: clamp(2rem, 5vw, 4.5rem);
+    }
+
+    .site-footer-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+        min-width: 7rem;
+    }
+
+    .site-footer-group h2 {
+        margin: 0 0 0.3rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        letter-spacing: -0.02em;
+    }
+
+    .site-footer-group a {
+        color: #5f5f5f;
+        font-size: 0.9rem;
+        letter-spacing: -0.01em;
         text-decoration: none;
         transition: color 160ms ease;
     }
 
-    .site-footer-nav a:hover,
-    .site-footer-nav a:focus-visible {
+    .site-footer-group a:hover,
+    .site-footer-group a:focus-visible {
         color: #2162ff;
     }
 
-    .site-header--blue .site-footer-nav a:hover,
-    .site-header--blue .site-footer-nav a:focus-visible {
-        color: #fff;
+    .site-footer-group a:focus-visible,
+    .site-footer-brand:focus-visible {
+        outline: 2px solid #2162ff;
+        outline-offset: 3px;
+        border-radius: 2px;
+    }
+
+    .site-footer-copyright {
+        grid-column: 2;
+        margin: 2.5rem 0 0;
+        color: #6e6e6e;
+        font-size: 0.8rem;
+    }
+
+    .site-footer-scatter {
+        --tile-scale: 1;
+        position: relative;
+        height: clamp(8rem, 14vw, 11rem);
+    }
+
+    .site-footer-tile {
+        position: absolute;
+        bottom: calc(var(--y) * var(--tile-scale));
+        left: var(--x);
+        width: calc(var(--size) * var(--tile-scale));
+        --agent-tile-radius: calc(var(--size) * var(--tile-scale) * 0.19);
+        transform: rotate(var(--rotate));
     }
 
     @media (max-width: 38rem) {
-        .site-footer {
-            width: min(calc(100% - 2rem), 120rem);
-            font-size: 0.75rem;
+        /* Stacked: brand, links, copyright, then the tiles. */
+        .site-footer-inner {
+            grid-template-columns: minmax(0, 1fr);
+            row-gap: 2rem;
+        }
+        .site-footer-links,
+        .site-footer-copyright {
+            grid-column: 1;
+        }
+        .site-footer-links {
+            flex-wrap: wrap;
+            gap: 1.75rem;
+        }
+        .site-footer-copyright {
+            margin: 0;
+        }
+        .site-footer-scatter {
+            --tile-scale: 0.55;
+            height: 6rem;
         }
     }
 

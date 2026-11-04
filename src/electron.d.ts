@@ -78,6 +78,7 @@ import type {
   MonitorTabMismatchReport,
 } from "../../contracts/monitor.ts";
 import type { SleeplessPreferences, SleeplessStatus } from "../../contracts/sleepless.ts";
+import type { NativeMenuRequest } from "../../contracts/native-menu.ts";
 import type {
   ThreadBenchmarkIngestedTurn,
   ThreadBenchmarkMode,
@@ -162,6 +163,8 @@ declare global {
       };
       projects: {
         list: () => Promise<Project[]>;
+        /** Saves the rail order and returns the projects in it. */
+        reorder: (projectIds: string[]) => Promise<Project[]>;
         delete: (projectId: string) => Promise<{ activeProjectId: string | null }>;
         create: (input: CreateProjectInput) => Promise<Project>;
         getActive: () => Promise<Project | null>;
@@ -355,6 +358,9 @@ declare global {
         reportEditorText: (text: string) => void;
         onEvent: (callback: (payload: AcpBridgeEvent) => void) => () => void;
       };
+      themeLab: {
+        open: () => Promise<void>;
+      };
       settings: {
         getChange: (id: string) => Promise<SettingChangeRecord | null>;
         undoChange: (id: string) => Promise<SettingChangeRecord>;
@@ -413,6 +419,9 @@ declare global {
       };
       dialog: {
         pickDirectory: () => Promise<string | null>;
+      };
+      menu: {
+        popup: (request: NativeMenuRequest) => Promise<string | null>;
       };
       terminal: {
         create: (sessionId: string, cwd?: string, cols?: number, rows?: number) => Promise<void>;

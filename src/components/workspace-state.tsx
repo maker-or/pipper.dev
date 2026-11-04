@@ -10,7 +10,7 @@ import {
   HEADER_TONE_INK,
   toneIdentity,
   toneInsetShadow,
-  toneWash,
+  toneFade,
   type HeaderTone,
 } from "@/lib/workspace-tone";
 
@@ -27,8 +27,6 @@ export function workspaceStateStyle(tone: HeaderTone): CSSProperties {
     "--workspace-state-caret": "var(--workspace-caret-color, var(--workspace-state-on-action))",
     "--workspace-state-glow": toneInsetShadow(tone),
     "--workspace-state-glow-background": `var(--workspace-glow-background-${tone}, var(--workspace-state-surface))`,
-    "--workspace-state-header-background":
-      "var(--workspace-header-background, var(--workspace-state-glow-background))",
     "--workspace-state-secondary-fill": `var(--workspace-control-tint-${tone}, color-mix(in srgb, var(--workspace-state-on-surface) 15%, transparent))`,
     "--workspace-state-tag-fill": `var(--workspace-control-tint-${tone}, color-mix(in srgb, var(--workspace-state-on-surface) 30%, transparent))`,
     "--workspace-state-control-ink": `var(--workspace-control-ink-${tone}, var(--workspace-state-on-surface))`,
@@ -65,17 +63,15 @@ export const WorkspaceStateSurface = forwardRef<HTMLDivElement, WorkspaceStateSu
         data-workspace-state={tone}
         data-state-surface={variant}
         data-state-active={active ? "true" : "false"}
-        className={cn(
-          "workspace-state-surface relative isolate",
-          shape.container,
-          variant === "header" && "shadow-none",
-          className,
-        )}
+        className={cn("workspace-state-surface relative isolate", shape.container, className)}
         style={
           {
             ...workspaceStateStyle(tone),
             "--workspace-state-surface": `var(--surface-${level})`,
-            ...(variant === "header" && active ? { backgroundImage: toneWash(tone) } : {}),
+            // A header fades into what follows, so it has no elevation ring
+            // to draw an edge (the class alone loses to the surface's ring).
+            ...(variant === "header" ? { boxShadow: "none" } : {}),
+            ...(variant === "header" && active ? { backgroundImage: toneFade(tone) } : {}),
             ...style,
           } as CSSProperties
         }

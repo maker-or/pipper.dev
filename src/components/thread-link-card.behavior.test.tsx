@@ -10,7 +10,6 @@ describe("ThreadLinkCardView", () => {
     renderToStaticMarkup(
       <ThreadLinkCardView
         title="Explore what this project is"
-        kind="thread"
         agentName="Claude"
         provider="claude-agent-acp"
         running={false}
@@ -20,7 +19,7 @@ describe("ThreadLinkCardView", () => {
       />,
     );
 
-  test("names the thread, its kind and agent, and opens it", () => {
+  test("names the thread and its agent, and opens it", () => {
     const html = render();
     expect(html).toContain("Explore what this project is");
     expect(html).toContain("New thread · Claude");
@@ -35,29 +34,8 @@ describe("ThreadLinkCardView", () => {
   });
 
   test("a deleted thread stays as a record but can't be opened", () => {
-    const html = render({ missing: true, kind: "subthread" });
-    expect(text(html)).toContain("Subthread · Claude · Deleted");
+    const html = render({ missing: true });
+    expect(text(html)).toContain("New thread · Claude · Deleted");
     expect(html).toContain('disabled=""');
-  });
-
-  test("a subthread waiting on the user gets the amber ring and says so", () => {
-    const html = render({
-      kind: "subthread",
-      running: true,
-      status: "Needs permission",
-      needsUser: true,
-    });
-    expect(html).toContain("subthread-orb-waiting");
-    expect(html).not.toContain("subthread-orb-working");
-    expect(text(html)).toContain("Subthread · Claude · Needs permission");
-  });
-
-  test("a settled subthread shows its status and recap", () => {
-    const html = render({ kind: "subthread", status: "Done", recap: "Found 3 call sites." });
-    expect(text(html)).toContain("Subthread · Claude · Done");
-    expect(html).toContain("Found 3 call sites.");
-    expect(render({ kind: "subthread", running: true, recap: "old" })).not.toContain(
-      "thread-link-recap",
-    );
   });
 });

@@ -5,6 +5,13 @@ const storageKey = "pipper.tabs.trackpadSwipeEnabled";
 let store: typeof import("./tab-gesture-store").useTabGestureStore;
 
 beforeAll(async () => {
+  // Node 22+ defines its own global localStorage, which is unusable without
+  // --localstorage-file and hides happy-dom's. Give the window a real one.
+  const HappyStorage = (window as unknown as { Storage: new () => Storage }).Storage;
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: new HappyStorage(),
+  });
   window.localStorage.setItem(storageKey, "false");
   store = (await import("./tab-gesture-store")).useTabGestureStore;
 });

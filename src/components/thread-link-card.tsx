@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, WarningCircle } from "@phosphor-icons/react";
 import type { Thread } from "../../contracts/threads.ts";
 import { ProviderLogo } from "@/components/provider-logos";
-import { taskNeedsUser, taskStatusText } from "@/lib/agent-task-tree";
 import { toast } from "@/components/ui/toast";
 import { openThreadAnywhere } from "@/lib/thread-actions";
 import type { ThreadLink } from "@/lib/thread-links";
@@ -10,43 +9,27 @@ import { cn } from "@/lib/utils";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useAgentStore } from "@/store/agent-store";
 
-const KIND_LABEL: Record<ThreadLink["kind"], string> = {
-  thread: "New thread",
-  subthread: "Subthread",
-};
-
 interface ThreadLinkCardViewProps {
   title: string;
-  kind: ThreadLink["kind"];
   agentName: string;
   /** Provider / agent key for the logo. */
   provider: string;
   running: boolean;
   /** The thread is gone (deleted); the card stays as a record but can't open it. */
   missing: boolean;
-  /** A subthread's status ("Done", "Has a question"); a plain thread shows "Working" or nothing. */
-  status?: string | null;
-  /** A subthread waits on the user: an amber ring, and the status reads as a call to act. */
-  needsUser?: boolean;
-  /** A settled subthread's wrap_up recap, or the tail of its report. */
-  recap?: string | null;
   onOpen: () => void;
 }
 
 /** Presentational card; the container below resolves the thread and opens it. */
 export function ThreadLinkCardView({
   title,
-  kind,
   agentName,
   provider,
   running,
   missing,
-  status,
-  needsUser = false,
-  recap,
   onOpen,
 }: ThreadLinkCardViewProps) {
-  const statusText = missing ? "Deleted" : (status ?? (running ? "Working" : null));
+  const statusText = missing ? "Deleted" : running ? "Working" : null;
   return (
     <button
       type="button"
@@ -65,7 +48,7 @@ export function ThreadLinkCardView({
         aria-hidden="true"
         className={cn(
           "subthread-orb relative flex size-8 shrink-0 items-center justify-center rounded-full text-foreground",
-          needsUser ? "subthread-orb-waiting" : running && "subthread-orb-working",
+          running && "subthread-orb-working",
         )}
       >
         <ProviderLogo provider={provider} label={agentName} size={14} />
@@ -73,24 +56,9 @@ export function ThreadLinkCardView({
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-[13px] font-medium text-foreground">{title}</span>
         <span className="truncate text-[12px] text-muted-foreground">
-          {KIND_LABEL[kind]} · {agentName}
-          {statusText && (
-            <>
-              {" · "}
-              <span className={cn(needsUser && "text-amber-600 dark:text-amber-400")}>
-                {statusText}
-              </span>
-            </>
-          )}
+          New thread · {agentName}
+          {statusText && ` · ${statusText}`}
         </span>
-        {recap && !running && !missing && (
-          <span
-            data-pipper-id="thread-link-recap"
-            className="mt-1 line-clamp-2 break-words text-[12px] text-muted-foreground"
-          >
-            {recap}
-          </span>
-        )}
       </span>
       {!missing && (
         <ArrowRight
@@ -104,9 +72,7 @@ export function ThreadLinkCardView({
 
 /**
  * A link, in the turn that started it, to a thread the agent started with
- * `create_thread` or `start_subthread`. A subthread's card follows its task:
- * live status, "Has a question" when it waits on the user, and its recap
- * once it stops. Opening it switches project and workspace first when the
+ * `create_thread`. Opening it switches project and workspace first when the
  * thread lives elsewhere.
  */
 export function ThreadLinkCard({ link }: { link: ThreadLink }) {
@@ -117,9 +83,6 @@ export function ThreadLinkCard({ link }: { link: ThreadLink }) {
     staleTime: 30_000,
   });
   const running = useAgentStore((state) => state.runningThreadIds.includes(link.threadId));
-  const task = useAgentStore((state) =>
-    state.agentTasks.find((candidate) => candidate.childThreadId === link.threadId),
-  );
   const agent = useAgentRegistryStore((state) =>
     thread ? state.agents.find((candidate) => candidate.id === thread.agent_id) : undefined,
   );
@@ -140,14 +103,10 @@ export function ThreadLinkCard({ link }: { link: ThreadLink }) {
   return (
     <ThreadLinkCardView
       title={thread?.title?.trim() || (isPending ? "Starting thread…" : "Untitled thread")}
-      kind={link.kind}
       agentName={agent?.displayName ?? thread?.agent_id ?? "Agent"}
       provider={agent?.icon ?? agent?.driverId ?? thread?.agent_id ?? "generic"}
-      running={running || task?.status === "starting"}
+      running={running}
       missing={!isPending && !thread}
-      status={task ? taskStatusText(task) : null}
-      needsUser={task ? taskNeedsUser(task) : false}
-      recap={task?.reportPreview ?? null}
       onOpen={() => void open()}
     />
   );

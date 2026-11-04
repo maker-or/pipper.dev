@@ -186,6 +186,16 @@ export function getDb(): DatabaseSync {
       icon TEXT
     );
   `);
+  ensureColumn("projects", "sort_order", "ALTER TABLE projects ADD COLUMN sort_order INTEGER;");
+  // Projects from before the rail could be reordered keep their name order,
+  // case-insensitive like the rail sorted them.
+  db.exec(`
+    UPDATE projects SET sort_order = (
+      SELECT COUNT(*) FROM projects AS other
+      WHERE other.name COLLATE NOCASE < projects.name COLLATE NOCASE
+        OR (other.name COLLATE NOCASE = projects.name COLLATE NOCASE AND other.id < projects.id)
+    ) WHERE sort_order IS NULL;
+  `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (

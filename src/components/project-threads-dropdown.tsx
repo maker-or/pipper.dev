@@ -1,17 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ArrowElbowDownRightIcon,
-  ChatCircleIcon,
-  CircleNotchIcon,
-  ClockCounterClockwiseIcon,
-  PlusIcon,
-} from "@phosphor-icons/react";
+import { CircleNotchIcon, ClockCounterClockwiseIcon, PlusIcon } from "@phosphor-icons/react";
 import type { Project } from "../../contracts/projects.ts";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/project-store";
 import { useAgentStore } from "@/store/agent-store";
+import { useAgentRegistryStore } from "@/store/agent-registry-store";
+import { agentLogoKey, providerLogoIcon } from "@/components/provider-logos";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { confirmDiscardDraft, selectThread } from "@/lib/thread-actions";
 import { useQueryClient } from "@tanstack/react-query";
@@ -48,6 +44,7 @@ export function ProjectThreadsDropdown({ project }: { project?: Project | null }
   const activeProject = project === undefined ? storeProject : project;
   const activeThreadId = useAgentStore((s) => s.snapshot?.threadId);
   const agentTasks = useAgentStore((s) => s.agentTasks);
+  const agents = useAgentRegistryStore((s) => s.agents);
   const queryClient = useQueryClient();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -212,13 +209,19 @@ export function ProjectThreadsDropdown({ project }: { project?: Project | null }
               <>
                 {rows.map(({ thread, depth, task }, idx) => {
                   const when = formatTimestamp(thread.last_used_at || thread.created_at);
+                  // Each thread shows the agent it runs on; nesting is the indent.
+                  const agent = agents.find((item) => item.id === thread.agent_id);
+                  const icon = providerLogoIcon(
+                    agentLogoKey(agent, thread.agent_id),
+                    agent?.displayName ?? thread.agent_id,
+                  );
                   return (
                     <MenuItem
                       key={thread.id}
                       index={idx}
                       label={thread.title?.trim() || "Untitled thread"}
                       description={task ? `${taskStatusText(task)} · ${when}` : when}
-                      icon={depth > 0 ? ArrowElbowDownRightIcon : ChatCircleIcon}
+                      icon={icon}
                       checked={thread.id === activeThreadId}
                       onSelect={() => void handleSelectThread(thread.id)}
                       style={depth > 0 ? { paddingLeft: `${depth * 12}px` } : undefined}

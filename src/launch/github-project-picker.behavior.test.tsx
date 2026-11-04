@@ -6,11 +6,7 @@ import { GitHubProjectPicker } from "./github-project-picker";
 import { AuthenticatedStage } from "./authenticated-stage";
 import type { GitHubCliStatus } from "../../contracts/github.ts";
 
-const mode = vi.hoisted(() => ({ value: "basic", setMode: vi.fn(), load: vi.fn() }));
-vi.mock("@/store/ui-mode-store", () => ({
-  useUiModeStore: (selector: (state: unknown) => unknown) =>
-    selector({ mode: mode.value, setMode: mode.setMode }),
-}));
+const mode = vi.hoisted(() => ({ load: vi.fn() }));
 vi.mock("@/store/agent-registry-store", () => ({
   useAgentRegistryStore: (selector: (state: unknown) => unknown) =>
     selector({ selectedAgentIds: [], load: mode.load }),
@@ -18,7 +14,6 @@ vi.mock("@/store/agent-registry-store", () => ({
 vi.mock("@/components/ambient-pixel-field", () => ({ AmbientPixelField: () => null }));
 vi.mock("@/components/agent-selector", () => ({ AgentSelector: () => null }));
 vi.mock("@/components/sleepless-onboarding", () => ({ SleeplessOnboarding: () => null }));
-vi.mock("@/components/workspace-mode-picker", () => ({ WorkspaceModePicker: () => null }));
 vi.mock("./onboarding-analytics", () => ({ trackOnboarding: vi.fn() }));
 
 let host: HTMLDivElement;
@@ -53,7 +48,6 @@ beforeEach(() => {
     onBusyChange,
   ])
     mock.mockReset();
-  mode.setMode.mockClear();
   getStatus.mockResolvedValue(ready);
   listRepositories.mockResolvedValue({ repositories: [repo], hasMore: false });
   cloneRepository.mockResolvedValue(project);
@@ -189,35 +183,30 @@ test("rechecks when the user returns from terminal login and works in Strict Mod
   expect(host.textContent).toContain("Connected as octocat");
 });
 
-test.each(["basic", "advanced"])(
-  "shares onboarding with the %s shell and never chooses a folder for GitHub",
-  async (value) => {
-    mode.value = value;
-    await act(async () =>
-      root.render(
-        <AuthenticatedStage
-          authUser={{ name: "User", email: null }}
-          projects={[]}
-          selectedId={null}
-          isOpening={false}
-          isLoading={false}
-          loadError={null}
-          handleOpen={vi.fn()}
-          handleProjectCreated={onCreated}
-        />,
-      ),
-    );
-    expect(button("Local").getAttribute("aria-selected")).toBe("true");
-    expect(host.querySelector('input[placeholder="No folder selected"]')).not.toBeNull();
-    expect(getStatus).not.toHaveBeenCalled();
-    await act(async () => button("GitHub").click());
-    expect(host.textContent).toContain("Select a repository");
-    expect(host.textContent).not.toContain("No folder selected");
-    await act(async () => button("team/app").click());
-    expect(onCreated).toHaveBeenCalledWith(project);
-    expect(mode.setMode).not.toHaveBeenCalled();
-  },
-);
+test("never chooses a folder for a GitHub project", async () => {
+  await act(async () =>
+    root.render(
+      <AuthenticatedStage
+        authUser={{ name: "User", email: null }}
+        projects={[]}
+        selectedId={null}
+        isOpening={false}
+        isLoading={false}
+        loadError={null}
+        handleOpen={vi.fn()}
+        handleProjectCreated={onCreated}
+      />,
+    ),
+  );
+  expect(button("Local").getAttribute("aria-selected")).toBe("true");
+  expect(host.querySelector('input[placeholder="No folder selected"]')).not.toBeNull();
+  expect(getStatus).not.toHaveBeenCalled();
+  await act(async () => button("GitHub").click());
+  expect(host.textContent).toContain("Select a repository");
+  expect(host.textContent).not.toContain("No folder selected");
+  await act(async () => button("team/app").click());
+  expect(onCreated).toHaveBeenCalledWith(project);
+});
 
 test("keeps the active source stable and prevents duplicate selections while cloning", async () => {
   let finish!: (value: typeof project) => void;

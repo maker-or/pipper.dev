@@ -1,28 +1,30 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Check,
   ChevronDown,
   ChevronRight,
   Diamond,
-  Ellipsis,
   FileCode,
-  FolderPlus,
+  FolderGit2,
   GitBranch,
+  History,
   Minus,
   PanelLeft,
   Play,
-  Plus,
   Rabbit,
 } from "lucide-react";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
+import type { ProjectShapeId } from "../../../contracts/projects.ts";
+import { projectShapePath } from "../../../src/lib/project-shapes.ts";
 
 /**
- * Static replica of the advanced shell (`src/components/advanced-shell.tsx`).
- * Everything below mirrors that layout and `src/lib/workspace-tone.ts` so the
- * hero reads as the real product without dragging in the Electron runtime.
+ * Static replica of the hybrid shell (`src/components/hybrid-shell.tsx`): the
+ * project rail, the inset thread card and the session panel. It mirrors that
+ * layout, the shapes in `src/lib/project-shapes.ts` and the git-state colours
+ * in `src/lib/workspace-tone.ts`, without the Electron runtime.
  */
 
 /** Git-state tone, copied from `workspace-tone.ts`. "action" = PR open with
@@ -33,33 +35,16 @@ const HERO_ORANGE_INK = "#A65B0E";
 const toneInsetShadow = `inset 0 0 22px 2px ${TONE_COLOR}, inset 0 0 48px 8px ${TONE_COLOR}`;
 const toneWash = `linear-gradient(to bottom, ${TONE_COLOR}100 0%, ${TONE_COLOR}1f 85%, ${TONE_COLOR}00 100%)`;
 
-/** A small, stable set of heights so the card grid reads as an organic
- *  masonry rather than a uniform table — same list the shell hashes against. */
-const CARD_HEIGHTS = [128, 168, 144, 188, 132, 160, 116, 176];
-
-function cardHeight(path: string, selected: boolean): number {
-  let hash = 0;
-  for (let i = 0; i < path.length; i++) hash = (hash * 31 + path.charCodeAt(i)) >>> 0;
-  const base = CARD_HEIGHTS[hash % CARD_HEIGHTS.length];
-  return selected ? base + 24 : base;
-}
-
-const PROJECTS = [
-  { name: "pipper", active: true },
-  { name: "Nucleus", active: false },
-  { name: "cln", active: false },
+/** The rail's projects; the selected one has its thread on screen, so its
+ *  shape takes the thread's git state (a PR with checks running). */
+const PROJECTS: { name: string; shape: ProjectShapeId; active?: boolean }[] = [
+  { name: "pipper", shape: "flower", active: true },
+  { name: "nucleus", shape: "cookie-9" },
+  { name: "marketing", shape: "heart" },
+  { name: "api", shape: "gem" },
+  { name: "docs", shape: "clover-4" },
+  { name: "infra", shape: "arch" },
 ];
-
-const WORKSPACES = [
-  { name: "Rewrite the marketing hero", path: "/pipper/workspaces/hero", running: true },
-  { name: "Fix login redirect loop", path: "/pipper/workspaces/auth" },
-  { name: "Terminal · dev server", path: "/pipper/workspaces/terminal" },
-  { name: "antigravity-rewrite", path: "/pipper/workspaces/antigravity", selected: true },
-  { name: "Agent settings", path: "/pipper/workspaces/settings" },
-  { name: "Nightly release", path: "/pipper/workspaces/release" },
-];
-
-const HIDDEN_WORKSPACE_COUNT = 3;
 
 const sessions = [
   { value: "tab-1", label: "surprise", icon: FileCode },
@@ -94,87 +79,66 @@ function Composer() {
   );
 }
 
-/** Horizontal, scrollable project switcher pinned above the workspace grid. */
-function ProjectTabs() {
+/**
+ * A project shape as the rail draws it: at rest a raised surface edged with
+ * the theme's shadow ring; the active project lit in its git-state colour.
+ */
+function ShapeIcon({ shape, active }: { shape: ProjectShapeId; active?: boolean }) {
+  const gradientId = `demo-shape-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   return (
-    <div
-      role="tablist"
-      aria-label="Projects"
-      className="flex items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    <svg
+      viewBox="0 0 100 100"
+      aria-hidden="true"
+      className="size-12 overflow-visible"
+      style={{
+        filter: "drop-shadow(0 1px 1px var(--dm-drop)) drop-shadow(0 3px 3px var(--dm-drop))",
+      }}
     >
-      {PROJECTS.map((project) => (
-        <button
-          key={project.name}
-          type="button"
-          role="tab"
-          aria-selected={project.active}
-          data-active={project.active ? "true" : undefined}
-          className={
-            "relative shrink-0 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[15px] leading-none outline-none transition-colors duration-80 " +
-            (project.active
-              ? "font-medium text-foreground"
-              : "text-muted-foreground/60 hover:text-foreground")
-          }
-        >
-          {project.name}
-          {project.active && (
-            <span
-              aria-hidden="true"
-              className="absolute inset-x-2.5 -bottom-0.5 h-0.5 rounded-full bg-foreground/70"
-            />
-          )}
-        </button>
-      ))}
-    </div>
+      {active ? (
+        <defs>
+          <radialGradient id={gradientId} cx="38%" cy="30%" r="75%">
+            <stop offset="0%" stopColor={`color-mix(in srgb, ${HERO_ORANGE} 72%, white)`} />
+            <stop offset="55%" stopColor={HERO_ORANGE} />
+            <stop offset="100%" stopColor={`color-mix(in srgb, ${HERO_ORANGE} 82%, black)`} />
+          </radialGradient>
+        </defs>
+      ) : null}
+      <path
+        d={projectShapePath(shape)}
+        fill={active ? `url(#${gradientId})` : "var(--surface-3)"}
+        stroke="var(--dm-ring-high)"
+        strokeWidth={2}
+        strokeLinejoin="round"
+        paintOrder="stroke"
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
   );
 }
 
-/** A single workspace rendered as a card in the grid. */
-function WorkspaceCard({
-  name,
-  path,
-  selected,
-}: {
-  name: string;
-  path: string;
-  selected?: boolean;
-}) {
+/** The project rail: one shape per project, spread to fill the height. */
+function ProjectRail() {
   return (
-    <div className="group/card relative mb-2 break-inside-avoid">
-      <button
-        type="button"
-        data-active={selected ? "true" : undefined}
-        aria-current={selected ? "page" : undefined}
-        style={{
-          minHeight: cardHeight(path, Boolean(selected)),
-          boxShadow: selected ? toneInsetShadow : undefined,
-        }}
-        className={
-          "relative flex w-full flex-col overflow-hidden rounded-2xl p-3 text-left outline-none " +
-          "transition-[background-color,color,box-shadow] duration-80 " +
-          (selected
-            ? "bg-surface-1 text-foreground"
-            : "bg-[#262626] text-neutral-400 hover:bg-[#303030] hover:text-neutral-100")
-        }
-      >
-        <span className="line-clamp-3 pr-5 text-[13px] font-medium leading-snug">{name}</span>
-        {name.startsWith("Rewrite") && (
-          <span
-            className="mt-auto flex items-center gap-1 pt-2"
-            title="1 agent running here"
-            aria-label="1 agent running here"
-          >
-            <span className="size-[13px] rounded-[3px]" style={{ backgroundColor: HERO_ORANGE }} />
+    <nav
+      aria-label="Projects"
+      className="flex w-[5.5rem] shrink-0 flex-col px-2 pb-2 pt-12 max-[1100px]:hidden"
+    >
+      {PROJECTS.map((project) => (
+        <span
+          key={project.name}
+          aria-current={project.active ? "page" : undefined}
+          className={
+            "flex min-h-[82px] flex-1 flex-col items-center justify-center gap-1.5 " +
+            (project.active ? "text-foreground" : "text-muted-foreground")
+          }
+        >
+          <ShapeIcon shape={project.shape} active={project.active} />
+          <span className="w-full truncate text-center text-[11px] font-medium leading-4">
+            {project.name}
           </span>
-        )}
-      </button>
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute right-1.5 top-1.5 grid size-6 place-items-center rounded-md text-current opacity-0 transition-opacity duration-80 group-hover/card:opacity-100"
-      >
-        <Ellipsis size={16} />
-      </span>
-    </div>
+        </span>
+      ))}
+    </nav>
   );
 }
 
@@ -225,59 +189,85 @@ function ReviewAvatar({ kind }: { kind: (typeof REVIEW_COMMENTS)[number]["avatar
   );
 }
 
-/** Right rail: the state header (PR pill + action + tabs) over the check list. */
-function WorkspacePanel() {
+/** A row in the session panel's header: icon, label, optional trailing. */
+function HeaderRow({
+  icon,
+  children,
+  trailing,
+}: {
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  trailing?: React.ReactNode;
+}) {
+  return (
+    <span className="flex min-h-8 items-center gap-2.5 text-[13px] text-white">
+      <span className="grid size-4 shrink-0 place-items-center text-white/80">{icon}</span>
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+      {trailing}
+    </span>
+  );
+}
+
+/** Right panel: the session panel, its git-state header over the tabs. */
+function SessionPanel() {
   return (
     <aside
-      aria-label="Workspace review and checks"
-      className="flex w-96 shrink-0 flex-col overflow-y-auto border-l border-border text-left max-[1100px]:hidden"
+      aria-label="Session"
+      className="flex w-[22rem] shrink-0 flex-col overflow-y-auto border-l border-border text-left max-[1100px]:hidden"
     >
       {/* The git state reads as an inset glow behind the header, masked away
-          toward the bottom edge so it flows into the body instead of banding
-          across it. */}
+          toward the bottom edge so it flows into the body. */}
       <div
-        className="sticky top-0 z-20 shrink-0 rounded-tr-[16px] bg-surface-1 px-4 pb-8 pt-4"
+        className="relative z-20 flex shrink-0 flex-col gap-3 px-4 pb-5 pt-4"
         style={{ backgroundImage: toneWash }}
       >
         <div
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -z-10 rounded-tr-[16px]"
+          className="pointer-events-none absolute inset-0 -z-10"
           style={{
             boxShadow: toneInsetShadow,
             maskImage: "linear-gradient(to bottom, #000 60%, transparent 100%)",
             WebkitMaskImage: "linear-gradient(to bottom, #000 60%, transparent 100%)",
           }}
         />
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="flex h-7 shrink-0 items-center overflow-hidden rounded-full border-2 border-white/30 bg-white/30 text-[12px] font-semibold text-white">
-            <span className="px-2.5">#142</span>
-            <span className="flex h-full items-center bg-white/30 px-1.5">
-              <ArrowUpRight size={13} />
-            </span>
-          </span>
-          <button
-            type="button"
-            className="ml-auto flex h-7 shrink-0 items-center overflow-hidden rounded-full bg-[#FFAA4F] text-[#4a2c05] transition-colors hover:bg-[#ffbb70]"
-          >
-            <span className="pl-3 pr-1 text-[12px] font-semibold">Push</span>
-            <span className="flex items-center pl-1 pr-2">
+        {/* The next step and the PR, joined into one pill. */}
+        <div className="flex min-h-7 items-center">
+          <span className="flex h-7 shrink-0 items-center overflow-hidden rounded-full bg-[#FFAA4F] text-[12px] font-semibold text-[#4a2c05]">
+            <span className="pl-3 pr-1">Push</span>
+            <span className="flex items-center pr-2">
               <ChevronDown size={13} />
             </span>
-          </button>
+            <span className="flex h-full items-center gap-1 border-l border-[#4a2c05]/20 px-2.5">
+              #142 <ArrowUpRight size={13} />
+            </span>
+          </span>
         </div>
-        <div className="mt-3 flex items-center gap-4 text-[13px] font-medium leading-5">
-          <span className="text-[13px] font-medium capitalize text-white">Check</span>
-          <span className="text-[13px] font-medium capitalize text-white/35">Changes</span>
+        <div className="flex flex-col gap-0.5">
+          <HeaderRow icon={<FolderGit2 size={16} />}>antigravity-rewrite</HeaderRow>
+          <HeaderRow icon={<GitBranch size={16} />}>feat/antigravity-acp</HeaderRow>
+          <HeaderRow
+            icon={<ArrowUpRight size={16} />}
+            trailing={
+              <span className="shrink-0 text-[12px] tabular-nums">
+                <span className="text-[#7ee2a8]">+482</span>{" "}
+                <span className="text-[#ff9b9b]">−117</span>
+              </span>
+            }
+          >
+            pipper-dev/pipper
+          </HeaderRow>
         </div>
       </div>
 
-      <div className="flex flex-col gap-7 px-4 py-4">
-        <section className="flex flex-col gap-3">
-          <h2 className="text-lg font-semibold leading-6 text-foreground">antigravity-rewrite</h2>
-          <ul className="list-disc pl-5 text-[13px] leading-6 text-muted-foreground">
-            <li>Integrate official Antigravity ACP binary and harden connection lifecycle</li>
-          </ul>
-        </section>
+      <div className="border-t border-border px-4 py-3">
+        <div className="flex items-center gap-4 text-[13px] font-medium leading-5">
+          <span className="text-foreground">Check</span>
+          <span className="text-muted-foreground/60">Changes</span>
+          <span className="text-muted-foreground/60">Files</span>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-7 px-4 pb-4">
         <section className="flex flex-col gap-1.5">
           <h3 className="text-sm font-semibold text-foreground">Deployments</h3>
           <ul className="flex flex-col">
@@ -429,62 +419,14 @@ export default function ProductDemo() {
       className="flex w-full shrink-0 justify-center overflow-hidden bg-transparent p-[clamp(0.9rem,2.4vw,3rem)]"
     >
       <div className="dark relative flex h-full min-h-[44rem] w-full max-w-[96rem] overflow-hidden rounded-[18px] border border-white/10 bg-surface-1 text-foreground">
-        {/* Left rail: projects on top, workspace grid below. */}
-        <aside
-          aria-label="Projects and workspaces"
-          className="flex w-80 shrink-0 flex-col border-r border-border max-[1100px]:hidden"
-        >
-          <div className="flex min-h-0 flex-1 flex-col">
-            <div className="flex shrink-0 items-center justify-end px-2 pt-3">
-              <span
-                aria-label="Collapse workspace sidebar"
-                className="grid size-8 place-items-center rounded-4xl text-muted-foreground"
-              >
-                <PanelLeft size={16} />
-              </span>
-            </div>
-            <div className="flex shrink-0 items-center gap-1 px-2 pb-2 pt-1">
-              <div className="min-w-0 flex-1">
-                <ProjectTabs />
-              </div>
-              <span
-                aria-label="New workspace in pipper"
-                className="grid size-8 shrink-0 place-items-center rounded-4xl text-muted-foreground"
-              >
-                <Plus size={16} />
-              </span>
-            </div>
-            <div className="min-h-0 flex-1 overflow-y-auto px-2">
-              <div className="columns-2 gap-2">
-                {WORKSPACES.map((workspace) => (
-                  <WorkspaceCard
-                    key={workspace.path}
-                    name={workspace.name}
-                    path={workspace.path}
-                    selected={workspace.selected}
-                  />
-                ))}
-              </div>
-              <span className="mt-2 flex h-8 w-full items-center justify-center gap-2 rounded-md text-[12px] text-muted-foreground">
-                <ChevronDown size={14} />
-                Load more ({HIDDEN_WORKSPACE_COUNT})
-              </span>
-            </div>
-          </div>
-          <div className="shrink-0 border-t border-white/5 bg-[#1a1a1a] p-2">
-            <div className="flex items-center gap-1">
-              <span className="flex h-8 flex-1 items-center gap-2 rounded-md px-2 text-left text-[13px] text-neutral-400">
-                <FolderPlus size={16} />
-                New project
-              </span>
-            </div>
-          </div>
-        </aside>
+        {/* Left rail: one shape per project. */}
+        <ProjectRail />
 
-        <main className="relative flex min-w-0 flex-1 overflow-hidden">
+        {/* The thread and its session panel sit in a raised, inset card. */}
+        <main className="relative my-2 mr-2 flex min-w-0 flex-1 overflow-hidden rounded-xl bg-surface-2 shadow-surface-2 max-[1100px]:ml-2">
           <section className="flex min-w-0 flex-1 flex-col overflow-hidden">
-            <div className="flex h-12 shrink-0 items-center gap-2 bg-surface-1 px-3">
-              <div className="mx-auto mt-2 min-w-0 max-w-[1000px] px-4">
+            <div className="flex h-12 shrink-0 items-center gap-2 px-3">
+              <div className="mx-auto mt-2 min-w-0 max-w-[1000px] flex-1 px-4 [&_[role=tablist]]:mx-auto">
                 <Tabs value={activeSession} onValueChange={setActiveSession}>
                   <TabsList className="min-w-0 max-w-full gap-1 overflow-x-auto p-1">
                     {sessions.map((session) => (
@@ -498,11 +440,13 @@ export default function ProductDemo() {
                   </TabsList>
                 </Tabs>
               </div>
-              <span
-                aria-label="Toggle workspace panel"
-                className="mt-2 hidden size-8 shrink-0 place-items-center rounded-4xl text-muted-foreground max-[1100px]:grid"
-              >
-                <PanelLeft size={16} className="-scale-x-100" />
+              <span className="mt-2 flex shrink-0 items-center gap-1 text-muted-foreground">
+                <span aria-label="Project threads" className="grid size-8 place-items-center">
+                  <History size={16} />
+                </span>
+                <span aria-label="Hide session panel" className="grid size-8 place-items-center">
+                  <PanelLeft size={16} className="-scale-x-100" />
+                </span>
               </span>
             </div>
 
@@ -529,7 +473,7 @@ export default function ProductDemo() {
             </div>
           </section>
 
-          <WorkspacePanel />
+          <SessionPanel />
         </main>
       </div>
     </section>

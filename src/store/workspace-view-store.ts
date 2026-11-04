@@ -1,6 +1,4 @@
 import { create } from "zustand";
-import { useDiffStore } from "@/store/diff-store";
-import { useUiModeStore } from "@/store/ui-mode-store";
 import type { DraftState } from "../../contracts/composer.ts";
 
 /**
@@ -78,7 +76,6 @@ interface WorkspaceViewState {
   setDraftModel: (modelId: string | null) => void;
   setDraftWorktree: (worktreePath: string | null) => void;
   setDraftDirty: (dirty: boolean) => void;
-  markDraftUserEditedProject: () => void;
 }
 
 export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
@@ -179,30 +176,7 @@ export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
     if (!draft) return;
     set({ draft: { ...draft, dirty } });
   },
-
-  markDraftUserEditedProject: () => {
-    const draft = get().draft;
-    if (!draft) return;
-    set({ draft: { ...draft, softDefaultProject: false, dirty: true } });
-  },
 }));
-
-/**
- * Whether the workspace is rendering the 40:60 conversation | diff split.
- * The shell uses it to lay out the panels; the agent view uses it to decide
- * between its centered reading column (full-width global view) and the panel's
- * full width (already narrow inside the split). Draft has no thread → no split.
- * Only the basic shell splits; the others never render the diff beside the thread.
- */
-export function useIsDiffSplit(): boolean {
-  const uiMode = useUiModeStore((state) => state.mode);
-  const mode = useWorkspaceViewStore((state) => state.mode);
-  const draft = useWorkspaceViewStore((state) => state.draft);
-  const isDiffOpen = useDiffStore((state) => state.isOpen);
-  const diffFileCount = useDiffStore((state) => state.order.length);
-  if (draft || uiMode !== "basic") return false;
-  return mode === "agent" && isDiffOpen && diffFileCount > 0;
-}
 
 /**
  * Project id that owns the current agent chrome (title bar, file tree).

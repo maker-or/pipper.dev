@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { FilePreviewInfo, FilePreviewTarget } from "../contracts/file-preview.ts";
+import type { NativeMenuRequest } from "../contracts/native-menu.ts";
 import type { DatabaseCompactionResult, WorkspaceDiskUsageReport } from "../contracts/storage.ts";
 import type { Project, ProjectFileTreeSnapshot } from "../contracts/projects.ts";
 import type { GitHubApi } from "../contracts/github.ts";
@@ -239,6 +240,8 @@ const api = {
   },
   projects: {
     list: (): Promise<Project[]> => ipcRenderer.invoke("projects:list"),
+    reorder: (projectIds: string[]): Promise<Project[]> =>
+      ipcRenderer.invoke("projects:reorder", projectIds),
     delete: (projectId: string): Promise<{ activeProjectId: string | null }> =>
       ipcRenderer.invoke("projects:delete", projectId),
     create: (input: CreateProjectInput): Promise<Project> =>
@@ -561,6 +564,9 @@ const api = {
       };
     },
   },
+  themeLab: {
+    open: (): Promise<void> => ipcRenderer.invoke("themeLab:open"),
+  },
   settings: {
     getChange: (id: string): Promise<SettingChangeRecord | null> =>
       ipcRenderer.invoke("settings:getChange", id),
@@ -648,6 +654,11 @@ const api = {
   },
   dialog: {
     pickDirectory: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickDirectory"),
+  },
+  menu: {
+    /** Pops up an OS menu; resolves with the picked item's id, or null when dismissed. */
+    popup: (request: NativeMenuRequest): Promise<string | null> =>
+      ipcRenderer.invoke("menu:popup", request),
   },
   terminal: {
     create: (sessionId: string, cwd?: string, cols?: number, rows?: number): Promise<void> =>

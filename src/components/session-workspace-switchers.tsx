@@ -1,19 +1,16 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { CaretUpDown, Folder, GitBranch } from "@phosphor-icons/react";
+import { useEffect, useState, type ReactNode } from "react";
+import { CaretUpDown, GitBranch } from "@phosphor-icons/react";
+import { FolderGitIcon } from "@/components/icons/folder-git-icon";
 import type { GitBranch as GitBranchInfo, Worktree } from "../../contracts/worktrees.ts";
 import { orderWorktreesForDisplay } from "../../contracts/worktrees.ts";
 import type { Project } from "../../contracts/projects.ts";
 import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import { worktreeName } from "@/components/composer-worktree-picker";
-import { Dropdown } from "@/components/ui/dropdown";
-import { MenuItem } from "@/components/ui/menu-item";
 import { toast } from "@/components/ui/toast";
 import { errorToast } from "@/lib/error-toast";
+import { popupNativeMenu } from "@/lib/native-menu";
 import { cn } from "@/lib/utils";
 import { pickThreadWorktree } from "@/lib/worktree-pick";
-
-/** Branch lists longer than this get a filter field. */
-const FILTER_THRESHOLD = 8;
 
 /** Home directory shortened to `~`, as a terminal prompt shows it. */
 function tildePath(path: string): string {
@@ -43,72 +40,58 @@ function useWorktrees(projectId: string): Worktree[] {
 }
 
 /**
- * A panel row that opens a menu under it. Closes on a pick, an outside
- * click or Escape.
+ * A panel row that opens an OS menu from itself. The row stays highlighted
+ * while the menu is up; a second press while it is opening does nothing.
  */
 function MenuRow({
   icon,
   label,
   title,
   disabled,
-  open,
-  onOpenChange,
-  children,
+  onOpen,
 }: {
   icon: ReactNode;
   label: ReactNode;
   title: string;
   disabled?: boolean;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  children: ReactNode;
+  /** Shows the menu; resolves once it has closed. */
+  onOpen: (anchor: HTMLElement) => Promise<void>;
 }) {
-  const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) onOpenChange(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onOpenChange(false);
-    };
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open, onOpenChange]);
+  const [open, setOpen] = useState(false);
 
   return (
-    <div ref={rootRef} className="relative">
-      <button
-        type="button"
-        disabled={disabled}
-        aria-haspopup="menu"
-        aria-expanded={open}
-        title={title}
-        onClick={() => onOpenChange(!open)}
+    <button
+      type="button"
+      disabled={disabled}
+      aria-haspopup="menu"
+      aria-expanded={open}
+      title={title}
+      onClick={(event) => {
+        if (open) return;
+        const anchor = event.currentTarget;
+        setOpen(true);
+        void onOpen(anchor)
+          .catch((err) =>
+            toast(errorToast(err instanceof Error ? err.message : "Could not open the menu.")),
+          )
+          .finally(() => setOpen(false));
+      }}
+      className={cn(
+        "group/row -mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 text-left text-[13px] outline-none transition-colors duration-80",
+        "hover:bg-hover focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none",
+        open && "bg-hover",
+      )}
+    >
+      <span className="grid size-4 shrink-0 place-items-center text-muted-foreground">{icon}</span>
+      <span className="min-w-0 flex-1 truncate text-foreground">{label}</span>
+      <CaretUpDown
+        size={12}
         className={cn(
-          "group/row -mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 text-left text-[13px] outline-none transition-colors duration-80",
-          "hover:bg-hover focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none",
-          open && "bg-hover",
+          "shrink-0 text-muted-foreground opacity-0 transition-opacity duration-80 group-hover/row:opacity-100",
+          open && "opacity-100",
         )}
-      >
-        <span className="grid size-4 shrink-0 place-items-center text-muted-foreground">
-          {icon}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-foreground">{label}</span>
-        <CaretUpDown
-          size={12}
-          className={cn(
-            "shrink-0 text-muted-foreground opacity-0 transition-opacity duration-80 group-hover/row:opacity-100",
-            open && "opacity-100",
-          )}
-        />
-      </button>
-      {open ? <div className="absolute inset-x-0 top-full z-[200] mt-1">{children}</div> : null}
-    </div>
+      />
+    </button>
   );
 }
 
@@ -128,49 +111,44 @@ export function WorktreeSwitcher({
   threadId: string | null;
 }) {
   const worktrees = useWorktrees(project.id);
-  const [open, setOpen] = useState(false);
   const current = normalizeWorkspacePath(cwd, project.path);
   const isCurrent = (worktree: Worktree) =>
     current === null
       ? worktree.isProjectRoot
       : !worktree.isProjectRoot && normalizeWorkspacePath(worktree.path, project.path) === current;
-  const checkedIndex = worktrees.findIndex(isCurrent);
+  const currentWorktree = worktrees.find(isCurrent) ?? null;
+  // The branch row below already names the branch, so the project folder
+  // goes by the project's name rather than the branch it has checked out.
+  const name =
+    current === null
+      ? project.name
+      : currentWorktree
+        ? worktreeName(currentWorktree)
+        : (cwd.split(/[\\/]/).filter(Boolean).at(-1) ?? cwd);
+
+  const openMenu = async (anchor: HTMLElement) => {
+    const picked = await popupNativeMenu(
+      anchor,
+      worktrees.map((worktree) => ({
+        type: "item",
+        id: worktree.path,
+        label: worktreeName(worktree),
+        sublabel: worktree.isProjectRoot ? "Project folder" : (worktree.branch ?? "Detached HEAD"),
+        checked: isCurrent(worktree),
+      })),
+    );
+    const worktree = worktrees.find((item) => item.path === picked);
+    if (worktree && !isCurrent(worktree)) await pickThreadWorktree(worktree, { draft, threadId });
+  };
 
   return (
     <MenuRow
-      icon={<Folder size={16} />}
-      title={`${cwd}\nChange worktree`}
-      open={open}
-      onOpenChange={setOpen}
-      label={
-        <>
-          {project.name}
-          <span className="text-muted-foreground"> · {tildePath(cwd)}</span>
-        </>
-      }
-    >
-      <Dropdown
-        checkedIndex={checkedIndex === -1 ? undefined : checkedIndex}
-        className="w-full max-h-80"
-        aria-label="Worktrees"
-      >
-        {worktrees.map((worktree, index) => (
-          <MenuItem
-            key={worktree.path}
-            index={index}
-            label={worktreeName(worktree)}
-            description={
-              worktree.isProjectRoot ? "Project folder" : (worktree.branch ?? "Detached HEAD")
-            }
-            checked={isCurrent(worktree)}
-            onSelect={() => {
-              setOpen(false);
-              if (!isCurrent(worktree)) void pickThreadWorktree(worktree, { draft, threadId });
-            }}
-          />
-        ))}
-      </Dropdown>
-    </MenuRow>
+      icon={<FolderGitIcon size={16} />}
+      title={`${tildePath(cwd)}\nChange worktree`}
+      disabled={worktrees.length === 0}
+      onOpen={openMenu}
+      label={name}
+    />
   );
 }
 
@@ -198,23 +176,7 @@ export function BranchSwitcher({
   onSwitched: () => void;
 }) {
   const worktrees = useWorktrees(project.id);
-  const [open, setOpen] = useState(false);
-  const [branches, setBranches] = useState<GitBranchInfo[] | null>(null);
-  const [filter, setFilter] = useState("");
   const [switching, setSwitching] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    let cancelled = false;
-    setFilter("");
-    window.omni.worktrees
-      .listBranches({ projectId: project.id })
-      .then((items) => !cancelled && setBranches(items))
-      .catch(() => !cancelled && setBranches([]));
-    return () => {
-      cancelled = true;
-    };
-  }, [open, project.id]);
 
   const here = normalizeWorkspacePath(cwd, project.path) ?? project.path;
   const holder = (item: GitBranchInfo): Worktree | null => {
@@ -228,14 +190,8 @@ export function BranchSwitcher({
       ) ?? null
     );
   };
-  const visible = useMemo(() => {
-    const query = filter.trim().toLowerCase();
-    const list = branches ?? [];
-    return query ? list.filter((item) => item.name.toLowerCase().includes(query)) : list;
-  }, [branches, filter]);
 
   const choose = async (item: GitBranchInfo) => {
-    setOpen(false);
     if (item.name === branch) return;
     const elsewhere = holder(item);
     if (elsewhere) {
@@ -258,15 +214,33 @@ export function BranchSwitcher({
     }
   };
 
-  const checkedIndex = visible.findIndex((item) => item.name === branch);
+  // Branches are read fresh each time, so ones made elsewhere show up.
+  const openMenu = async (anchor: HTMLElement) => {
+    const branches = await window.omni.worktrees.listBranches({ projectId: project.id });
+    if (branches.length === 0) return;
+    const picked = await popupNativeMenu(
+      anchor,
+      branches.map((item) => {
+        const elsewhere = holder(item);
+        return {
+          type: "item",
+          id: item.name,
+          label: item.name,
+          sublabel: elsewhere ? `Checked out in ${worktreeName(elsewhere)}` : undefined,
+          checked: item.name === branch,
+        };
+      }),
+    );
+    const item = branches.find((candidate) => candidate.name === picked);
+    if (item) await choose(item);
+  };
 
   return (
     <MenuRow
-      icon={<GitBranch size={16} />}
+      icon={<GitBranch size={16} weight="duotone" />}
       title={busy ? "Switch branches after this turn" : "Switch branch"}
       disabled={busy || switching}
-      open={open}
-      onOpenChange={setOpen}
+      onOpen={openMenu}
       label={
         switching ? (
           <span className="text-muted-foreground">Switching…</span>
@@ -274,42 +248,6 @@ export function BranchSwitcher({
           (branch ?? <span className="text-muted-foreground">Detached HEAD</span>)
         )
       }
-    >
-      <Dropdown
-        checkedIndex={checkedIndex === -1 ? undefined : checkedIndex}
-        className="w-full max-h-80"
-        aria-label="Branches"
-      >
-        {(branches?.length ?? 0) > FILTER_THRESHOLD ? (
-          <input
-            value={filter}
-            onChange={(event) => setFilter(event.target.value)}
-            placeholder="Filter branches"
-            aria-label="Filter branches"
-            autoFocus
-            className="mx-1 mb-1 mt-1 rounded-md bg-transparent px-2 py-1.5 text-[12px] text-foreground outline-none ring-1 ring-border placeholder:text-muted-foreground/60 focus:ring-ring"
-          />
-        ) : null}
-        {branches === null ? (
-          <p className="px-2 py-2 text-[12px] text-muted-foreground">Loading branches…</p>
-        ) : visible.length === 0 ? (
-          <p className="px-2 py-2 text-[12px] text-muted-foreground">No branches</p>
-        ) : (
-          visible.map((item, index) => {
-            const elsewhere = holder(item);
-            return (
-              <MenuItem
-                key={item.name}
-                index={index}
-                label={item.name}
-                description={elsewhere ? `Checked out in ${worktreeName(elsewhere)}` : undefined}
-                checked={item.name === branch}
-                onSelect={() => void choose(item)}
-              />
-            );
-          })
-        )}
-      </Dropdown>
-    </MenuRow>
+    />
   );
 }

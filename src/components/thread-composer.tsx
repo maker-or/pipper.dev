@@ -17,7 +17,7 @@ import {
   type MentionItem,
   type MentionProvider,
 } from "@/components/mention-popover";
-import { ProjectIcon } from "@/components/ui/icon-picker";
+import { ProjectMark } from "@/components/project-shape";
 import { ProviderLogo } from "@/components/provider-logos";
 import { cn } from "@/lib/utils";
 import { toneIdentity } from "@/lib/workspace-tone";
@@ -521,8 +521,10 @@ export function ThreadComposer({
           let iconNode: React.ReactNode = null;
           if (entity.kind === "project") {
             const projectItem = projects.find((p) => p.id === entity.id);
-            const iconName = entity.icon ?? projectItem?.icon ?? null;
-            iconNode = <ProjectIcon name={iconName} className="size-3.5 shrink-0" />;
+            const icon = entity.icon ?? projectItem?.icon ?? null;
+            iconNode = (
+              <ProjectMark project={{ id: entity.id, icon }} className="size-3.5 shrink-0" />
+            );
           } else if (entity.kind === "model") {
             const modelItem = models.find((m) => m.id === entity.id);
             const providerKey =

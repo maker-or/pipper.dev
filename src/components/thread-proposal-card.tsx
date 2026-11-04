@@ -118,9 +118,7 @@ export function ThreadProposalCard({ proposalId }: { proposalId: string }) {
   if (isPending || !proposal) return null;
   if (proposal.state === "started") {
     // The thread is being created when threadId is still null.
-    return proposal.threadId ? (
-      <ThreadLinkCard link={{ threadId: proposal.threadId, kind: "thread" }} />
-    ) : null;
+    return proposal.threadId ? <ThreadLinkCard link={{ threadId: proposal.threadId }} /> : null;
   }
 
   const answer = async (action: "start" | "dismiss") => {

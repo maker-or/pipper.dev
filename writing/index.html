@@ -1,0 +1,2694 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>What is what · Pipper</title>
+    <meta
+      name="description"
+      content="Pipper is an interface to control your agents. The thinking behind it: its assumptions, its adaptive interface, and where these tools are heading."
+    />
+    <link rel="canonical" href="https://writing.pipper.dev/" />
+    <meta property="og:type" content="article" />
+    <meta property="og:site_name" content="Pipper" />
+    <meta property="og:title" content="What is what" />
+    <meta
+      property="og:description"
+      content="Pipper is an interface to control your agents. The thinking behind it: its assumptions, its adaptive interface, and where these tools are heading."
+    />
+    <meta property="og:url" content="https://writing.pipper.dev/" />
+    <meta property="og:image" content="https://writing.pipper.dev/og.png" />
+    <meta property="og:image:width" content="1800" />
+    <meta property="og:image:height" content="945" />
+    <meta
+      property="og:image:alt"
+      content="Writing :) in bright green handwriting on a deep green background"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="What is what" />
+    <meta
+      name="twitter:description"
+      content="Pipper is an interface to control your agents. The thinking behind it: its assumptions, its adaptive interface, and where these tools are heading."
+    />
+    <meta name="twitter:image" content="https://writing.pipper.dev/og.png" />
+    <meta name="twitter:creator" content="@pasupuleti73628" />
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
+    <link rel="icon" href="/icon.png" type="image/png" sizes="512x512" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="theme-color" content="#088139" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Cedarville+Cursive&family=Inter:wght@400;500;600&display=swap"
+    />
+    <style>
+      :root {
+        color-scheme: light;
+        box-sizing: border-box;
+        padding-top: env(safe-area-inset-top, 0px);
+        padding-bottom: env(safe-area-inset-bottom, 0px);
+      }
+      html {
+        scroll-padding-top: env(safe-area-inset-top, 0px);
+      }
+      body {
+        margin: 0;
+        padding: 0;
+        font:
+          14px -apple-system,
+          BlinkMacSystemFont,
+          sans-serif;
+        background: #fff;
+        color: #000;
+      }
+      img {
+        max-width: 100%;
+      }
+      [hidden]:not([hidden="until-found" i]) {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <style>
+      /* Layout: the PDF's single reading column with a sticky contents rail; each image slot is a flat window sketch
+   drawn to the reference frames. */
+      :root {
+        /* article */
+        --bg: #fdfdfc;
+        --fg: #111111;
+        --muted: #8f8f8d;
+        --faint-text: #b4b4b2;
+        --rule: #cfcfcd;
+        --toggle: #969696;
+        --toggle-knob: #dcdcdc;
+        /* sketch and pager tokens */
+        --paper: #fdfdfc; /* the page’s own background */
+        --edge: rgba(0, 0, 0, 0.07);
+        --ink: #222222;
+        --dim: #6b6b6b;
+        --sub: #7a7a7a;
+        --faint: #b9b9b9;
+        --unit: #a1a1a1;
+        --line: #e6e6e6;
+        --skel: #dcdcdc;
+        --side: #efefef;
+        --badge: #f0f0f0;
+        --grid: rgba(34, 34, 34, 0.05);
+        --hatch: rgba(34, 34, 34, 0.16);
+        --accent: #34c759; /* Apple system green, light */
+        --accent-ink: #1d7f3a;
+        --accent-tint: #e6f6ea;
+        --tone-neutral: #536176;
+        --tone-action: #b85b08;
+        --tone-ready: #147858;
+        --tone-merged: #6b3cba;
+        --tone-stale: #2262ae;
+        --ref-line: #707070;
+        --ref-div: #808080;
+        --ref-pill: #999999;
+        --ref-pill-in: #acacac;
+        --ref-card: #acacac;
+        --ref-key: #c4c4c4;
+        --ref-green: #b9d281;
+        --ref-tile-green: #6e8142;
+        --ref-btn-green: #304102;
+        --ref-btn-div-green: #9bac6d;
+        --ref-grey: #b8b8b8;
+        --ref-tile-grey: #b8b8b8;
+        --ref-btn-div-grey: #d4d4d4;
+        --ref-pager: #e4e4e2;
+        --ref-pager-btn: #fdfdfc;
+        --ref-slab: rgba(212, 212, 212, 0.42);
+        color-scheme: light;
+        --sans: "Inter", ui-sans-serif, -apple-system, "Helvetica Neue", Arial, sans-serif;
+        --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        background: var(--bg);
+        color: var(--fg);
+        font-family: var(--sans);
+        font-size: 22px;
+        line-height: 1.36;
+        letter-spacing: -0.012em;
+        -webkit-font-smoothing: antialiased;
+      }
+      .page {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 860px) 1fr;
+        gap: 0 48px;
+        max-width: 1280px;
+        margin: 0 auto;
+        padding-block: 64px 160px;
+        padding-left: max(16px, env(safe-area-inset-left, 0px));
+        padding-right: max(16px, env(safe-area-inset-right, 0px));
+      }
+      header.top {
+        grid-column: 2 / 4;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 64px;
+      }
+      header.top h1 {
+        margin: 0;
+        font-size: 28px;
+        font-weight: 600;
+        letter-spacing: -0.03em;
+        line-height: 1.2;
+      }
+      header.top .date {
+        margin: 2px 0 0 6px;
+        font-size: 26px;
+        font-weight: 500;
+        color: var(--faint-text);
+        letter-spacing: -0.02em;
+      }
+
+      nav.toc {
+        grid-column: 1;
+        grid-row: 2 / span 20;
+      }
+      nav.toc .toc-sticky {
+        position: sticky;
+        top: calc(48px + env(safe-area-inset-top, 0px));
+      }
+      nav.toc ol {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 2px;
+      }
+      .toc-author {
+        margin-top: 36px;
+      }
+      .toc-author-links {
+        font-family: "Cedarville Cursive", cursive;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        font-size: 26px;
+        color: var(--faint-text);
+        user-select: none;
+      }
+      .toc-author-links a,
+      .toc-author-links button {
+        font: inherit;
+        color: var(--faint-text);
+        text-decoration: none;
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        cursor: pointer;
+        transition: color 0.15s ease;
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+      }
+      .toc-author-links a:hover,
+      .toc-author-links button:hover {
+        color: var(--fg);
+      }
+      .toc-author-links .toc-sep {
+        font-family: var(--sans);
+        font-size: 15px;
+        opacity: 0.35;
+      }
+      nav.toc a {
+        color: var(--faint-text);
+        text-decoration: none;
+        font-size: 22px;
+        letter-spacing: -0.02em;
+        transition: color 0.15s;
+      }
+      nav.toc a[aria-current="true"] {
+        color: var(--fg);
+        font-weight: 500;
+      }
+      nav.toc a:hover {
+        color: var(--fg);
+      }
+
+      main {
+        grid-column: 2;
+        min-width: 0;
+      }
+      section {
+        scroll-margin-top: 40px;
+      }
+      section + section {
+        margin-top: 120px;
+      }
+      p {
+        margin: 0 0 22px;
+      }
+      a.u {
+        color: inherit;
+      }
+      .u {
+        text-decoration: underline;
+        text-underline-offset: 5px;
+        text-decoration-thickness: 1px;
+      }
+      b {
+        font-weight: 600;
+      }
+      code {
+        font-family: var(--mono);
+        font-size: 0.88em;
+      }
+      .g {
+        color: var(--muted);
+      }
+      h2 {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin: 0 0 30px;
+        font-size: 22px;
+        font-weight: 500;
+        letter-spacing: -0.025em;
+      }
+      /* the rule after a heading is an even wave, tiled across, in the rule colour */
+      h2::after {
+        content: "";
+        flex: 1;
+        height: 14px;
+        background: var(--rule);
+        -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='14'%3E%3Cpath d='M0%207Q8%202%2016%207T32%207' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+          repeat-x left center / 32px 14px;
+        mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='32' height='14'%3E%3Cpath d='M0%207Q8%202%2016%207T32%207' fill='none' stroke='black' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E")
+          repeat-x left center / 32px 14px;
+      }
+      ul {
+        margin: -14px 0 22px;
+        padding-left: 44px;
+      }
+      h3 {
+        margin: 56px 0 22px;
+        font-size: 22px;
+        font-weight: 500;
+        letter-spacing: -0.025em;
+      }
+      li::marker {
+        font-size: 0.8em;
+      }
+      .tldr ul {
+        margin: 0;
+        padding-left: 44px;
+        display: grid;
+        gap: 14px;
+      }
+      .tldr + section {
+        margin-top: 88px;
+      }
+      .mark {
+        position: relative;
+        display: block;
+        width: 220px;
+        max-width: 60%;
+        aspect-ratio: 1;
+        margin: 96px auto 110px;
+      }
+      .mark svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        transition: opacity 0.3s ease;
+      }
+      .mark .live-mark {
+        opacity: 0;
+      }
+      .mark.live svg {
+        opacity: 0;
+      }
+      .mark.live .live-mark {
+        opacity: 1;
+      }
+
+      .hero-bird-stage {
+        margin: 16px auto 48px;
+        width: 100%;
+        max-width: 520px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        background: transparent;
+        user-select: none;
+        -webkit-user-select: none;
+        pointer-events: none;
+      }
+      .hero-bird-stage canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        background: transparent;
+      }
+
+      .the-end {
+        font-family: "Cedarville Cursive", cursive;
+        font-size: 60px;
+        color: var(--muted);
+        text-align: center;
+        margin: 160px 0 12px;
+        letter-spacing: 0.03em;
+        user-select: none;
+      }
+      .the-end-author {
+        font-family: "Cedarville Cursive", cursive;
+        font-size: 36px;
+        color: var(--muted);
+        text-align: center;
+        margin: 0 0 140px;
+        letter-spacing: 0.02em;
+        user-select: none;
+      }
+      .mobile-socials {
+        display: none;
+      }
+      .copy-feedback {
+        position: absolute;
+        bottom: calc(100% + 8px);
+        left: 50%;
+        transform: translateX(-50%) translateY(4px);
+        font-family: var(--sans);
+        font-size: 11px;
+        font-weight: 500;
+        padding: 3px 8px;
+        border-radius: 5px;
+        background: var(--fg);
+        color: var(--bg);
+        opacity: 0;
+        pointer-events: none;
+        transition:
+          opacity 0.2s ease,
+          transform 0.2s ease;
+        white-space: nowrap;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      }
+      .copy-email-btn.copied .copy-feedback {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+
+      /* ---------- the sketches: drawn on the page's own background ---------- */
+      .sketch {
+        margin: 40px 0 64px;
+      }
+      .sketch svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      #p-layout,
+      #p-layout * {
+        cursor: none !important;
+      }
+      #p-layout {
+        position: relative;
+        touch-action: none;
+        user-select: none;
+        overflow: hidden;
+      }
+      #p-layout-cursor {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 32px;
+        height: 32px;
+        border-radius: 50%;
+        border: 1.5px solid var(--fg);
+        background: transparent;
+        box-shadow: none;
+        pointer-events: none;
+        opacity: 0;
+        transform: translate(-50%, -50%) scale(0.4);
+        transition:
+          opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+          transform 0.2s cubic-bezier(0.16, 1, 0.3, 1),
+          border-color 0.15s ease;
+        z-index: 10;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #p-layout-cursor::after {
+        content: "";
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--fg);
+        box-shadow: none;
+        transition: transform 0.15s ease;
+      }
+      #p-layout.in-hover #p-layout-cursor {
+        opacity: 0.75;
+        transform: translate(-50%, -50%) scale(1);
+      }
+      #p-layout.grabbing #p-layout-cursor {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(0.8);
+        border-color: var(--fg);
+        background: transparent;
+        box-shadow: none;
+      }
+      #p-layout.grabbing #p-layout-cursor::after {
+        transform: scale(1.4);
+      }
+
+      /* Fig. 6: two flows behind the arrows; lists, chips, turns and cards appear in place, and carets blink */
+      .flip .flow {
+        display: none;
+      }
+      .flip .flow.on {
+        display: block;
+      }
+      .flow svg {
+        display: block;
+        width: 100%;
+        height: auto;
+      }
+      .flow #m6-hint,
+      .flow #f6-hint {
+        transition: opacity 0.15s ease;
+      }
+      .flow .pop {
+        opacity: 0;
+        transform: scale(0.96);
+        transform-box: fill-box;
+        transform-origin: center;
+        transition:
+          opacity 0.28s ease,
+          transform 0.32s cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      .flow .pop.on {
+        opacity: 1;
+        transform: none;
+      }
+      .flow .blink {
+        animation: f6-blink 1.05s steps(1) infinite;
+      }
+      /* the checked row's background glides like the app's spring; the composer slides down after sending */
+      .flow .glide {
+        transition: transform 0.42s cubic-bezier(0.3, 1.35, 0.5, 1);
+      }
+      .flow .m6-row text {
+        transition: fill 0.08s ease;
+      }
+      .flow .slide {
+        transition: transform 0.5s cubic-bezier(0.2, 0.8, 0.2, 1);
+      }
+      @keyframes f6-blink {
+        50% {
+          opacity: 0;
+        }
+      }
+      /* the particle field: the figure keeps its place; the particles are drawn on a layer over the window */
+      #p-evolve {
+        margin: 8px 0 24px;
+      }
+      #p-evolve .ev-space {
+        width: 100%;
+        aspect-ratio: 1200 / 640;
+      }
+      .ev-layer {
+        position: fixed;
+        inset: 0;
+        width: 100vw;
+        height: 100vh;
+        pointer-events: none;
+        z-index: 5;
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .flow .pop,
+        .flow .glide,
+        .flow .slide {
+          transition: none;
+        }
+        .flow .blink {
+          animation: none;
+        }
+      }
+
+      /* Fig. 3: drawn to the two reference frames */
+      .flip {
+        margin: 40px 0 64px;
+      }
+      .flip-stage {
+        position: relative;
+      }
+      .flip svg.frame {
+        display: none;
+        width: 100%;
+        height: auto;
+      }
+      .flip svg.frame.on {
+        display: block;
+      }
+      .flip .pager {
+        position: absolute;
+        left: 50%;
+        bottom: 3.5%;
+        transform: translateX(-50%);
+        display: flex;
+        gap: 4px;
+        padding: 3px;
+        border-radius: 999px;
+        background: var(--ref-pager);
+      }
+      .flip .pager button {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        border: 0;
+        cursor: pointer;
+        display: grid;
+        place-items: center;
+        background: var(--ref-pager-btn);
+        color: var(--sub);
+      }
+      .flip .pager button:hover {
+        color: var(--ink);
+      }
+      .flip .pager button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      figcaption.quote {
+        margin: 4px auto 0;
+        max-width: 520px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 17px;
+        line-height: 1.6;
+      }
+
+      @media (max-width: 900px) {
+        .the-end {
+          margin: 110px 0 10px;
+          font-size: 48px;
+        }
+        .the-end-author {
+          margin: 0 0 16px;
+          font-size: 30px;
+        }
+        .mobile-socials {
+          font-family: "Cedarville Cursive", cursive;
+          display: flex;
+          justify-content: center;
+          align-items: center;
+          gap: 14px;
+          font-size: 26px;
+          color: var(--faint-text);
+          user-select: none;
+          margin: 0 0 96px;
+        }
+        .mobile-socials a,
+        .mobile-socials button {
+          font: inherit;
+          color: var(--faint-text);
+          text-decoration: none;
+          background: none;
+          border: none;
+          padding: 0;
+          margin: 0;
+          cursor: pointer;
+          transition: color 0.15s ease;
+          position: relative;
+          display: inline-flex;
+          align-items: center;
+        }
+        .mobile-socials a:hover,
+        .mobile-socials button:hover {
+          color: var(--fg);
+        }
+        .mobile-socials .toc-sep {
+          font-family: var(--sans);
+          font-size: 15px;
+          opacity: 0.35;
+        }
+        body {
+          font-size: 18px;
+        }
+        .page {
+          grid-template-columns: minmax(0, 1fr);
+          padding-block: 32px 96px;
+        }
+        header.top {
+          grid-column: 1;
+          margin-bottom: 32px;
+        }
+        header.top h1 {
+          font-size: 24px;
+        }
+        header.top .date {
+          font-size: 20px;
+        }
+        nav.toc {
+          display: none;
+        }
+        main {
+          grid-column: 1;
+        }
+        h2,
+        h3 {
+          font-size: 19px;
+        }
+        ul,
+        .tldr ul {
+          padding-left: 28px;
+        }
+        .tldr + section {
+          margin-top: 56px;
+        }
+        figcaption.quote {
+          font-size: 15px;
+        }
+        section + section {
+          margin-top: 80px;
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
+      }
+    </style>
+
+    <div class="page">
+      <header class="top">
+        <div>
+          <h1>What is what</h1>
+          <div class="date">4 Nov ’26</div>
+        </div>
+      </header>
+
+      <nav class="toc" aria-label="Contents">
+        <div class="toc-sticky">
+          <ol>
+            <li><a href="#introduction">Introduction</a></li>
+            <li><a href="#assumptions">Assumptions</a></li>
+            <li><a href="#interface">Interface</a></li>
+            <li><a href="#future">Future</a></li>
+          </ol>
+          <div class="toc-author">
+            <div class="toc-author-links">
+              <a href="https://x.com/pasupuleti73628" target="_blank" rel="noopener noreferrer"
+                >x</a
+              >
+              <span class="toc-sep" aria-hidden="true">/</span>
+              <button type="button" class="copy-email-btn" title="Click to copy email">
+                mail
+                <span class="copy-feedback" aria-live="polite">Copied!</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </nav>
+
+      <main>
+        <section class="tldr" aria-label="TL;DR">
+          <h2>TL;DR</h2>
+          <ul>
+            <li>
+              <a class="u" href="pipper://" title="Open Pipper">Pipper</a> is an interface to
+              control your agents. It’s not a harness: you bring your own subscriptions from
+              providers like Claude Code, Codex, Cursor, and more.
+            </li>
+            <li>
+              This article explains the thinking behind it: the assumptions Pipper was built on, how
+              its adaptive interface splits into an orchestration layer and a workspace management
+              layer, how the interface itself is laid out, and where I think these tools are
+              heading.
+            </li>
+          </ul>
+        </section>
+
+        <section id="introduction">
+          <figure class="hero-bird-stage" aria-label="Looping bird animation">
+            <video
+              autoplay
+              loop
+              muted
+              playsinline
+              disablepictureinpicture
+              disableremoteplayback
+              tabindex="-1"
+              oncontextmenu="return false;"
+              style="width: 100%; display: block; pointer-events: none; background: transparent"
+            >
+              <source src="media/bird.mov" type="video/quicktime" />
+              <source src="media/bird.mov" type='video/mp4; codecs="hvc1"' />
+              <source src="media/bird.webm" type="video/webm" />
+              <source src="media/video.mp4" type="video/mp4" />
+            </video>
+          </figure>
+        </section>
+
+        <section id="assumptions">
+          <h2>Assumptions</h2>
+          <p>Pipper was built around a few core assumptions to improve the developer experience:</p>
+          <ul>
+            <li>Tab bars and sidebars</li>
+            <li>A tagging system to invoke a model</li>
+            <li>By default, all agents run in YOLO mode</li>
+            <li>The interface must adapt to your work</li>
+          </ul>
+
+          <h2 style="margin-top: 96px">Adaptive Interface</h2>
+          <p>
+            We need to rewire our thinking when using these interfaces. They’re completely different
+            from the chat interfaces of 2024–2025.
+          </p>
+
+          <div
+            class="mark"
+            id="brand-mark"
+            role="img"
+            aria-label="Pipper’s brand shapes changing one into the next: a pentagon, three pills, a clover and a flower"
+          >
+            <svg viewBox="0 0 240 240" aria-hidden="true">
+              <g transform="rotate(-32 120 120)">
+                <rect
+                  x="34"
+                  y="34"
+                  width="172"
+                  height="172"
+                  rx="30"
+                  style="fill: var(--faint-text)"
+                />
+                <g style="fill: var(--rule)">
+                  <circle cx="120" cy="90" r="27" />
+                  <circle cx="90" cy="120" r="27" />
+                  <circle cx="150" cy="120" r="27" />
+                  <circle cx="120" cy="150" r="27" />
+                </g>
+              </g>
+            </svg>
+          </div>
+
+          <p>
+            We need to reimagine the interface itself: instead of requiring you to adjust to the
+            tool, the tool must adapt to your workflow. In Pipper, the interface molds to your
+            workspace and guides you to the next best action. It is divided into two parts:
+          </p>
+          <ul>
+            <li>Orchestration layer</li>
+            <li>Workspace management</li>
+          </ul>
+
+          <p>
+            Orchestration in Pipper is different from what you’ve seen in other harnesses. We don’t
+            give models tools like <code>read_file</code> or <code>edit_file</code>; the models
+            running in Pipper get those from their own harnesses.
+          </p>
+          <p>
+            Pipper exposes every action a user can take as a tool via MCP, such as creating threads,
+            sub-threads, and workspaces. It also exposes connectors: the agent harnesses
+            <span class="g">(Claude Code, Codex, Cursor)</span> and external tools
+            <span class="g">(GitHub, Slack, Linear)</span> you’ve connected to Pipper.
+          </p>
+          <p>So whenever you’re stuck, just ask your agent. It knows more than you’d expect.</p>
+
+          <p style="margin-top: 56px">
+            Based on the current state of your workspace, interface elements shift color and present
+            the next relevant action.
+          </p>
+          <figure class="flip" id="p-git">
+            <div class="flip-stage">
+              <svg
+                class="frame on"
+                viewBox="0 0 2000 1346"
+                role="img"
+                aria-label="Pipper window whose project tile and panel head turn green with the workspace’s git state, with the next git action as a button in the panel"
+              >
+                <defs>
+                  <linearGradient id="gg-pan" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" style="stop-color: var(--ref-green)" />
+                    <stop offset=".5" style="stop-color: var(--ref-green); stop-opacity: 0.5" />
+                    <stop offset="1" style="stop-color: var(--ref-green); stop-opacity: 0" />
+                  </linearGradient>
+                  <linearGradient id="gg-tile" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" style="stop-color: var(--ref-green)" />
+                    <stop offset=".55" style="stop-color: var(--ref-green); stop-opacity: 0.5" />
+                    <stop offset="1" style="stop-color: var(--ref-green); stop-opacity: 0.05" />
+                  </linearGradient>
+                  <clipPath id="gg-win">
+                    <rect x="223.5" y="160.5" width="1553" height="1025" rx="32" />
+                  </clipPath>
+                </defs>
+                <rect
+                  x="223.5"
+                  y="160.5"
+                  width="1553"
+                  height="1025"
+                  rx="32"
+                  style="fill: var(--paper)"
+                />
+                <rect
+                  x="1453"
+                  y="160.5"
+                  width="324"
+                  height="200"
+                  clip-path="url(#gg-win)"
+                  fill="url(#gg-pan)"
+                />
+                <rect
+                  x="263"
+                  y="214"
+                  width="82"
+                  height="82"
+                  rx="18"
+                  fill="url(#gg-tile)"
+                  style="stroke: var(--ref-tile-green); stroke-width: 2"
+                />
+                <rect
+                  x="561.5"
+                  y="203.5"
+                  width="750"
+                  height="69"
+                  rx="34.5"
+                  style="fill: none; stroke: var(--ref-pill); stroke-width: 2.5"
+                />
+                <rect
+                  x="569.5"
+                  y="212"
+                  width="193"
+                  height="52"
+                  rx="26"
+                  style="fill: none; stroke: var(--ref-pill-in); stroke-width: 2"
+                />
+                <path
+                  d="M1643 184H1708V220H1643A18 18 0 0 1 1643 184Z"
+                  style="fill: var(--ref-btn-green)"
+                />
+                <path
+                  d="M1711 184H1732A18 18 0 0 1 1732 220H1711Z"
+                  style="fill: var(--ref-btn-green)"
+                />
+                <path
+                  d="M1709.5 186V218"
+                  style="stroke: var(--ref-btn-div-green); stroke-width: 2"
+                />
+                <rect
+                  x="223.5"
+                  y="160.5"
+                  width="1553"
+                  height="1025"
+                  rx="32"
+                  style="fill: none; stroke: var(--ref-line); stroke-width: 3"
+                />
+                <path
+                  d="M378 160.5V1185.5M1453.5 160.5V1185.5"
+                  style="stroke: var(--ref-div); stroke-width: 3"
+                />
+              </svg>
+              <svg
+                class="frame"
+                viewBox="0 0 2000 1346"
+                role="img"
+                aria-label="Pipper window at rest in grey, with a card in the thread offering the next actions as choices A and B"
+              >
+                <defs>
+                  <linearGradient id="gr-pan" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" style="stop-color: var(--ref-grey)" />
+                    <stop offset=".5" style="stop-color: var(--ref-grey); stop-opacity: 0.5" />
+                    <stop offset="1" style="stop-color: var(--ref-grey); stop-opacity: 0" />
+                  </linearGradient>
+                  <linearGradient id="gr-tile" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" style="stop-color: var(--ref-grey)" />
+                    <stop offset=".55" style="stop-color: var(--ref-grey); stop-opacity: 0.5" />
+                    <stop offset="1" style="stop-color: var(--ref-grey); stop-opacity: 0.05" />
+                  </linearGradient>
+                  <clipPath id="gr-win">
+                    <rect x="223.5" y="160.5" width="1553" height="1025" rx="32" />
+                  </clipPath>
+                </defs>
+                <rect
+                  x="223.5"
+                  y="160.5"
+                  width="1553"
+                  height="1025"
+                  rx="32"
+                  style="fill: var(--paper)"
+                />
+                <rect
+                  x="1453"
+                  y="160.5"
+                  width="324"
+                  height="200"
+                  clip-path="url(#gr-win)"
+                  fill="url(#gr-pan)"
+                />
+                <rect
+                  x="263"
+                  y="214"
+                  width="82"
+                  height="82"
+                  rx="18"
+                  fill="url(#gr-tile)"
+                  style="stroke: var(--ref-tile-grey); stroke-width: 2"
+                />
+                <rect
+                  x="561.5"
+                  y="203.5"
+                  width="750"
+                  height="69"
+                  rx="34.5"
+                  style="fill: none; stroke: var(--ref-pill); stroke-width: 2.5"
+                />
+                <rect
+                  x="569.5"
+                  y="212"
+                  width="193"
+                  height="52"
+                  rx="26"
+                  style="fill: none; stroke: var(--ref-pill-in); stroke-width: 2"
+                />
+                <path
+                  d="M1643 184H1708V220H1643A18 18 0 0 1 1643 184Z"
+                  style="fill: var(--paper)"
+                />
+                <path d="M1711 184H1732A18 18 0 0 1 1732 220H1711Z" style="fill: var(--paper)" />
+                <path
+                  d="M1709.5 186V218"
+                  style="stroke: var(--ref-btn-div-grey); stroke-width: 2"
+                />
+                <rect
+                  x="717"
+                  y="733.5"
+                  width="439"
+                  height="270"
+                  rx="20"
+                  style="fill: none; stroke: var(--ref-card); stroke-width: 2"
+                />
+                <rect
+                  x="738"
+                  y="906"
+                  width="36"
+                  height="36"
+                  rx="6"
+                  style="fill: none; stroke: var(--ref-key); stroke-width: 2"
+                />
+                <text
+                  x="756"
+                  y="934"
+                  text-anchor="middle"
+                  style="fill: var(--ref-key); font: 400 27px var(--sans)"
+                >
+                  A
+                </text>
+                <rect
+                  x="781"
+                  y="909"
+                  width="354"
+                  height="30"
+                  rx="15"
+                  style="fill: none; stroke: var(--ref-key); stroke-width: 2"
+                />
+                <rect
+                  x="738"
+                  y="950"
+                  width="36"
+                  height="36"
+                  rx="6"
+                  style="fill: none; stroke: var(--ref-key); stroke-width: 2"
+                />
+                <text
+                  x="756"
+                  y="978"
+                  text-anchor="middle"
+                  style="fill: var(--ref-key); font: 400 27px var(--sans)"
+                >
+                  B
+                </text>
+                <rect
+                  x="781"
+                  y="950"
+                  width="354"
+                  height="30"
+                  rx="15"
+                  style="fill: none; stroke: var(--ref-key); stroke-width: 2"
+                />
+                <rect
+                  x="223.5"
+                  y="160.5"
+                  width="1553"
+                  height="1025"
+                  rx="32"
+                  style="fill: none; stroke: var(--ref-line); stroke-width: 3"
+                />
+                <path
+                  d="M378 160.5V1185.5M1453.5 160.5V1185.5"
+                  style="stroke: var(--ref-div); stroke-width: 3"
+                />
+              </svg>
+              <div class="pager">
+                <button type="button" id="git-prev" aria-label="Previous">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                  >
+                    <path d="M13 8H3M7 4 3 8l4 4" />
+                  </svg>
+                </button>
+                <button type="button" id="git-next" aria-label="Next">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                  >
+                    <path d="M3 8h10M9 4l4 4-4 4" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+            <figcaption class="quote" id="git-quote" aria-live="polite"></figcaption>
+          </figure>
+        </section>
+
+        <section id="interface">
+          <h2>Interface</h2>
+          <p>
+            The interface plays a big role in your productivity and the number of PRs you ship. Just
+            switching from Claude Code or Codex to Conductor can help you ship more PRs.
+          </p>
+          <p>
+            Conductor is designed to be worktree-first, encouraging you to spin up isolated
+            worktrees to run agents in parallel, whereas tools like Claude Code and Codex nudge you
+            toward creating more threads.
+          </p>
+          <p style="margin-top: 40px">
+            Pipper’s adaptive interface is a hybrid that sits between the two.
+          </p>
+
+          <p>
+            Tab bar vs. sidebar: personally, I’m a tab bar advocate, but Pipper uses both, pairing
+            two sidebars with a primary tab bar. The left sidebar holds only projects, while the tab
+            bar houses threads, terminals, and previews. The right sidebar is a quick-glance panel
+            showing the agent’s to-do list, CI checks, file tree, sub-threads, and workspace
+            details.
+          </p>
+          <figure class="sketch" id="p-layout"></figure>
+
+          <p>
+            The agent interface in Pipper is like a free canvas where you can tag
+            <span class="g">@model</span> inline to switch models and
+            <span class="g">@terminal</span> to run commands.
+          </p>
+          <figure class="flip" id="p-canvas">
+            <div class="flip-stage">
+              <div class="flow on" id="p-model"></div>
+              <div class="flow" id="p-term"></div>
+              <div class="pager">
+                <button type="button" id="canvas-prev" aria-label="Previous">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                  >
+                    <path d="M13 8H3M7 4 3 8l4 4" />
+                  </svg>
+                </button>
+                <button type="button" id="canvas-next" aria-label="Next">
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.3"
+                  >
+                    <path d="M3 8h10M9 4l4 4-4 4" />
+                  </svg>
+                </button>
+              </div>
+            </div>
+          </figure>
+
+          <p>
+            The interface also supports inline HTML rendering, so you get interactive reports
+            instead of long walls of text.
+          </p>
+          <figure class="sketch" id="p-html"></figure>
+        </section>
+
+        <section id="future">
+          <h2>Future</h2>
+          <figure class="sketch" id="p-evolve"></figure>
+          <p>
+            Here are my two predictions for how interfaces and these developer tools will evolve:
+          </p>
+          <ul>
+            <li>
+              By March 2027, the tools we build with will bend to how each person works rather than
+              forcing everyone into the same layout. Every developer will run their own modified
+              copy, and updates will arrive as small changelogs that an agent merges cleanly into
+              their personal version.
+            </li>
+            <li>
+              Siri will be the right way to control your agents when you’re away from your screen.
+            </li>
+          </ul>
+        </section>
+        <div class="the-end">The End</div>
+        <div class="the-end-author">Harshith Pasupuleti</div>
+        <div class="mobile-socials">
+          <a href="https://x.com/pasupuleti73628" target="_blank" rel="noopener noreferrer">x</a>
+          <span class="toc-sep" aria-hidden="true">/</span>
+          <button type="button" class="copy-email-btn" title="Click to copy email">
+            mail
+            <span class="copy-feedback" aria-live="polite">Copied!</span>
+          </button>
+        </div>
+      </main>
+    </div>
+
+    <script>
+      (() => {
+        /* ============ the window, drawn to the two reference frames ============ */
+        // Every figure shares one 2000 × 1346 sheet and one vocabulary: the window outline and its two dividers, project
+        // tiles, the tab bar pill, the panel head and its split button, cards, key boxes and outlined pills for text.
+        // Green marks what is active; everything else is a grey outline on the page's own background.
+        let uid = 0;
+        const VB = "0 0 2000 1346";
+        const st = (o) =>
+          Object.entries(o)
+            .map(([k, v]) => `${k}:${v}`)
+            .join(";");
+        const line = (c, w) => st({ fill: "none", stroke: `var(--ref-${c})`, "stroke-width": w });
+        const K = { sw: 1 };
+        const pill = (x, y, w, h = 30, c = "key") =>
+          `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${h / 2}" style="${line(c, 2 * K.sw)}"/>`;
+        const card = (x, y, w, h, r = 20) =>
+          `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" style="${line("card", 2 * K.sw)}"/>`;
+        const key = (x, y, label, w = 36) =>
+          `<rect x="${x}" y="${y}" width="${w}" height="36" rx="6" style="${line("key", 2 * K.sw)}"/>` +
+          `<text x="${x + w / 2}" y="${y + 28}" text-anchor="middle" style="fill:var(--ref-key);font:400 27px var(--sans)">${label}</text>`;
+        const row = (x, y, label, w) => key(x, y, label) + pill(x + 43, y + 3, w);
+        const ring = (cx, cy, r = 14) =>
+          `<circle cx="${cx}" cy="${cy}" r="${r}" style="${line("key", 2 * K.sw)}"/>`;
+        // a shape filled with the green (or grey) fade, as the reference's tile and panel head
+        const fade = (id, colour, a = [1, 0.5, 0.05]) =>
+          `<linearGradient id="${id}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" style="stop-color:${colour};stop-opacity:${a[0]}"/><stop offset=".55" style="stop-color:${colour};stop-opacity:${a[1]}"/><stop offset="1" style="stop-color:${colour};stop-opacity:${a[2]}"/></linearGradient>`;
+        const greenBox = (x, y, w, h, r) => {
+          const g = `f${++uid}`;
+          return `<defs>${fade(g, "var(--ref-green)")}</defs><rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${r}" fill="url(#${g})" style="stroke:var(--ref-tile-green);stroke-width:${2 * K.sw}"/>`;
+        };
+
+        // o: green (state colour on), tiles, tabs (inner tab widths), left/right divider x (null for none),
+        //    panel (head and button), content (drawn inside the window, under the outline)
+        function win(o = {}) {
+          const g = `w${++uid}`,
+            green = !!o.green,
+            hi = green ? "var(--ref-green)" : "var(--ref-grey)";
+          const L = o.left === undefined ? 378 : o.left,
+            R = o.right === undefined ? 1453.5 : o.right;
+          const sw = K.sw;
+          let s = `<defs>${fade(`${g}p`, hi, [1, 0.5, 0])}${fade(`${g}t`, hi)}<clipPath id="${g}c"><rect x="223.5" y="160.5" width="1553" height="1025" rx="32"/></clipPath></defs>`;
+          s += `<rect x="223.5" y="160.5" width="1553" height="1025" rx="32" style="fill:var(--paper)"/>`;
+          if (R !== null && o.panel !== false) {
+            s += `<rect x="${R}" y="160.5" width="${1777 - R}" height="200" clip-path="url(#${g}c)" fill="url(#${g}p)"/>`;
+            const bf = green ? "var(--ref-btn-green)" : "var(--paper)",
+              bd = green ? "var(--ref-btn-div-green)" : "var(--ref-btn-div-grey)";
+            s += `<path d="M1643 184H1708V220H1643A18 18 0 0 1 1643 184Z" style="fill:${bf}"/><path d="M1711 184H1732A18 18 0 0 1 1732 220H1711Z" style="fill:${bf}"/><path d="M1709.5 186V218" style="stroke:${bd};stroke-width:${2 * sw}"/>`;
+          }
+          for (let i = 0; i < (o.tiles ?? 1); i++) {
+            const y = 214 + i * 104;
+            s +=
+              i === 0
+                ? `<rect x="263" y="${y}" width="82" height="82" rx="18" fill="url(#${g}t)" style="stroke:var(--ref-tile-${green ? "green" : "grey"});stroke-width:${2 * sw}"/>`
+                : `<rect x="263" y="${y}" width="82" height="82" rx="18" style="${line("key", 2 * sw)}"/>`;
+          }
+          if (o.tabs !== false) {
+            s += `<rect x="561.5" y="203.5" width="750" height="69" rx="34.5" style="${line("pill", 2.5 * sw)}"/>`;
+            let x = 569.5;
+            (o.tabs || [193]).forEach((w, i) => {
+              s += `<rect x="${x}" y="212" width="${w}" height="52" rx="26" style="${line(i === 0 ? "pill-in" : "key", 2 * sw)}"/>`;
+              x += w + 8;
+            });
+          }
+          s += o.content || "";
+          s += `<rect x="223.5" y="160.5" width="1553" height="1025" rx="32" style="${line("line", 3 * sw)}"/>`;
+          const d = [L, R]
+            .filter((v) => v !== null)
+            .map((x) => `M${x} 160.5V1185.5`)
+            .join("");
+          if (d) s += `<path d="${d}" style="stroke:var(--ref-div);stroke-width:${3 * sw}"/>`;
+          return s;
+        }
+        // a thread's opening: the agent's message as two lines, then your reply on the right
+        const message = (y = 330) =>
+          pill(430, y, 560) + pill(430, y + 44, 400) + pill(1010, y + 110, 380, 52);
+        const composer = (inner = "") =>
+          card(560, 1030, 752, 110, 28) + (inner || pill(592, 1070, 300));
+        const panelRows = (n = 5, y = 420) =>
+          Array.from({ length: n }, (_, i) => pill(1490, y + i * 56, 240 - (i % 2) * 60)).join("");
+        const svg = (id, label, body, vb = VB) => {
+          document.getElementById(id).innerHTML =
+            `<svg viewBox="${vb}" role="img" aria-label="${label}">${body}</svg>`;
+        };
+
+        /* ---------- Fig. 5: two sidebars and a tab bar, pulled apart ---------- */
+        // Its own view, the family's parts: a teardown. The window stands upright and its layers are pulled towards you,
+        // each a rounded slab with a little thickness and a dashed footprint left on the frame. Sizes and radii are the
+        // reference frames' own (the 2000 × 1346 sheet scaled to a 300-wide window).
+        // Interactive 3D axis / gyroscope: tilts and orbits smoothly based on cursor movement, drag, or device orientation.
+        // On hover, a circular cursor indicator tracks the pointer, providing instant tactile feedback.
+        {
+          const R = 300 / 1553; // reference sheet → teardown units
+          const W = 300,
+            H = 1025 * R,
+            k = 1.1;
+          const rail = (378 - 223.5) * R,
+            panX = (1453.5 - 223.5) * R,
+            pan = W - panX;
+          const at = (x) => (x - 223.5) * R,
+            atY = (y) => (y - 160.5) * R;
+
+          const u_center = W / 2,
+            y_center = H / 2,
+            d_center = 95;
+
+          const renderScene = (yaw, pitch) => {
+            const cy = Math.cos(yaw),
+              sy = Math.sin(yaw);
+            const cp = Math.cos(pitch),
+              sp = Math.sin(pitch);
+
+            // 3D projection: rotates (u, y, d) around the teardown model's center
+            const P = (u, y, d) => {
+              const ur = u - u_center,
+                yr = y - y_center,
+                dr = d - d_center;
+              const u1 = ur * cy - dr * sy;
+              const d1 = ur * sy + dr * cy;
+              const y2 = yr * cp - d1 * sp;
+              const d2 = yr * sp + d1 * cp;
+              const u2 = u1;
+              const uf = u_center + u2;
+              const yf = y_center + y2;
+              const df = d_center + d2;
+              return [
+                +(46 + (uf + df) * 0.866 * k).toFixed(1),
+                +(396 - (H - yf) * k - uf * 0.5 * k + df * 0.5 * k).toFixed(1),
+              ];
+            };
+
+            const path = (pts) => `M${pts.map((p) => p.join(" ")).join("L")}Z`;
+            const rounded = (x, y, w, h, r, d) => {
+              const pts = [];
+              [
+                [x + w - r, y + r, -90],
+                [x + w - r, y + h - r, 0],
+                [x + r, y + h - r, 90],
+                [x + r, y + r, 180],
+              ].forEach(([cx, cy, a0]) => {
+                for (let i = 0; i <= 6; i++) {
+                  const a = ((a0 + i * 15) * Math.PI) / 180;
+                  pts.push(P(cx + r * Math.cos(a), cy + r * Math.sin(a), d));
+                }
+              });
+              return pts;
+            };
+
+            const hull = (pts) => {
+              const q = [...pts].sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+              const cross = (o, a, b) =>
+                (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+              const half = (list) =>
+                list.reduce((h, p) => {
+                  while (h.length > 1 && cross(h[h.length - 2], h[h.length - 1], p) <= 0) h.pop();
+                  h.push(p);
+                  return h;
+                }, []);
+              const lo = half(q),
+                up = half(q.reverse());
+              return lo.slice(0, -1).concat(up.slice(0, -1));
+            };
+
+            const line = (c, w) => `fill:none;stroke:var(--ref-${c});stroke-width:${w}`;
+            const ghost = "fill:none;stroke:var(--faint);stroke-width:1;stroke-dasharray:3 4";
+            const slab = (x, y, w, h, r, d, t = 4, extra = "") =>
+              `<path d="${path(hull(rounded(x, y, w, h, r, d).concat(rounded(x, y, w, h, r, d - t))))}" style="fill:var(--side);stroke:var(--ref-line);stroke-width:1;stroke-linejoin:round"/>` +
+              `<path d="${path(rounded(x, y, w, h, r, d))}" style="fill:var(--paper);stroke:var(--ref-line);stroke-width:1;stroke-linejoin:round"/>` +
+              extra;
+            const footprint = (x, y, w, h, r) =>
+              `<path d="${path(rounded(x, y, w, h, r, 0))}" style="${ghost}"/>`;
+            const riser = (u, y, d, from = 0) =>
+              `<path d="M${P(u, y, from).join(" ")}L${P(u, y, d - 4).join(" ")}" style="${ghost}"/>`;
+
+            const fadeOn = (id, pts, u, y0, y1, d) => {
+              const [x1, y1s] = P(u, y0, d),
+                [x2, y2s] = P(u, y1, d);
+              return (
+                `<defs><linearGradient id="${id}" gradientUnits="userSpaceOnUse" x1="${x1}" y1="${y1s}" x2="${x2}" y2="${y2s}"><stop offset="0" style="stop-color:var(--ref-green)"/><stop offset=".5" style="stop-color:var(--ref-green);stop-opacity:.5"/><stop offset="1" style="stop-color:var(--ref-green);stop-opacity:0"/></linearGradient></defs>` +
+                `<path d="${path(pts)}" fill="url(#${id})"/>`
+              );
+            };
+
+            const RW = 32 * R,
+              D = { rail: 70, tabs: 125, panel: 190 };
+            const tab = { x: at(561.5), y: atY(203.5), w: 750 * R, h: 69 * R };
+            let c = "";
+            c += slab(0, 0, W, H, RW, 0, 7);
+            c +=
+              footprint(0, 0, rail, H, RW) +
+              footprint(tab.x, tab.y, tab.w, tab.h, tab.h / 2) +
+              footprint(panX, 0, pan, H, RW);
+            c += riser(0, RW, D.rail) + riser(0, H - RW, D.rail) + riser(rail, 0, D.rail);
+            const tile = rounded(at(263), atY(214), 82 * R, 82 * R, 18 * R, D.rail);
+            c += slab(
+              0,
+              0,
+              rail,
+              H,
+              RW,
+              D.rail,
+              4,
+              fadeOn("t5-tile-green", tile, at(304), atY(214), atY(296), D.rail) +
+                `<path d="${path(tile)}" style="${line("tile-green", 1)}"/>`,
+            );
+            c +=
+              riser(tab.x + tab.h / 2, tab.y, D.tabs) +
+              riser(tab.x + tab.w - tab.h / 2, tab.y, D.tabs);
+            c += slab(
+              tab.x,
+              tab.y,
+              tab.w,
+              tab.h,
+              tab.h / 2,
+              D.tabs,
+              3,
+              `<path d="${path(rounded(at(569.5), atY(212), 193 * R, 52 * R, 26 * R, D.tabs))}" style="${line("pill-in", 1)}"/>`,
+            );
+            c += riser(panX, 0, D.panel) + riser(panX, H - RW, D.panel) + riser(W - RW, 0, D.panel);
+            const btn = (x0, w) =>
+              `<path d="${path(rounded(at(x0), atY(184), w * R, 36 * R, 18 * R, D.panel))}" style="fill:var(--ref-btn-green)"/>`;
+            c += slab(
+              panX,
+              0,
+              pan,
+              H,
+              RW,
+              D.panel,
+              4,
+              fadeOn(
+                "t5-pan-green",
+                rounded(panX, 0, pan, H, RW, D.panel),
+                panX + pan / 2,
+                0,
+                200 * R,
+                D.panel,
+              ) +
+                btn(1625, 83) +
+                btn(1711, 39),
+            );
+            return c;
+          };
+
+          const fig = document.getElementById("p-layout");
+          svg(
+            "p-layout",
+            "Teardown of the window: the left sidebar with its green project tile, the tab bar pill and the right sidebar with its green head pulled forward off the rounded window frame, each leaving a dashed footprint",
+            renderScene(0, 0),
+            "0 0 640 500",
+          );
+
+          const el = fig.querySelector("svg");
+          const bb = el.getBBox();
+          const baseVb = `${(bb.x + bb.width / 2 - 320).toFixed(1)} ${(bb.y + bb.height / 2 - 250).toFixed(1)} 640 500`;
+          el.setAttribute("viewBox", baseVb);
+
+          let cursorEl = document.getElementById("p-layout-cursor");
+          if (!cursorEl) {
+            cursorEl = document.createElement("div");
+            cursorEl.id = "p-layout-cursor";
+            cursorEl.setAttribute("aria-hidden", "true");
+            fig.appendChild(cursorEl);
+          }
+
+          const updateCursorPos = (e) => {
+            const rect = fig.getBoundingClientRect();
+            cursorEl.style.left = `${e.clientX - rect.left}px`;
+            cursorEl.style.top = `${e.clientY - rect.top}px`;
+          };
+
+          let currentYaw = 0,
+            currentPitch = 0,
+            targetYaw = 0,
+            targetPitch = 0,
+            dragYaw = 0,
+            dragPitch = 0;
+          let isDragging = false,
+            pointerDownX = 0,
+            pointerDownY = 0,
+            baseDragYaw = 0,
+            baseDragPitch = 0;
+          let isHovering = false,
+            animId = null;
+
+          const still = matchMedia("(prefers-reduced-motion: reduce)");
+
+          const tick = () => {
+            animId = null;
+            if (still.matches) return;
+
+            const destYaw = targetYaw + dragYaw;
+            const destPitch = targetPitch + dragPitch;
+
+            const dY = destYaw - currentYaw;
+            const dP = destPitch - currentPitch;
+
+            if (Math.abs(dY) > 0.0003 || Math.abs(dP) > 0.0003) {
+              currentYaw += dY * 0.12;
+              currentPitch += dP * 0.12;
+              el.innerHTML = renderScene(currentYaw, currentPitch);
+              animId = requestAnimationFrame(tick);
+            } else {
+              currentYaw = destYaw;
+              currentPitch = destPitch;
+              el.innerHTML = renderScene(currentYaw, currentPitch);
+            }
+          };
+
+          const wake = () => {
+            if (!animId && !still.matches) {
+              animId = requestAnimationFrame(tick);
+            }
+          };
+
+          fig.addEventListener("pointerenter", (e) => {
+            if (e.pointerType !== "touch") {
+              isHovering = true;
+              fig.classList.add("in-hover");
+              updateCursorPos(e);
+            }
+          });
+
+          const onPointerMove = (e) => {
+            if (isHovering && e.pointerType !== "touch") {
+              updateCursorPos(e);
+            }
+
+            if (isDragging) {
+              if (e.pointerType !== "touch") updateCursorPos(e);
+              const dx = e.clientX - pointerDownX;
+              const dy = e.clientY - pointerDownY;
+              dragYaw = baseDragYaw + dx / 180;
+              dragPitch = baseDragPitch - dy / 180;
+              dragYaw = Math.max(-0.85, Math.min(0.85, dragYaw));
+              dragPitch = Math.max(-0.55, Math.min(0.55, dragPitch));
+              wake();
+              return;
+            }
+
+            if (isHovering) {
+              const rect = fig.getBoundingClientRect();
+              const nx = (e.clientX - (rect.left + rect.width / 2)) / (rect.width / 2);
+              const ny = (e.clientY - (rect.top + rect.height / 2)) / (rect.height / 2);
+              targetYaw = Math.max(-1, Math.min(1, nx)) * 0.42;
+              targetPitch = -Math.max(-1, Math.min(1, ny)) * 0.32;
+              wake();
+            }
+          };
+
+          window.addEventListener("pointermove", onPointerMove, { passive: true });
+
+          fig.addEventListener("pointerleave", () => {
+            isHovering = false;
+            fig.classList.remove("in-hover");
+            if (!isDragging) {
+              targetYaw = 0;
+              targetPitch = 0;
+              wake();
+            }
+          });
+
+          fig.addEventListener("pointerdown", (e) => {
+            isDragging = true;
+            pointerDownX = e.clientX;
+            pointerDownY = e.clientY;
+            baseDragYaw = dragYaw;
+            baseDragPitch = dragPitch;
+            fig.classList.add("grabbing");
+            if (e.pointerType !== "touch") {
+              fig.classList.add("in-hover");
+              updateCursorPos(e);
+            }
+            if (fig.setPointerCapture) {
+              try {
+                fig.setPointerCapture(e.pointerId);
+              } catch {}
+            }
+          });
+
+          const onPointerUp = (e) => {
+            if (isDragging) {
+              isDragging = false;
+              fig.classList.remove("grabbing");
+              if (fig.releasePointerCapture) {
+                try {
+                  fig.releasePointerCapture(e.pointerId);
+                } catch {}
+              }
+              dragYaw = 0;
+              dragPitch = 0;
+              if (!isHovering) {
+                fig.classList.remove("in-hover");
+                targetYaw = 0;
+                targetPitch = 0;
+              }
+              wake();
+            }
+          };
+
+          window.addEventListener("pointerup", onPointerUp);
+          window.addEventListener("pointercancel", onPointerUp);
+
+          window.addEventListener(
+            "deviceorientation",
+            (e) => {
+              if (e.gamma !== null && e.beta !== null) {
+                const g = Math.max(-35, Math.min(35, e.gamma)) / 35;
+                const b = Math.max(-35, Math.min(35, e.beta - 45)) / 35;
+                targetYaw = g * 0.45;
+                targetPitch = -b * 0.35;
+                wake();
+              }
+            },
+            { passive: true },
+          );
+        }
+
+        /* ---------- Fig. 6a: switching model inline, as the composer does it ---------- */
+        // Replays the live composer (agent-panel.tsx, thread-composer.tsx, mention-popover.tsx). The composer is a turn of
+        // the conversation: the round @ mark, then plain text with no box, at the top of a new thread. Typing @ opens the
+        // model list just below it: the models as radio rows, the checked one on a background that glides
+        // on a spring as ↓ moves it. Enter turns the pick into a chip at the front of the composer; the message is typed
+        // after it; Enter sends: the message becomes a turn, the agent answers below it, the composer follows the
+        // conversation down, and "Model switched" shows. Then it loops.
+        {
+          const MODELS = [
+            ["Claude", "Anthropic"],
+            ["Codex", "OpenAI"],
+            ["Cursor", "Cursor"],
+          ];
+          const PICK = 1,
+            MESSAGE = "review the diff before merging";
+          const HINT = "Type here: @model to switch, or @ for files";
+          const X = 600,
+            Y = 340,
+            PX = 640,
+            PY = 392,
+            PW = 540,
+            ROW = 72;
+          const t = (x, y, s, font, fill, extra = "") =>
+            `<text x="${x}" y="${y}" style="fill:${fill};font:${font} var(--sans)"${extra}>${s}</text>`;
+          // the round @ mark that starts a user turn (the composer's own marker)
+          const userMark = (cx, cy) =>
+            `<circle cx="${cx}" cy="${cy}" r="24" style="fill:var(--line);stroke:var(--ref-pill-in);stroke-width:1.6"/>` +
+            t(cx, cy + 8, "@", "500 26px", "var(--sub)", ' text-anchor="middle"');
+          // the agent's mark: the flower glyph in a ring
+          const agentMark = (cx, cy) =>
+            `<circle cx="${cx}" cy="${cy}" r="24" style="fill:none;stroke:var(--ref-pill-in);stroke-width:1.6"/>` +
+            `<path transform="translate(${cx - 13} ${cy - 13}) scale(${26 / 147})" d="M54.4823 9.7498C63.6334 -3.25253 82.9076 -3.25253 92.0587 9.7498C96.6426 16.2628 104.273 19.9373 112.223 19.4603C128.094 18.5081 140.111 33.5772 135.651 48.8387C133.417 56.4834 135.302 64.7397 140.631 70.658C151.271 82.473 146.982 101.264 132.27 107.292C124.9 110.312 119.62 116.933 118.316 124.79C115.712 140.475 98.3471 148.838 84.4607 141.094C77.5049 137.215 69.0362 137.215 62.0803 141.094C48.1939 148.838 30.8285 140.475 28.2252 124.79C26.9211 116.933 21.6409 110.312 14.2712 107.292C-0.441472 101.264 -4.73037 82.473 5.90965 70.658C11.2394 64.7397 13.1238 56.4834 10.8898 48.8387C6.42976 33.5772 18.447 18.5081 34.3182 19.4603C42.2684 19.9373 49.8984 16.2628 54.4823 9.7498Z" style="fill:var(--sub)"/>`;
+          let c = "";
+          // what the conversation gains after sending: your turn, then the agent's
+          c += `<g id="m6-sent" class="pop">${userMark(X, Y)}${t(X + 50, Y + 8, MESSAGE, "400 22px", "var(--fg)")}</g>`;
+          c += `<g id="m6-reply" class="pop">${agentMark(X, Y + 100)}<rect x="${X + 50}" y="${Y + 82}" width="520" height="30" rx="15" style="fill:none;stroke:var(--ref-key);stroke-width:2"/><rect x="${X + 50}" y="${Y + 124}" width="380" height="30" rx="15" style="fill:none;stroke:var(--ref-key);stroke-width:2"/></g>`;
+          // the composer: a turn of its own, no box
+          c +=
+            `<g id="m6-composer" class="slide">${userMark(X, Y)}` +
+            `<g id="m6-chip" class="pop"><rect x="${X + 46}" y="${Y - 22}" width="94" height="44" rx="22" style="fill:var(--line);stroke:var(--ref-pill-in);stroke-width:2"/>` +
+            t(X + 64, Y + 7, MODELS[PICK][0], "600 19px", "var(--fg)") +
+            `</g>` +
+            t(X + 50, Y + 8, HINT, "400 22px", "var(--muted)", ' id="m6-hint"') +
+            `<text id="m6-typed" x="${X + 50}" y="${Y + 8}" style="fill:var(--fg);font:400 22px var(--sans)"></text>` +
+            `<rect id="m6-caret" class="blink" x="${X + 50}" y="${Y - 14}" width="2" height="26" style="fill:var(--fg)"/></g>`;
+          // the model list, opened just below the composer
+          c +=
+            `<g id="m6-pop" class="pop"><rect x="${PX}" y="${PY}" width="${PW}" height="${20 + MODELS.length * ROW}" rx="24" style="fill:var(--paper);stroke:var(--ref-card);stroke-width:1.6"/>` +
+            `<rect id="m6-hl" class="glide" x="${PX + 10}" y="${PY + 10}" width="${PW - 20}" height="${ROW - 4}" rx="16" style="fill:var(--line)"/>` +
+            MODELS.map(
+              ([name, by], i) =>
+                `<g class="m6-row">` +
+                t(PX + 30, PY + 10 + i * ROW + 31, name, "400 20px", "var(--muted)") +
+                t(
+                  PX + 30,
+                  PY + 10 + i * ROW + 54,
+                  by,
+                  "400 15px",
+                  "var(--muted)",
+                  ' opacity=".75"',
+                ) +
+                `</g>`,
+            ).join("") +
+            `</g>`;
+          c +=
+            `<g id="m6-toast" class="pop"><rect x="1380" y="1030" width="360" height="112" rx="26" style="fill:var(--paper);stroke:var(--ref-card);stroke-width:1.6"/>` +
+            t(1408, 1076, "Model switched", "500 21px", "var(--fg)") +
+            t(1408, 1112, MODELS[PICK][0], "400 18px", "var(--muted)") +
+            `</g>`;
+          svg(
+            "p-model",
+            "Switching model inline: in the composer at the top of the thread, typing @ opens a list of Claude, Codex and Cursor below it, the selection glides down to Codex, Enter turns it into a chip, and sending switches the model while the message becomes a turn and the composer moves down",
+            win({ left: null, right: null, tiles: 0, tabs: [193], content: c }),
+          );
+
+          const $ = (id) => document.getElementById(id);
+          const typedEl = $("m6-typed"),
+            caret = $("m6-caret"),
+            hint = $("m6-hint"),
+            hl = $("m6-hl");
+          const rowLabels = [...document.querySelectorAll("#p-model .m6-row text:first-child")];
+          const show = (id, on) => $(id).classList.toggle("on", on);
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          let chipped = false;
+          const textX = () => X + (chipped ? 152 : 50);
+          const setText = (s) => {
+            typedEl.textContent = s;
+            typedEl.setAttribute("x", textX());
+            hint.style.opacity = s || chipped ? 0 : 1;
+            caret.setAttribute(
+              "x",
+              (textX() + (s ? typedEl.getComputedTextLength() + 3 : 0)).toFixed(1),
+            );
+          };
+          // the checked row: its background glides there, its label turns bold and dark
+          const check = (i) => {
+            hl.style.transform = `translateY(${i * ROW}px)`;
+            rowLabels.forEach((l, k) => {
+              l.style.fill = k === i ? "var(--fg)" : "var(--muted)";
+              l.style.fontWeight = k === i ? 600 : 400;
+            });
+          };
+          const type = async (s, ms) => {
+            for (const ch of s) {
+              setText(typedEl.textContent + ch);
+              await sleep(ms);
+            }
+          };
+          const composer = $("m6-composer");
+          const reset = () => {
+            chipped = false;
+            composer.style.transform = "";
+            check(0);
+            ["m6-chip", "m6-pop", "m6-sent", "m6-reply", "m6-toast"].forEach((id) =>
+              show(id, false),
+            );
+            setText("");
+          };
+          const still = matchMedia("(prefers-reduced-motion: reduce)");
+          const rest = () => {
+            reset();
+            setText("@");
+            check(PICK);
+            show("m6-pop", true);
+          };
+          let visible = false,
+            running = false;
+          const loop = async () => {
+            if (running) return;
+            running = true;
+            while (visible && !still.matches) {
+              reset();
+              await sleep(900);
+              setText("@");
+              show("m6-pop", true);
+              await sleep(1000); // @ opens the model list
+              for (let i = 1; i <= PICK; i++) {
+                check(i);
+                await sleep(650);
+              } // ↓ glides the selection
+              await sleep(400);
+              show("m6-pop", false);
+              chipped = true;
+              setText("");
+              show("m6-chip", true); // Enter: the chip
+              await sleep(600);
+              await type(MESSAGE, 55);
+              await sleep(600);
+              // Enter: the message becomes a turn, the agent answers, the composer follows below
+              show("m6-sent", true);
+              chipped = false;
+              show("m6-chip", false);
+              setText("");
+              composer.style.transform = "translateY(240px)";
+              show("m6-toast", true);
+              await sleep(500);
+              show("m6-reply", true);
+              await sleep(2600);
+              ["m6-sent", "m6-reply", "m6-toast"].forEach((id) => show(id, false));
+              await sleep(500);
+            }
+            running = false;
+            if (still.matches) rest();
+          };
+          new IntersectionObserver(([e]) => {
+            visible = e.isIntersecting;
+            if (visible) loop();
+          }).observe($("p-model"));
+          still.addEventListener("change", () => (still.matches ? rest() : loop()));
+          if (still.matches) rest();
+          else reset();
+        }
+
+        /* ---------- Fig. 6b: opening a terminal inline, from the composer ---------- */
+        // The live composer's @ mechanism (agent-panel.tsx, thread-composer.tsx, mention-popover.tsx), opening a terminal.
+        // The composer is a turn of the conversation: the round @ mark, then plain text with no box, at the top of a new
+        // thread. Typing @terminal opens the list just below it and filters it to Terminal; Enter opens the terminal in
+        // the thread and the composer moves below it. The command is typed in the terminal itself, at its prompt; Enter
+        // there runs it and its output appears. Then it loops.
+        {
+          const ITEMS = [["Terminal", "New shell in ~/code/omni"]];
+          const QUERY = "terminal",
+            COMMAND = "bun run test",
+            PROMPT = "~/code/omni> ";
+          const HINT = "Type here: @terminal to run, or @ for files";
+          const X = 600,
+            Y = 340,
+            PX = 640,
+            PY = 392,
+            PW = 540,
+            ROW = 72;
+          const TX = X - 24,
+            TY = Y - 40,
+            TW = 576,
+            TH = 300;
+          const t = (x, y, s, font, fill, extra = "") =>
+            `<text x="${x}" y="${y}" style="fill:${fill};font:${font} var(--sans)"${extra}>${s}</text>`;
+          // the round @ mark that starts a user turn (the composer's own marker)
+          const userMark = (cx, cy) =>
+            `<circle cx="${cx}" cy="${cy}" r="24" style="fill:var(--line);stroke:var(--ref-pill-in);stroke-width:1.6"/>` +
+            t(cx, cy + 8, "@", "500 26px", "var(--sub)", ' text-anchor="middle"');
+          let c = "";
+          // the terminal, opened in the thread (drawn to the reference card), with its output after the command runs
+          c +=
+            `<g id="f6-term" class="pop"><rect x="${TX}" y="${TY}" width="${TW}" height="${TH}" rx="30" style="fill:var(--paper);stroke:var(--ref-card);stroke-width:1.6"/>` +
+            t(TX + 27, TY + 37, "Terminal", "400 21px", "var(--fg)") +
+            t(TX + TW - 32, TY + 37, "x", "400 21px", "var(--fg)", ' text-anchor="middle"') +
+            `<path d="M${TX} ${TY + 86}A30 30 0 0 1 ${TX + 30} ${TY + 56}H${TX + TW - 30}A30 30 0 0 1 ${TX + TW} ${TY + 86}" style="fill:none;stroke:var(--ref-card);stroke-width:1.6"/>` +
+            `<text id="f6-cmd" x="${TX + 23}" y="${TY + 92}" style="fill:var(--fg);font:400 15px var(--sans)"></text>` +
+            `<g id="f6-out" class="pop">` +
+            [
+              [0, 300],
+              [1, 360],
+              [2, 240],
+            ]
+              .map(
+                ([i, w]) =>
+                  `<rect x="${TX + 23}" y="${TY + 110 + i * 26}" width="${w}" height="14" rx="7" style="fill:none;stroke:var(--ref-key);stroke-width:1.6"/>`,
+              )
+              .join("") +
+            t(
+              TX + 23,
+              TY + 200,
+              PROMPT.replace(">", "&gt;"),
+              "400 15px",
+              "var(--fg)",
+              ' id="f6-prompt2"',
+            ) +
+            `</g>` +
+            `<rect id="f6-block" class="blink" x="${TX + 117}" y="${TY + 80}" width="4.5" height="14" style="fill:var(--fg)"/></g>`;
+          // the composer: a turn of its own, no box
+          c +=
+            `<g id="f6-composer" class="slide">${userMark(X, Y)}` +
+            t(X + 50, Y + 8, HINT, "400 22px", "var(--muted)", ' id="f6-hint"') +
+            `<text id="f6-typed" x="${X + 50}" y="${Y + 8}" style="fill:var(--fg);font:400 22px var(--sans)"></text>` +
+            `<rect id="f6-caret" class="blink" x="${X + 50}" y="${Y - 14}" width="2" height="26" style="fill:var(--fg)"/></g>`;
+          // the @ list, opened just below the composer
+          c +=
+            `<g id="f6-pop" class="pop"><rect id="f6-pop-card" x="${PX}" y="${PY}" width="${PW}" rx="24" style="fill:var(--paper);stroke:var(--ref-card);stroke-width:1.6"/>` +
+            `<rect id="f6-hl" x="${PX + 10}" y="${PY + 10}" width="${PW - 20}" height="${ROW - 4}" rx="16" style="fill:var(--line)"/>` +
+            ITEMS.map(
+              ([name, by]) =>
+                `<g class="f6-row" data-name="${name}">` +
+                t(PX + 30, 31, name, "400 20px", "var(--muted)") +
+                t(PX + 30, 54, by, "400 15px", "var(--muted)", ' opacity=".75"') +
+                `</g>`,
+            ).join("") +
+            `</g>`;
+          svg(
+            "p-term",
+            "Opening a terminal inline: in the composer at the top of the thread, typing @terminal filters the list to Terminal, Enter opens a terminal in the thread, and bun run test is typed and run at the terminal's own prompt",
+            win({ left: null, right: null, tiles: 0, tabs: [193], content: c }),
+          );
+
+          const $ = (id) => document.getElementById(id);
+          const typedEl = $("f6-typed"),
+            caret = $("f6-caret"),
+            hint = $("f6-hint"),
+            cmd = $("f6-cmd"),
+            block = $("f6-block");
+          const rows = [...document.querySelectorAll("#p-term .f6-row")];
+          const show = (id, on) => $(id).classList.toggle("on", on);
+          const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+          const setText = (s) => {
+            typedEl.textContent = s;
+            hint.style.opacity = s ? 0 : 1;
+            caret.setAttribute(
+              "x",
+              (X + 50 + (s ? typedEl.getComputedTextLength() + 3 : 0)).toFixed(1),
+            );
+          };
+          // the rows that match what follows the @; the first is checked
+          const filter = (query) => {
+            const shown = rows.filter((r) =>
+              r.dataset.name.toLowerCase().includes(query.toLowerCase()),
+            );
+            $("f6-pop-card").setAttribute("height", 20 + Math.max(1, shown.length) * ROW);
+            rows.forEach((r) => (r.style.display = shown.includes(r) ? "" : "none"));
+            shown.forEach((r, i) => {
+              r.setAttribute("transform", `translate(0 ${PY + 10 + i * ROW})`);
+              const label = r.firstElementChild;
+              label.style.fill = i === 0 ? "var(--fg)" : "var(--muted)";
+              label.style.fontWeight = i === 0 ? 600 : 400;
+            });
+          };
+          // the terminal's prompt line, and the block cursor after it
+          // (SVG drops the prompt's trailing space, so an empty command leaves that space before the caret)
+          const setCmd = (s) => {
+            cmd.textContent = PROMPT + s;
+            block.setAttribute(
+              "x",
+              (TX + 23 + cmd.getComputedTextLength() + (s ? 3 : 7)).toFixed(1),
+            );
+            block.setAttribute("y", TY + 80);
+          };
+          const composer = $("f6-composer");
+          const reset = () => {
+            composer.style.transform = "";
+            filter("");
+            setCmd("");
+            setText("");
+            ["f6-pop", "f6-term", "f6-out"].forEach((id) => show(id, false));
+          };
+          const still = matchMedia("(prefers-reduced-motion: reduce)");
+          const rest = () => {
+            reset();
+            composer.style.transform = `translateY(${TH}px)`;
+            show("f6-term", true);
+            setCmd(COMMAND);
+          };
+          let visible = false,
+            running = false;
+          const loop = async () => {
+            if (running) return;
+            running = true;
+            while (visible && !still.matches) {
+              reset();
+              await sleep(900);
+              setText("@");
+              filter("");
+              show("f6-pop", true);
+              await sleep(800); // @ opens the list
+              for (const ch of QUERY) {
+                setText(typedEl.textContent + ch);
+                filter(typedEl.textContent.slice(1));
+                await sleep(110);
+              }
+              await sleep(600);
+              // Enter: the terminal opens in the thread, the composer moves below it
+              show("f6-pop", false);
+              setText("");
+              composer.style.transform = `translateY(${TH}px)`;
+              await sleep(250);
+              show("f6-term", true);
+              await sleep(900);
+              for (let i = 1; i <= COMMAND.length; i++) {
+                setCmd(COMMAND.slice(0, i));
+                await sleep(90);
+              } // typed in the terminal
+              await sleep(600);
+              // Enter in the terminal: the command runs, its output appears, a fresh prompt waits
+              show("f6-out", true);
+              block.setAttribute("y", TY + 188);
+              block.setAttribute(
+                "x",
+                (TX + 23 + $("f6-prompt2").getComputedTextLength() + 7).toFixed(1),
+              ); // after "~/code/omni> "
+              await sleep(2800);
+              show("f6-term", false);
+              show("f6-out", false);
+              await sleep(500);
+            }
+            running = false;
+            if (still.matches) rest();
+          };
+          new IntersectionObserver(([e]) => {
+            visible = e.isIntersecting;
+            if (visible) loop();
+          }).observe($("p-term"));
+          still.addEventListener("change", () => (still.matches ? rest() : loop()));
+          if (still.matches) rest();
+          else reset();
+        }
+
+        /* ---------- Fig. 6: the two flows, one at a time ---------- */
+        // Only the frame on show plays: each flow watches its own frame and stops when it is hidden.
+        {
+          const flows = [...document.querySelectorAll("#p-canvas .flow")];
+          let at = 0;
+          const show = (n) => {
+            at = (n + flows.length) % flows.length;
+            flows.forEach((f, i) => f.classList.toggle("on", i === at));
+          };
+          document.getElementById("canvas-prev").onclick = () => show(at - 1);
+          document.getElementById("canvas-next").onclick = () => show(at + 1);
+        }
+
+        /* ---------- Fig. 7: an inline HTML report ---------- */
+        // Drawn to the reference: no sidebars, a line chart rendered in the thread, and a card of tags and keys
+        // that runs past its own right edge.
+        {
+          // the chart line, traced from the reference frame
+          const CURVE =
+            "M751 488.0L757 482.0L758 483L758 476L759 479L759 472L765 470L765 479L766 484L766 472L767 478L767 485L770 486L770 520L771 523L771 488L772 522.5L775 526L775 538L776 539L776 530L777 538.5L779 539L779 551L780 551L780 542L781 552.0L783 553L783 561L791 566L791 559L792 563L792 554L793 557L793 548L794 553L794 543L795 547L795 538L800 536.0L802 536L802 545L803 552L803 538L804 544L804 555L808 559L808 567L809 571L809 562L810 566L810 577L811 582L811 572L812 577L812 589L813 592L813 584L815 592L815 603L816 605L816 592L817 604.5L821 607.0L825 603.5L826 605L826 598L832 599L832 590L833 598L833 580L834 589L834 569L835 564L835 579L836 565.0L839 564L839 555L840 563L840 547L841 555L841 538L842 545L842 531L843 539L843 522L844 529L844 514L845 522L845 504L846 500L846 513L847 506L847 493L848 498L848 482L849 481L849 494L850 481.0L853 481L853 474L860 469.5L865 474.5L867 476L867 484L868 487L868 480L869 484L869 491L876 499.0L880 500L880 509L881 505L881 514L882 510L882 519L889 518L889 527L890 520L890 537L891 544L891 529L892 536L892 554L893 558L893 545L894 552L894 559L897 559.5L899 560L899 577L900 562L900 594L901 599L901 579L902 592L902 599L906 595.5L912 582.5L916 582.0L922 587.5L926 583.5L931 588.0L937 587.0L939 586L939 576L940 582L940 570L941 577L941 563L942 558L942 569L943 564L943 550L944 556L944 544L945 542L945 551L946 542.5L952 545.0L962 553.0L969 551.5L972 554L972 541L973 540L973 554L974 541.0L978 538.5L979 540L979 532L980 537L980 525L981 521L981 530L982 526L982 514L983 510L983 519L984 515L984 503L985 499L985 508L986 504L986 492L987 488L987 497L988 492L988 484L994 468.0L995 468L995 461L996 465L996 455L1002 456.0L1004 455L1004 463L1011 464L1011 472L1012 477L1012 467L1013 471L1013 484L1014 488L1014 478L1015 483L1015 490L1020 495.0L1021 494L1021 507L1022 513L1022 499L1023 505L1023 523L1024 530L1024 515L1025 522L1025 539L1026 540L1026 532L1029 540.0L1030 538L1030 553L1031 556L1031 541L1032 555.0L1038 561.5L1047 562.0L1057 589.5L1067 618.5L1074 617.5L1076 618L1076 625L1077 621L1077 630L1078 635L1078 625L1079 631L1079 640L1080 636L1080 645L1081 649L1081 641L1082 646L1082 654L1089 669.5L1094 669.5L1107 644.0L1111 638L1111 626L1112 624L1112 635L1113 631L1113 623L1121 621.0L1130 621L1130 613L1137 616";
+          let c = `<text x="687" y="380" style="fill:var(--fg);font:400 24px var(--sans)">HTML Rendering</text>`;
+          c += [494, 537, 581, 624, 672]
+            .map(
+              (y) =>
+                `<path d="M686 ${y}H1210" style="stroke:var(--ref-key);stroke-width:1.5;stroke-dasharray:5 4;opacity:.7"/>`,
+            )
+            .join("");
+          c += `<path d="M686 709.5H1210" style="stroke:var(--ref-div);stroke-width:2"/>`;
+          c += `<path id="f7-line" d="${CURVE}" style="fill:none;stroke:var(--ref-div);stroke-width:3;stroke-linejoin:round;stroke-linecap:round"/>`;
+          c += `<circle id="f7-dot" cx="1137" cy="616" r="8" style="fill:var(--ref-div)"/>`;
+          c += `<text x="752" y="732" text-anchor="middle" style="fill:var(--muted);font:400 22px var(--sans)">100</text>`;
+          c += `<text x="1145" y="732" text-anchor="middle" style="fill:var(--muted);font:400 22px var(--sans)">800</text>`;
+          // the card: @ tags and A keys, clipped where the card ends
+          const GRID = ["@AA@@A@A", "A@AAA@AA", "AA@A@AAA", "@AA@AA@A", "AA@A@AAA"];
+          const clip = `k${++uid}`;
+          c += `<defs><clipPath id="${clip}"><rect x="729" y="830.5" width="439" height="270" rx="24"/></clipPath></defs><g clip-path="url(#${clip})">`;
+          GRID.forEach((rowKeys, r) =>
+            [...rowKeys].forEach((k, i) => {
+              const x = 746 + i * 55.5,
+                y = 845 + r * 51.5;
+              c +=
+                k === "A"
+                  ? key(x, y, "A")
+                  : `<text x="${x + 18}" y="${y + 30}" text-anchor="middle" style="fill:var(--ref-key);font:400 28px var(--sans)">@</text>`;
+            }),
+          );
+          c += `</g><rect x="729" y="830.5" width="439" height="270" rx="24" style="${line("card", 2)}"/>`;
+          svg(
+            "p-html",
+            "An agent's reply rendered as HTML in the thread: a line chart titled HTML Rendering from 100 to 800, drawing itself from left to right, and a card of @ tags and A keys below it",
+            win({ left: null, right: null, tiles: 0, tabs: [193], content: c }),
+          );
+
+          // the line draws itself from left to right, the dot riding its tip; it holds, fades, and draws again
+          const lineEl = document.getElementById("f7-line"),
+            dot = document.getElementById("f7-dot");
+          const LEN = lineEl.getTotalLength(),
+            DRAW = 2400,
+            HOLD = 2600,
+            FADE = 450,
+            CYCLE = DRAW + HOLD + FADE;
+          lineEl.style.strokeDasharray = `${LEN} ${LEN}`;
+          const ease = (x) => 1 - (1 - x) ** 3;
+          const at = (p) => {
+            lineEl.style.strokeDashoffset = (LEN * (1 - p)).toFixed(1);
+            const q = lineEl.getPointAtLength(LEN * p);
+            dot.setAttribute("cx", q.x.toFixed(1));
+            dot.setAttribute("cy", q.y.toFixed(1));
+          };
+          const still = matchMedia("(prefers-reduced-motion: reduce)");
+          let visible = false,
+            frame = 0,
+            start = 0;
+          const tick = (now) => {
+            frame = 0;
+            if (still.matches) {
+              at(1);
+              lineEl.style.opacity = dot.style.opacity = 1;
+              return;
+            }
+            const e = Math.max(0, now - start) % CYCLE;
+            if (e < DRAW) {
+              at(ease(e / DRAW));
+              lineEl.style.opacity = dot.style.opacity = 1;
+            } else if (e < DRAW + HOLD) at(1);
+            else
+              lineEl.style.opacity = dot.style.opacity = (1 - (e - DRAW - HOLD) / FADE).toFixed(3);
+            if (visible) frame = requestAnimationFrame(tick);
+          };
+          new IntersectionObserver(([entry]) => {
+            visible = entry.isIntersecting;
+            if (visible && !frame) {
+              start = performance.now();
+              frame = requestAnimationFrame(tick);
+            }
+          }).observe(document.getElementById("p-html"));
+          still.addEventListener("change", () => {
+            if (!frame) frame = requestAnimationFrame(tick);
+          });
+          at(still.matches ? 1 : 0);
+        }
+
+        /* ---------- the first sketch melts into view, a moment after it is first seen ---------- */
+
+        /* ---------- the particle field that opens the Future section ---------- */
+        // A rectangle of particles, each one a question mark, edge to edge under the heading. The field
+        // fades out towards the bottom, into the paragraph below. Particles are drawn on a transparent layer over the
+        // whole window, lined up with the figure's place in the article, so the cursor can stir them out over the text;
+        // they spring back home when it stops. The field behaves like jelly stuck to the page: it has inertia, so when the
+        // scroll speeds up it sags behind, and when the scroll slows or stops it carries on and bounces back. How far it
+        // goes follows how fast the scroll was. The layer takes no clicks or touches.
+        {
+          const LW = 1200,
+            LH = 640;
+          const FIELD = { count: 1500, seed: 34, minR: 4, maxR: 11, tries: 18, edge: 12 };
+          const FADE = { top: 0.04, from: 0.58 }; // as shares of the height: a soft top, a long fade out
+          // a stiff, under-damped spring: homes are found fast, with a quick overshoot or two, like jelly
+          const STIR = { radius: 120, pull: 0.3, spring: 260, damp: 8 };
+          // gain: how much of a change in scroll speed the field feels; top: the speed (field units/s) it stops growing
+          // at; smooth: seconds over which the scroll speed is averaged, short enough that fast reversals still land;
+          // reach: past this distance from home the jelly stiffens, so a wild shake stays in bounds without a hard stop
+          const JELLY = { gain: 0.55, top: 20000, smooth: 0.02, reach: 90 };
+          const fig = document.getElementById("p-evolve");
+          fig.innerHTML = `<div class="ev-space" role="img" aria-label="A field of small question marks, fading out towards the text below; moving the cursor stirs the particles"></div>`;
+          const space = fig.querySelector(".ev-space");
+          const canvas = document.createElement("canvas");
+          canvas.className = "ev-layer";
+          canvas.setAttribute("aria-hidden", "true");
+          document.body.append(canvas);
+          const ctx = canvas.getContext("2d");
+          const mulberry = (a) => () => {
+            a |= 0;
+            a = (a + 0x6d2b79f5) | 0;
+            let t = Math.imul(a ^ (a >>> 15), 1 | a);
+            t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+            return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+          };
+
+          // the field: evenly spread spots across the whole rectangle
+          let parts = [];
+          const build = () => {
+            const rnd = mulberry(FIELD.seed * 9973);
+            const pick = () => [
+              FIELD.edge + rnd() * (LW - 2 * FIELD.edge),
+              FIELD.edge + rnd() * (LH - 2 * FIELD.edge),
+            ];
+            // best-candidate sampling: each spot is the farthest of many tries from the spots so far, which spreads them
+            // evenly; a grid keeps the search local
+            const CELL = 24,
+              cols = Math.ceil(LW / CELL),
+              grid = new Map(),
+              spots = [];
+            const nearest = (x, y) => {
+              const gx = Math.floor(x / CELL),
+                gy = Math.floor(y / CELL);
+              let d = Infinity;
+              for (let j = gy - 2; j <= gy + 2; j++)
+                for (let i = gx - 2; i <= gx + 2; i++)
+                  for (const s of grid.get(j * cols + i) || []) {
+                    const e = (s[0] - x) ** 2 + (s[1] - y) ** 2;
+                    if (e < d) d = e;
+                  }
+              return d;
+            };
+            const add = (q) => {
+              spots.push(q);
+              const key = Math.floor(q[1] / CELL) * cols + Math.floor(q[0] / CELL);
+              (grid.get(key) || grid.set(key, []).get(key)).push(q);
+            };
+            add(pick());
+            while (spots.length < FIELD.count) {
+              let best = null,
+                bestD = -1;
+              for (let c = 0; c < FIELD.tries; c++) {
+                const q = pick(),
+                  d = nearest(...q);
+                if (d > bestD) {
+                  bestD = d;
+                  best = q;
+                }
+              }
+              add(best);
+            }
+            // mostly small particles, a few large ones
+            // stiffness and weight vary smoothly across the field, so it ripples instead of moving as one block
+            parts = spots.map(([x, y]) => ({
+              x,
+              y,
+              hx: x,
+              hy: y,
+              vx: 0,
+              vy: 0,
+              r: FIELD.minR + (FIELD.maxR - FIELD.minR) * rnd() ** 3,
+              k: 0.8 + 0.4 * (0.5 + 0.5 * Math.sin(x / 170 + y / 110)),
+              w: 0.75 + 0.25 * Math.sin(x / 140 - y / 90),
+            }));
+          };
+
+          // how visible a particle is at a height in the field: a soft top edge, then a long fade into the text below
+          const smooth = (x) => x * x * (3 - 2 * x);
+          const fadeAt = (y) => {
+            const v = y / LH;
+            if (v < FADE.top) return Math.max(0, smooth(v / FADE.top));
+            if (v > FADE.from)
+              return Math.max(0, 1 - smooth(Math.min(1, (v - FADE.from) / (1 - FADE.from))));
+            return 1;
+          };
+
+          // every particle is one image: a question mark in the visible grey at its top, fading to nothing (the page) at its bottom
+          let dot = null,
+            dotColour = "";
+          const dotFor = (colour) => {
+            if (dot && colour === dotColour) return dot;
+            const D = 64,
+              c = document.createElement("canvas");
+            c.width = c.height = D;
+            const g = c.getContext("2d");
+            g.fillStyle = colour;
+            g.font = `600 ${D}px Inter, -apple-system, "Helvetica Neue", Arial, sans-serif`;
+            g.textAlign = "center";
+            g.textBaseline = "middle";
+            const box = g.measureText("?"),
+              up = (box.actualBoundingBoxAscent - box.actualBoundingBoxDescent) / 2;
+            g.fillText("?", D / 2, D / 2 + up);
+            const f = g.createLinearGradient(0, 0, 0, D);
+            f.addColorStop(0, "rgba(0,0,0,1)");
+            f.addColorStop(1, "rgba(0,0,0,0)");
+            g.globalCompositeOperation = "destination-in";
+            g.fillStyle = f;
+            g.fillRect(0, 0, D, D);
+            dotColour = colour;
+            return (dot = c);
+          };
+          const clear = () => {
+            ctx.setTransform(1, 0, 0, 1, 0, 0);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+          };
+          const draw = () => {
+            const dpr = devicePixelRatio || 1,
+              W = Math.round(innerWidth * dpr),
+              H = Math.round(innerHeight * dpr);
+            if (canvas.width !== W || canvas.height !== H) {
+              canvas.width = W;
+              canvas.height = H;
+            }
+            const r = space.getBoundingClientRect(),
+              k = (r.width / LW) * dpr;
+            const img = dotFor(
+              getComputedStyle(document.documentElement).getPropertyValue("--muted").trim(),
+            );
+            clear();
+            ctx.setTransform(k, 0, 0, k, r.left * dpr, r.top * dpr);
+            for (const p of parts) {
+              const a = fadeAt(p.y);
+              if (a <= 0.01) continue;
+              ctx.globalAlpha = a;
+              ctx.drawImage(img, p.x - p.r, p.y - p.r, p.r * 2, p.r * 2);
+            }
+            ctx.globalAlpha = 1;
+          };
+
+          // the cursor carries nearby particles along; a spring brings each one home
+          const pointer = { x: 0, y: 0, vx: 0, vy: 0, on: false, at: 0 };
+          // the scroll speed, averaged and capped; its change each frame is what the jelly feels
+          const scroll = { y: scrollY, v: 0, last: scrollY };
+          const stir = (frameDt) => {
+            // the stiff spring is stepped in short slices, so a slow frame can't throw it off
+            const steps = Math.ceil(frameDt / (1 / 120)),
+              dt = frameDt / steps;
+            const damp = Math.exp(-STIR.damp * dt),
+              fresh = performance.now() - pointer.at < 120;
+            const toField = LW / space.getBoundingClientRect().width,
+              y = scrollY;
+            const raw = ((y - scroll.y) / frameDt) * toField;
+            scroll.y = y;
+            const v =
+              JELLY.top *
+              Math.tanh(
+                (scroll.v + (raw - scroll.v) * (1 - Math.exp(-frameDt / JELLY.smooth))) / JELLY.top,
+              );
+            const shove = (v - scroll.v) * JELLY.gain;
+            scroll.v = v;
+            let moving = Math.abs(v) > 1;
+            for (const p of parts) {
+              p.vy += shove * p.w;
+              if (pointer.on && fresh) {
+                const dx = p.x - pointer.x,
+                  dy = p.y - pointer.y,
+                  d = Math.hypot(dx, dy);
+                if (d < STIR.radius) {
+                  const f = (1 - d / STIR.radius) ** 2 * STIR.pull;
+                  p.vx += (pointer.vx - p.vx) * f;
+                  p.vy += (pointer.vy - p.vy) * f;
+                }
+              }
+              for (let i = 0; i < steps; i++) {
+                const ox = p.hx - p.x,
+                  oy = p.hy - p.y,
+                  k = STIR.spring * p.k * (1 + (ox * ox + oy * oy) / (JELLY.reach * JELLY.reach));
+                p.vx += ox * k * dt;
+                p.vy += oy * k * dt;
+                p.vx *= damp;
+                p.vy *= damp;
+                p.x += p.vx * dt;
+                p.y += p.vy * dt;
+              }
+              if (
+                !moving &&
+                (Math.abs(p.vx) > 0.5 ||
+                  Math.abs(p.vy) > 0.5 ||
+                  Math.abs(p.hx - p.x) > 0.3 ||
+                  Math.abs(p.hy - p.y) > 0.3)
+              )
+                moving = true;
+            }
+            return moving || fresh;
+          };
+
+          // runs only while something moves; otherwise it redraws when the page scrolls or resizes
+          let visible = false,
+            frame = 0,
+            last = null;
+          const tick = (now) => {
+            frame = 0;
+            const dt = last === null ? 1 / 60 : Math.min(0.05, (now - last) / 1000);
+            last = now;
+            const busy = stir(dt);
+            draw();
+            if (visible && busy) frame = requestAnimationFrame(tick);
+            else last = null;
+          };
+          const run = () => {
+            if (!frame && visible && parts.length) {
+              last = null;
+              frame = requestAnimationFrame(tick);
+            }
+          };
+          const redraw = () => {
+            if (visible && !frame && parts.length)
+              requestAnimationFrame(() => {
+                if (!frame) draw();
+              });
+          };
+
+          const toLocal = (e) => {
+            const r = space.getBoundingClientRect();
+            return [((e.clientX - r.left) * LW) / r.width, ((e.clientY - r.top) * LW) / r.width];
+          };
+          addEventListener(
+            "pointermove",
+            (e) => {
+              if (!visible) return;
+              const [x, y] = toLocal(e),
+                now = performance.now(),
+                dt = Math.max(0.008, (now - pointer.at) / 1000);
+              if (pointer.on) {
+                pointer.vx = pointer.vx * 0.5 + ((x - pointer.x) / dt) * 0.5;
+                pointer.vy = pointer.vy * 0.5 + ((y - pointer.y) / dt) * 0.5;
+              }
+              Object.assign(pointer, { x, y, on: true, at: now });
+              run();
+            },
+            { passive: true },
+          );
+          const lift = () => {
+            pointer.on = false;
+            pointer.vx = pointer.vy = 0;
+          };
+          document.documentElement.addEventListener("pointerleave", lift);
+          addEventListener("pointerup", (e) => {
+            if (e.pointerType !== "mouse") lift();
+          });
+          addEventListener("pointercancel", lift);
+          // the loop reads the scroll itself; a scroll wakes it, counting from the scroll before so the first step is felt
+          addEventListener(
+            "scroll",
+            () => {
+              if (!frame) scroll.y = scroll.last;
+              scroll.last = scrollY;
+              run();
+            },
+            { passive: true },
+          );
+          addEventListener("resize", redraw);
+
+          new IntersectionObserver(
+            ([e]) => {
+              visible = e.isIntersecting;
+              if (visible) redraw();
+              else if (!frame) clear();
+            },
+            { rootMargin: "25% 0px" },
+          ).observe(fig);
+          // the question marks are drawn in Inter, so the field is built once the font is ready
+          document.fonts.ready.then(() => {
+            build();
+            redraw();
+          });
+        }
+
+        /* ============ Fig. 3: two frames, one quote each ============ */
+        {
+          const QUOTES = [
+            "Elements change color based on your Git state, guiding you toward the next command to run.",
+            "After every turn, the agent suggests the next viable action, such as running tests or continuing the build.",
+          ];
+          const frames = [...document.querySelectorAll("#p-git .frame")];
+          const quote = document.getElementById("git-quote");
+          let at = 0;
+          const show = (n) => {
+            at = (n + frames.length) % frames.length;
+            frames.forEach((f, i) => f.classList.toggle("on", i === at));
+            quote.textContent = `“ ${QUOTES[at]}  “`;
+          };
+          document.getElementById("git-prev").onclick = () => show(at - 1);
+          document.getElementById("git-next").onclick = () => show(at + 1);
+          show(0);
+        }
+
+        /* ============ the brand mark, morphing through the marketing page's shapes ============ */
+        // The four agent glyphs from pipper.dev, in the page's neutral grey. Each outline is traced once, resampled to
+        // the same number of evenly spaced points running the same way, and the path's points slide to their partners in
+        // the next shape, drawn as one smooth curve.
+        (async () => {
+          const box = document.getElementById("brand-mark");
+          const S = 512,
+            FILL = 0.64,
+            N = 180;
+          const pathShape = (d, w, h) => (ctx) => {
+            const k = Math.min((S * FILL) / w, (S * FILL) / h);
+            ctx.translate((S - w * k) / 2, (S - h * k) / 2);
+            ctx.scale(k, k);
+            ctx.fill(new Path2D(d));
+          };
+          const SHAPES = [
+            {
+              angle: 0,
+              draw: pathShape(
+                "M63.1362 1.93107C66.6799 -0.643566 71.4784 -0.643561 75.022 1.93107L133.99 44.7737C137.534 47.3484 139.016 51.912 137.663 56.0778L115.139 125.399C113.786 129.565 109.903 132.385 105.523 132.385H32.635C28.2547 132.385 24.3727 129.565 23.0191 125.399L0.495382 56.0778C-0.858183 51.912 0.624639 47.3484 4.16832 44.7737L63.1362 1.93107Z",
+                139,
+                133,
+              ),
+            },
+            {
+              angle: -0.18,
+              draw: pathShape(
+                "M25 0H136A25 25 0 0 1 136 50H25A25 25 0 0 1 25 0ZM25 50H136A25 25 0 0 1 136 100H25A25 25 0 0 1 25 50ZM25 100H136A25 25 0 0 1 136 150H25A25 25 0 0 1 25 100Z",
+                161,
+                150,
+              ),
+            },
+            {
+              angle: -0.56,
+              draw: pathShape(
+                "M64 32A32 32 0 1 1 128 32A32 32 0 1 1 64 32ZM0 32A32 32 0 1 1 64 32A32 32 0 1 1 0 32ZM0 96A32 32 0 1 1 64 96A32 32 0 1 1 0 96ZM64 96A32 32 0 1 1 128 96A32 32 0 1 1 64 96ZM34 32H97V102H34Z",
+                128,
+                128,
+              ),
+            },
+            {
+              angle: 0.2,
+              draw: pathShape(
+                "M54.4823 9.7498C63.6334 -3.25253 82.9076 -3.25253 92.0587 9.7498C96.6426 16.2628 104.273 19.9373 112.223 19.4603C128.094 18.5081 140.111 33.5772 135.651 48.8387C133.417 56.4834 135.302 64.7397 140.631 70.658C151.271 82.473 146.982 101.264 132.27 107.292C124.9 110.312 119.62 116.933 118.316 124.79C115.712 140.475 98.3471 148.838 84.4607 141.094C77.5049 137.215 69.0362 137.215 62.0803 141.094C48.1939 148.838 30.8285 140.475 28.2252 124.79C26.9211 116.933 21.6409 110.312 14.2712 107.292C-0.441472 101.264 -4.73037 82.473 5.90965 70.658C11.2394 64.7397 13.1238 56.4834 10.8898 48.8387C6.42976 33.5772 18.447 18.5081 34.3182 19.4603C42.2684 19.9373 49.8984 16.2628 54.4823 9.7498Z",
+                147,
+                145,
+              ),
+            },
+          ];
+
+          // trace a drawn shape's outlines (marching squares on its antialiased coverage, so edges land between pixels)
+          const trace = (draw) => {
+            const c = document.createElement("canvas");
+            c.width = c.height = S;
+            const ctx = c.getContext("2d", { willReadFrequently: true });
+            ctx.fillStyle = "#000";
+            draw(ctx);
+            const px = ctx.getImageData(0, 0, S, S).data,
+              v = (x, y) =>
+                x < 0 || y < 0 || x >= S || y >= S ? 0 : px[(y * S + x) * 4 + 3] / 255;
+            const pt = new Map(),
+              link = new Map();
+            // an edge's crossing point; horizontal edges h(x,y) run (x,y)→(x+1,y), vertical v(x,y) run (x,y)→(x,y+1)
+            const edge = (kind, x, y) => {
+              const id = ((y + 1) * (S + 2) + (x + 1)) * 2 + kind;
+              if (!pt.has(id)) {
+                const a = v(x, y),
+                  b = kind ? v(x, y + 1) : v(x + 1, y),
+                  f = (0.5 - a) / (b - a);
+                pt.set(id, kind ? [x, y + f] : [x + f, y]);
+              }
+              return id;
+            };
+            const join = (a, b) => {
+              (link.get(a) || link.set(a, []).get(a)).push(b);
+              (link.get(b) || link.set(b, []).get(b)).push(a);
+            };
+            for (let y = -1; y < S; y++)
+              for (let x = -1; x < S; x++) {
+                const tl = v(x, y) >= 0.5,
+                  tr = v(x + 1, y) >= 0.5,
+                  br = v(x + 1, y + 1) >= 0.5,
+                  bl = v(x, y + 1) >= 0.5;
+                const n = tl * 8 + tr * 4 + br * 2 + bl;
+                if (n === 0 || n === 15) continue;
+                const T = () => edge(0, x, y),
+                  B = () => edge(0, x, y + 1),
+                  L = () => edge(1, x, y),
+                  R = () => edge(1, x + 1, y);
+                const pairs = {
+                  1: [[L, B]],
+                  2: [[B, R]],
+                  3: [[L, R]],
+                  4: [[T, R]],
+                  5: [
+                    [L, T],
+                    [B, R],
+                  ],
+                  6: [[T, B]],
+                  7: [[L, T]],
+                  8: [[L, T]],
+                  9: [[T, B]],
+                  10: [
+                    [L, B],
+                    [T, R],
+                  ],
+                  11: [[T, R]],
+                  12: [[L, R]],
+                  13: [[B, R]],
+                  14: [[L, B]],
+                }[n];
+                for (const [a, b] of pairs) join(a(), b());
+              }
+            const seen = new Set(),
+              loops = [];
+            for (const start of link.keys()) {
+              if (seen.has(start)) continue;
+              const loop = [];
+              let prev = -1,
+                cur = start;
+              while (!seen.has(cur)) {
+                seen.add(cur);
+                loop.push(pt.get(cur));
+                const next =
+                  link.get(cur).find((e) => e !== prev && !seen.has(e)) ??
+                  link.get(cur).find((e) => e !== prev);
+                prev = cur;
+                cur = next;
+              }
+              if (loop.length > 12) loops.push(loop);
+            }
+            return loops;
+          };
+          const area = (p) =>
+            p.reduce((s, [x, y], i) => {
+              const [x2, y2] = p[(i + 1) % p.length];
+              return s + x * y2 - x2 * y;
+            }, 0) / 2;
+          // n points evenly spaced along a closed outline, running clockwise
+          const resample = (p, n) => {
+            if (area(p) < 0) p = [...p].reverse();
+            const seg = p.map((q, i) =>
+              Math.hypot(p[(i + 1) % p.length][0] - q[0], p[(i + 1) % p.length][1] - q[1]),
+            );
+            const total = seg.reduce((a, b) => a + b, 0),
+              out = [];
+            let i = 0,
+              acc = 0;
+            for (let k = 0; k < n; k++) {
+              const target = (k / n) * total;
+              while (acc + seg[i] < target) {
+                acc += seg[i];
+                i = (i + 1) % p.length;
+              }
+              const f = seg[i] ? (target - acc) / seg[i] : 0,
+                a = p[i],
+                b = p[(i + 1) % p.length];
+              out.push([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f]);
+            }
+            return out;
+          };
+          const outlines = SHAPES.map((sh) => {
+            const loops = trace(sh.draw).sort((a, b) => Math.abs(area(b)) - Math.abs(area(a)));
+            return resample(loops[0], N);
+          });
+          // start the next outline where it lies closest to this one, so points travel the least
+          const align = (from, to) => {
+            let best = 0,
+              bestCost = Infinity;
+            for (let o = 0; o < to.length; o += 2) {
+              let cost = 0;
+              for (let k = 0; k < from.length; k += 3) {
+                const a = from[k],
+                  b = to[(k + o) % to.length];
+                cost += (a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2;
+              }
+              if (cost < bestCost) {
+                bestCost = cost;
+                best = o;
+              }
+            }
+            return to.map((_, k) => to[(k + best) % to.length]);
+          };
+          // each transition, prepared once: the two outlines matched point for point
+          const steps = SHAPES.map((_, i) => [
+            outlines[i],
+            align(outlines[i], outlines[(i + 1) % SHAPES.length]),
+          ]);
+          // a closed Catmull-Rom curve through the points, as cubic Béziers
+          const smooth = (p) => {
+            const n = p.length,
+              f = (v) => v.toFixed(1);
+            let d = `M${f(p[0][0])} ${f(p[0][1])}`;
+            for (let i = 0; i < n; i++) {
+              const p0 = p[(i - 1 + n) % n],
+                p1 = p[i],
+                p2 = p[(i + 1) % n],
+                p3 = p[(i + 2) % n];
+              d += `C${f(p1[0] + (p2[0] - p0[0]) / 6)} ${f(p1[1] + (p2[1] - p0[1]) / 6)} ${f(p2[0] - (p3[0] - p1[0]) / 6)} ${f(p2[1] - (p3[1] - p1[1]) / 6)} ${f(p2[0])} ${f(p2[1])}`;
+            }
+            return d + "Z";
+          };
+          const mixPts = (a, b, t) =>
+            a.map((q, k) => [q[0] + (b[k][0] - q[0]) * t, q[1] + (b[k][1] - q[1]) * t]);
+
+          const NS = "http://www.w3.org/2000/svg";
+          const live = document.createElementNS(NS, "svg");
+          live.setAttribute("viewBox", `0 0 ${S} ${S}`);
+          live.setAttribute("aria-hidden", "true");
+          live.classList.add("live-mark");
+          const g = document.createElementNS(NS, "g"),
+            body = document.createElementNS(NS, "path");
+          body.setAttribute("style", "fill:var(--faint-text)");
+          g.append(body);
+          live.append(g);
+          box.append(live);
+          const draw = (i, t) => {
+            const [from, to] = steps[i],
+              j = (i + 1) % SHAPES.length;
+            body.setAttribute("d", smooth(mixPts(from, to, t)));
+            const ang =
+              ((SHAPES[i].angle + (SHAPES[j].angle - SHAPES[i].angle) * t) * 180) / Math.PI;
+            g.setAttribute("transform", `rotate(${ang.toFixed(2)} ${S / 2} ${S / 2})`);
+          };
+          box.classList.add("live");
+
+          const still = matchMedia("(prefers-reduced-motion: reduce)");
+          const HOLD = 1400,
+            MORPH = 1200,
+            STEP = HOLD + MORPH;
+          const ease = (x) => (x < 0.5 ? 4 * x * x * x : 1 - (-2 * x + 2) ** 3 / 2);
+          let visible = true,
+            start = performance.now(),
+            frame = 0;
+          const tick = (now) => {
+            frame = 0;
+            if (still.matches) {
+              draw(2, 0);
+              return;
+            }
+            const e = Math.max(0, now - start) % (STEP * SHAPES.length),
+              i = Math.floor(e / STEP),
+              local = e - i * STEP;
+            draw(i, local < HOLD ? 0 : ease((local - HOLD) / MORPH));
+            if (visible) frame = requestAnimationFrame(tick);
+          };
+          new IntersectionObserver(([entry]) => {
+            visible = entry.isIntersecting;
+            if (visible && !frame) frame = requestAnimationFrame(tick);
+          }).observe(box);
+          still.addEventListener("change", () => {
+            if (!frame) frame = requestAnimationFrame(tick);
+          });
+          frame = requestAnimationFrame(tick);
+        })();
+
+        /* ============ contents rail ============ */
+        try {
+          localStorage.removeItem("wiw-theme");
+        } catch {}
+        document.documentElement.removeAttribute("data-theme");
+        const links = [...document.querySelectorAll("nav.toc ol a")];
+        const secs = links.map((a) => document.querySelector(a.getAttribute("href")));
+        const mark = () => {
+          let cur = 0;
+          secs.forEach((s, i) => {
+            if (s.getBoundingClientRect().top < innerHeight * 0.4) cur = i;
+          });
+          links.forEach((a, i) => a.setAttribute("aria-current", String(i === cur)));
+        };
+        addEventListener("scroll", mark, { passive: true });
+        mark();
+
+        /* ---------- Copy Email to Clipboard ---------- */
+        const copyEmailBtn = document.querySelector(".copy-email-btn");
+        if (copyEmailBtn) {
+          copyEmailBtn.addEventListener("click", () => {
+            const email = "harshith10295032@gmail.com";
+            const done = () => {
+              copyEmailBtn.classList.add("copied");
+              setTimeout(() => copyEmailBtn.classList.remove("copied"), 1800);
+            };
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard
+                .writeText(email)
+                .then(done)
+                .catch(() => {
+                  const ta = document.createElement("textarea");
+                  ta.value = email;
+                  document.body.appendChild(ta);
+                  ta.select();
+                  document.execCommand("copy");
+                  ta.remove();
+                  done();
+                });
+            } else {
+              const ta = document.createElement("textarea");
+              ta.value = email;
+              document.body.appendChild(ta);
+              ta.select();
+              document.execCommand("copy");
+              ta.remove();
+              done();
+            }
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>

@@ -23,7 +23,7 @@ function threadLabel(thread: Thread | undefined): string {
  * Persistent strip under the conversation listing the oldest finished
  * background thread, with an arrow that jumps to it. Also owns the
  * completion watcher and the arrival toasts, so mounting it once in the
- * advanced shell is the whole feature.
+ * shell is the whole feature.
  */
 export function ThreadCompletionDock({ projects }: { projects: Project[] }) {
   const queue = useThreadCompletionStore((state) => state.queue);

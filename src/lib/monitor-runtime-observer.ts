@@ -36,11 +36,8 @@ const DOM_ATTRIBUTION_IDS = new Set([
   "diff-view",
   "project-file-tree",
   "global-tab-bar",
-  "subthread-orbs",
   "agent-selector",
   "agent-terminal-output",
-  "workspace-name-dialog",
-  "workspace-context-menu",
 ]);
 
 export interface RendererMonitorContext {

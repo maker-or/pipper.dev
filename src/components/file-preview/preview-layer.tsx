@@ -1,5 +1,7 @@
 import { lazy, Suspense } from "react";
 import { cn } from "@/lib/utils";
+import { surfaceBgClass } from "@/lib/surface-classes";
+import { useSurface } from "@/lib/surface-context";
 import { useShownPreviewWorkspaceKey } from "@/lib/file-preview-actions";
 import { usePreviewStore } from "@/store/preview-store";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
@@ -15,6 +17,7 @@ const FilePreview = lazy(() =>
  * away and back keeps the scroll position and any half-written comment.
  */
 export function PreviewLayer() {
+  const surface = useSurface();
   const workspaceKey = useShownPreviewWorkspaceKey();
   const hasPreview = usePreviewStore((state) =>
     workspaceKey ? Boolean(state.workspaces[workspaceKey]?.path) : false,
@@ -24,7 +27,8 @@ export function PreviewLayer() {
   return (
     <section
       className={cn(
-        "absolute inset-0 flex flex-col overflow-hidden bg-surface-1",
+        "absolute inset-0 flex flex-col overflow-hidden",
+        surfaceBgClass(surface),
         visible ? "z-30 visible" : "-z-10 invisible pointer-events-none",
       )}
       aria-hidden={!visible}

@@ -89,13 +89,15 @@
   --workspace-selected-muted: #18181b;
   --workspace-caret-color: #18181b;
 
-  /* Headers use the same flat state base as cards, with only an inset glow. */
-  --workspace-header-background: initial;
-  --workspace-header-wash-neutral: none;
-  --workspace-header-wash-action: none;
-  --workspace-header-wash-ready: none;
-  --workspace-header-wash-merged: none;
-  --workspace-header-wash-stale: none;
+  /* How strongly a header's state colour starts before fading into the surface. */
+  --workspace-header-fade-strength: 42%;
+  /* Raised look for paired state buttons: a top highlight, a bottom bevel and a soft drop. */
+  --workspace-action-bevel:
+    inset 0 1px 0 rgb(255 255 255 / 0.35), inset 0 -1px 0 rgb(0 0 0 / 0.12),
+    0 1px 2px rgb(0 0 0 / 0.12);
+  /* How strongly an active card's state glow bleeds in from its edges. */
+  --workspace-glow-inner-strength: 55%;
+  --workspace-glow-outer-strength: 30%;
 
   --workspace-fill-neutral: #41516b;
   --workspace-fill-action: #9d4908;
@@ -188,6 +190,13 @@
   --border: oklch(1 0 0 / 10%);
   --ring: oklch(0.556 0 0);
 
+  /* Re-alias the role tokens above so a dark scope nested in a light window
+   * (the settings design previews) resolves them against dark surfaces. */
+  --background: var(--surface-1);
+  --card: var(--surface-2);
+  --hover: var(--muted);
+  --active: var(--accent);
+
   /* --- Surfaces --------------------------------------------------------- */
   --surface-1: #171717;
   --surface-2: #1e1e1e;
@@ -222,19 +231,12 @@
   --workspace-glow-background-ready: initial;
   --workspace-glow-background-merged: initial;
   --workspace-glow-background-stale: initial;
-  --workspace-header-background: initial;
+  --workspace-header-fade-strength: 30%;
+  --workspace-action-bevel:
+    inset 0 1px 0 rgb(255 255 255 / 0.22), inset 0 -1px 0 rgb(0 0 0 / 0.28),
+    0 1px 2px rgb(0 0 0 / 0.4);
   --workspace-selected-muted: var(--muted-foreground);
   --workspace-caret-color: initial;
-  --workspace-wash-neutral: initial;
-  --workspace-wash-action: initial;
-  --workspace-wash-ready: initial;
-  --workspace-wash-merged: initial;
-  --workspace-wash-stale: initial;
-  --workspace-header-wash-neutral: initial;
-  --workspace-header-wash-action: initial;
-  --workspace-header-wash-ready: initial;
-  --workspace-header-wash-merged: initial;
-  --workspace-header-wash-stale: initial;
   --workspace-control-tint-neutral: initial;
   --workspace-control-tint-action: initial;
   --workspace-control-tint-ready: initial;
@@ -626,21 +628,19 @@
   }
 }
 
-/* Advanced-shell state primitives: palette roles, independent of component layout. */
+/* Workspace state primitives: palette roles, independent of component layout. */
 .workspace-state-surface {
   color: var(--workspace-state-on-surface);
 }
-.workspace-state-surface[data-state-active="true"]:is(
-    [data-state-surface="card"],
-    [data-state-surface="header"]
-  ) {
+.workspace-state-surface[data-state-active="true"][data-state-surface="card"] {
   --muted-foreground: var(--workspace-selected-muted);
 }
 .workspace-state-surface[data-state-active="true"][data-state-surface="card"] {
   background-color: var(--workspace-state-glow-background);
 }
-.workspace-state-surface[data-state-active="true"][data-state-surface="header"] {
-  background-color: var(--workspace-state-header-background);
+/* A header is the surface itself; its tint is the fade in its background image. */
+.workspace-state-surface[data-state-surface="header"] {
+  background-color: var(--workspace-state-surface);
 }
 .workspace-state-surface::before {
   content: "";
@@ -650,11 +650,8 @@
   border-radius: inherit;
   pointer-events: none;
 }
-.workspace-state-surface[data-state-active="true"]::before {
+.workspace-state-surface[data-state-active="true"]:not([data-state-surface="header"])::before {
   box-shadow: var(--workspace-state-glow);
-}
-.workspace-state-surface[data-state-surface="header"]::before {
-  mask-image: linear-gradient(to bottom, #000 60%, transparent 100%);
 }
 .workspace-state-action {
   --workspace-control-fill: var(--workspace-state-action);
@@ -692,6 +689,11 @@
   color: var(--workspace-state-on-action);
   transition: filter 80ms;
 }
+/* A paired button (quick action + PR number): raised, with a top highlight
+ * and a bottom bevel. */
+.workspace-state-action[data-paired] {
+  box-shadow: var(--workspace-action-bevel);
+}
 .workspace-state-badge {
   background-color: var(--workspace-state-badge);
   color: var(--workspace-state-on-badge);
@@ -711,17 +713,14 @@
 }
 
 /*
- * Running subthread circle in the composer rail. While the subthread works, a
- * band of light sweeps across the circle and its logo, the same sweep as
- * .animate-text-shimmer.
+ * Agent logo circle on thread cards in the conversation. While the thread
+ * works, a band of light sweeps across the circle and its logo, the same
+ * sweep as .animate-text-shimmer.
  */
 .subthread-orb {
   overflow: hidden;
   background: var(--surface-2);
   box-shadow: inset 0 0 0 1px var(--border);
-}
-.subthread-orb-waiting {
-  box-shadow: inset 0 0 0 1px rgb(245 158 11 / 0.7);
 }
 .subthread-orb-working::after {
   content: "";

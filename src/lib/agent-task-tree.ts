@@ -65,6 +65,12 @@ export function taskStatusText(task: AgentTaskSnapshot): string {
   return STATUS_TEXT[task.status];
 }
 
+/** Whether a task is still in flight: starting, working, or waiting on the user. */
+export function taskInFlight(task: AgentTaskSnapshot): boolean {
+  if (task.status === "starting" || task.status === "running") return true;
+  return task.status === "idle" && task.outcome === "needs_input";
+}
+
 /** The task waits on the user: a permission prompt, or a question it ended on. */
 export function taskNeedsUser(task: AgentTaskSnapshot): boolean {
   return (
