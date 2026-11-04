@@ -41,3 +41,8 @@ export function surfaceClasses(bgLevel: number, shadowLevel: number = bgLevel): 
   const shadow = Math.max(1, Math.min(8, shadowLevel));
   return `${SURFACE_BG[bg]} ${SURFACE_SHADOW[shadow]}`;
 }
+
+/** Just the background of a surface level, for layers that fill a surface. */
+export function surfaceBgClass(level: number): string {
+  return SURFACE_BG[Math.max(1, Math.min(8, level))]!;
+}

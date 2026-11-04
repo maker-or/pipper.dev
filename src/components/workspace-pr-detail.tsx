@@ -1,4 +1,5 @@
 import { useRef, useState, type ReactNode } from "react";
+import { ClipFade } from "@/components/clip-fade";
 import { ArrowUpRight, Check, CircleNotch, Minus, X } from "@phosphor-icons/react";
 import { WorkspacePrComments } from "@/components/workspace-pr-comments";
 import type {
@@ -106,9 +107,7 @@ export function WorkspacePrDetail({
                 <MarkdownRenderer className="text-[13px] leading-6 text-muted-foreground">
                   {body}
                 </MarkdownRenderer>
-                {!bodyExpanded && bodyClipped ? (
-                  <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-surface-1 to-transparent" />
-                ) : null}
+                {!bodyExpanded && bodyClipped ? <ClipFade /> : null}
               </div>
               {!bodyExpanded && bodyClipped ? (
                 <button

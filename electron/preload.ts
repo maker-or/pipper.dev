@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { FilePreviewInfo, FilePreviewTarget } from "../contracts/file-preview.ts";
+import type { NativeMenuRequest } from "../contracts/native-menu.ts";
 import type { DatabaseCompactionResult, WorkspaceDiskUsageReport } from "../contracts/storage.ts";
 import type { Project, ProjectFileTreeSnapshot } from "../contracts/projects.ts";
 import type { GitHubApi } from "../contracts/github.ts";
@@ -9,7 +10,7 @@ import type {
   WorkspaceGitActionResult,
   WorkspaceGitStatus,
 } from "../contracts/git.ts";
-import type { OpenTabsState, Thread, ThreadPage } from "../contracts/threads.ts";
+import type { OpenTabsState, Thread, ThreadMoveResult, ThreadPage } from "../contracts/threads.ts";
 import type {
   AcpBridgeEvent,
   AcpPromptInput,
@@ -27,9 +28,21 @@ import type {
   BrowserConfig,
   InlineWidgetDocument,
   InlineWidgetRef,
-  SubagentConfig,
-  SubagentRunSnapshot,
 } from "../contracts/acp.ts";
+import type { SettingChangeRecord } from "../contracts/settings.ts";
+import type {
+  ConnectorAddInput,
+  ConnectorRequestAnswer,
+  ConnectorRequestRef,
+  ConnectorRequestSnapshot,
+  ConnectorSnapshot,
+  ConnectorUpdateInput,
+} from "../contracts/connectors.ts";
+import type {
+  AgentTaskConfig,
+  AgentTaskSnapshot,
+  ThreadProposalSnapshot,
+} from "../contracts/agent-tasks.ts";
 import type {
   LauncherDownloadProgress,
   LauncherUpdateDiagnostics,
@@ -227,6 +240,10 @@ const api = {
   },
   projects: {
     list: (): Promise<Project[]> => ipcRenderer.invoke("projects:list"),
+    reorder: (projectIds: string[]): Promise<Project[]> =>
+      ipcRenderer.invoke("projects:reorder", projectIds),
+    delete: (projectId: string): Promise<{ activeProjectId: string | null }> =>
+      ipcRenderer.invoke("projects:delete", projectId),
     create: (input: CreateProjectInput): Promise<Project> =>
       ipcRenderer.invoke("projects:create", input),
     getActive: (): Promise<Project | null> => ipcRenderer.invoke("projects:getActive"),
@@ -260,6 +277,13 @@ const api = {
         ipcRenderer.removeListener("projects:listChanged", listener);
       };
     },
+    onDeleted: (callback: (projectId: string) => void) => {
+      const listener = (_event: any, projectId: string) => callback(projectId);
+      ipcRenderer.on("projects:deleted", listener);
+      return () => {
+        ipcRenderer.removeListener("projects:deleted", listener);
+      };
+    },
   },
   files: {
     stat: (target: FilePreviewTarget): Promise<FilePreviewInfo> =>
@@ -285,6 +309,12 @@ const api = {
       ipcRenderer.on("worktrees:deleted", listener);
       return () => ipcRenderer.removeListener("worktrees:deleted", listener);
     },
+    /** A project's workspaces were created or deleted, by the user or an agent. */
+    onChanged: (callback: (event: { projectId: string }) => void) => {
+      const listener = (_event: unknown, event: { projectId: string }) => callback(event);
+      ipcRenderer.on("worktrees:changed", listener);
+      return () => ipcRenderer.removeListener("worktrees:changed", listener);
+    },
     switch: (input: { projectId: string; path: string }): Promise<Thread> =>
       ipcRenderer.invoke("worktrees:switch", input),
     getSelections: (): Promise<Record<string, string>> =>
@@ -302,7 +332,8 @@ const api = {
       projectId: string;
       path: string;
       branch: string;
-    }): Promise<{ thread: Thread; worktree: Worktree }> =>
+      activate?: boolean;
+    }): Promise<{ thread: Thread | null; worktree: Worktree }> =>
       ipcRenderer.invoke("worktrees:switchBranch", input),
     continue: (input: { projectId: string; path: string }): Promise<Worktree> =>
       ipcRenderer.invoke("worktrees:continue", input),
@@ -353,6 +384,9 @@ const api = {
     },
   },
   threads: {
+    /** Move a thread to another workspace of its project; applies after a running turn. */
+    move: (input: { threadId: string; workspace: string }): Promise<ThreadMoveResult> =>
+      ipcRenderer.invoke("threads:move", input),
     list: (): Promise<Thread[]> => ipcRenderer.invoke("threads:list"),
     listByIds: (ids: string[]): Promise<Thread[]> => ipcRenderer.invoke("threads:listByIds", ids),
     listProject: (input: {
@@ -530,11 +564,26 @@ const api = {
       };
     },
   },
-  subagents: {
-    getConfig: (): Promise<SubagentConfig> => ipcRenderer.invoke("subagents:getConfig"),
-    setConfig: (partial: Partial<SubagentConfig>): Promise<SubagentConfig> =>
-      ipcRenderer.invoke("subagents:setConfig", partial),
-    listRuns: (): Promise<SubagentRunSnapshot[]> => ipcRenderer.invoke("subagents:listRuns"),
+  themeLab: {
+    open: (): Promise<void> => ipcRenderer.invoke("themeLab:open"),
+  },
+  settings: {
+    getChange: (id: string): Promise<SettingChangeRecord | null> =>
+      ipcRenderer.invoke("settings:getChange", id),
+    undoChange: (id: string): Promise<SettingChangeRecord> =>
+      ipcRenderer.invoke("settings:undoChange", id),
+  },
+  agentTasks: {
+    getConfig: (): Promise<AgentTaskConfig> => ipcRenderer.invoke("agentTasks:getConfig"),
+    setConfig: (partial: Partial<AgentTaskConfig>): Promise<AgentTaskConfig> =>
+      ipcRenderer.invoke("agentTasks:setConfig", partial),
+    list: (): Promise<AgentTaskSnapshot[]> => ipcRenderer.invoke("agentTasks:list"),
+    getProposals: (ids: string[]): Promise<ThreadProposalSnapshot[]> =>
+      ipcRenderer.invoke("agentTasks:getProposals", ids),
+    startProposal: (id: string): Promise<ThreadProposalSnapshot> =>
+      ipcRenderer.invoke("agentTasks:startProposal", id),
+    dismissProposal: (id: string): Promise<ThreadProposalSnapshot> =>
+      ipcRenderer.invoke("agentTasks:dismissProposal", id),
   },
   widgets: {
     getDocument: (
@@ -554,8 +603,62 @@ const api = {
     update: (id: string, input: unknown) => ipcRenderer.invoke("mcp:update", id, input),
     delete: (id: string) => ipcRenderer.invoke("mcp:delete", id),
   },
+  connectorRequests: {
+    get: (ids: string[]): Promise<ConnectorRequestSnapshot[]> =>
+      ipcRenderer.invoke("connectorRequests:get", ids),
+    find: (ref: ConnectorRequestRef): Promise<ConnectorRequestSnapshot | null> =>
+      ipcRenderer.invoke("connectorRequests:find", ref),
+    connect: (id: string, answer?: ConnectorRequestAnswer): Promise<ConnectorRequestSnapshot> =>
+      ipcRenderer.invoke("connectorRequests:connect", id, answer ?? {}),
+    cancel: (id: string): Promise<void> => ipcRenderer.invoke("connectorRequests:cancel", id),
+    decline: (id: string): Promise<ConnectorRequestSnapshot> =>
+      ipcRenderer.invoke("connectorRequests:decline", id),
+    onChanged: (callback: (request: ConnectorRequestSnapshot) => void) => {
+      const listener = (_event: unknown, request: ConnectorRequestSnapshot) => callback(request);
+      ipcRenderer.on("connectorRequests:changed", listener);
+      return () => {
+        ipcRenderer.removeListener("connectorRequests:changed", listener);
+      };
+    },
+  },
+  connectors: {
+    list: (): Promise<ConnectorSnapshot[]> => ipcRenderer.invoke("connectors:list"),
+    add: (input: ConnectorAddInput): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:add", input),
+    update: (id: string, input: ConnectorUpdateInput): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:update", id, input),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke("connectors:remove", id),
+    connect: (id: string): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:connect", id),
+    signIn: (id: string): Promise<ConnectorSnapshot> => ipcRenderer.invoke("connectors:signIn", id),
+    cancelSignIn: (id: string): Promise<void> => ipcRenderer.invoke("connectors:cancelSignIn", id),
+    signOut: (id: string): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:signOut", id),
+    check: (id: string): Promise<ConnectorSnapshot> => ipcRenderer.invoke("connectors:check", id),
+    setEnabled: (id: string, enabled: boolean): Promise<ConnectorSnapshot> =>
+      ipcRenderer.invoke("connectors:setEnabled", id, enabled),
+    onChanged: (callback: (connector: ConnectorSnapshot) => void) => {
+      const listener = (_event: unknown, connector: ConnectorSnapshot) => callback(connector);
+      ipcRenderer.on("connectors:changed", listener);
+      return () => {
+        ipcRenderer.removeListener("connectors:changed", listener);
+      };
+    },
+    onRemoved: (callback: (id: string) => void) => {
+      const listener = (_event: unknown, id: string) => callback(id);
+      ipcRenderer.on("connectors:removed", listener);
+      return () => {
+        ipcRenderer.removeListener("connectors:removed", listener);
+      };
+    },
+  },
   dialog: {
     pickDirectory: (): Promise<string | null> => ipcRenderer.invoke("dialog:pickDirectory"),
+  },
+  menu: {
+    /** Pops up an OS menu; resolves with the picked item's id, or null when dismissed. */
+    popup: (request: NativeMenuRequest): Promise<string | null> =>
+      ipcRenderer.invoke("menu:popup", request),
   },
   terminal: {
     create: (sessionId: string, cwd?: string, cols?: number, rows?: number): Promise<void> =>

@@ -136,6 +136,7 @@ describe("closing the active tab", () => {
 
   test("closes the tab on screen, even when a draft sits behind it", () => {
     expect(activeTabToClose({ ...base, mode: "preview" })).toBe("preview");
+    expect(activeTabToClose({ ...base, mode: "diff" })).toBe("diff");
     expect(activeTabToClose({ ...base, mode: "terminal" })).toBe("terminal");
     expect(activeTabToClose({ ...base, mode: "agent" })).toBe("draft");
   });

@@ -83,8 +83,16 @@ export interface WorkspaceGitStatus {
   /** Capped file list for the panel (newest/significant first). */
   files: WorkspaceGitFile[];
   truncated: boolean;
+  /**
+   * Lines the workspace changes against its base branch (merge base to
+   * working tree, untracked files included): what a PR from here would
+   * carry. Null when there is no base to measure against.
+   */
+  branchLines: { additions: number; deletions: number } | null;
   /** Remote URL host (github.com, …) when a remote exists. */
   remoteHost: string | null;
+  /** "owner/name" of the GitHub origin; null for other hosts or no remote. */
+  repository: string | null;
   /** True when the `gh` CLI is available for PR operations. */
   ghAvailable: boolean;
   /** Existing open PR number for the branch, when known. */
@@ -157,6 +165,9 @@ export interface WorkspacePr {
   body: string;
   isDraft: boolean;
   state: "open" | "merged";
+  /** PR line totals; null when GitHub didn't report them (older snapshots). */
+  additions: number | null;
+  deletions: number | null;
   deployments: WorkspacePrDeployment[];
   /** Issue comments then review-thread openers, oldest first, capped. */
   comments: WorkspacePrComment[];

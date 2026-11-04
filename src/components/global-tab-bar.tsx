@@ -12,14 +12,17 @@ import {
   ImageIcon,
   MusicNotesIcon,
   PlusIcon,
+  PlusMinusIcon,
   TerminalWindowIcon,
   WarningIcon,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Dropdown, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
+import { ThreadTabMenu } from "@/components/thread-tab-menu";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
-import { ProjectIcon } from "@/components/ui/icon-picker";
+import { threadsNeedingUser } from "@/lib/agent-task-tree";
+import { ProjectMark } from "@/components/project-shape";
 import { PixelGridLoader } from "@/components/ui/pixel-grid-loader";
 import { toast } from "@/components/ui/toast";
 import { useProjectStore } from "@/store/project-store";
@@ -30,13 +33,16 @@ import { makeWorkspaceKey, useTerminalStore } from "@/store/terminal-store";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { usePreviewStore } from "@/store/preview-store";
 import { useShownPreviewWorkspaceKey } from "@/lib/file-preview-actions";
-import { useUiModeStore } from "@/store/ui-mode-store";
+import { openDiffView, useDiffTabShown, useThreadHasEdits } from "@/lib/diff-actions";
+import { useDiffStore } from "@/store/diff-store";
 import { useTabGestureStore } from "@/store/tab-gesture-store";
 import { useThreadCompletionStore } from "@/store/thread-completion-store";
 import { confirmDiscardDraft, selectThread } from "@/lib/thread-actions";
 import { beginRendererInteraction } from "@/lib/monitor-runtime-observer";
-import { visibleWorkspaceThreadTabs } from "@/lib/thread-tab-state";
+import { visibleProjectThreadTabs } from "@/lib/thread-tab-state";
 import { listenForPageSwipes } from "@/lib/page-swipe";
+import { useShellProjectId } from "@/lib/shell-project";
+import { newDraftWorktreePath } from "@/lib/draft-worktree";
 import { resolveTerminalWorkspace } from "@/lib/terminal-workspace";
 import { useAnchoredPopoverPosition } from "@/lib/anchored-popover";
 import {
@@ -46,7 +52,6 @@ import {
   useRecentProjectsQuery,
 } from "@/lib/thread-queries";
 import type { Thread } from "../../contracts/threads.ts";
-import { isThreadInWorkspace, normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import {
   activeTabToClose,
   isCloseTabShortcutEvent,
@@ -61,6 +66,8 @@ import {
 const TERMINAL_TAB_PREFIX = "terminal:";
 /** The workspace's single file preview tab. */
 const PREVIEW_TAB_VALUE = "__preview__";
+/** The active thread's changes tab (hybrid shell). */
+const DIFF_TAB_VALUE = "__diff__";
 
 const IMAGE_EXTENSION = /\.(png|apng|jpe?g|gif|webp|avif|svg|ico|bmp)$/i;
 const VIDEO_EXTENSION = /\.(mp4|m4v|webm|mov|ogv)$/i;
@@ -85,13 +92,14 @@ const projectIconComponentCache = new Map<
   string,
   (props: { className?: string }) => ReactElement
 >();
-function getProjectIconComponent(name: string) {
-  let Component = projectIconComponentCache.get(name);
+function getProjectIconComponent(project: { id: string; icon: string | null }) {
+  const key = `${project.id}:${project.icon ?? ""}`;
+  let Component = projectIconComponentCache.get(key);
   if (!Component) {
     Component = (props: { className?: string }) => (
-      <ProjectIcon name={name} className={props.className} />
+      <ProjectMark project={project} className={props.className} />
     );
-    projectIconComponentCache.set(name, Component);
+    projectIconComponentCache.set(key, Component);
   }
   return Component;
 }
@@ -112,6 +120,8 @@ export function GlobalTabBar() {
   const snapshot = useAgentStore((state) => state.snapshot);
   const agentError = useAgentStore((state) => state.error);
   const runningThreadIds = useAgentStore((state) => state.runningThreadIds);
+  const agentTasks = useAgentStore((state) => state.agentTasks);
+  const threadsWaitingOnUser = useMemo(() => threadsNeedingUser(agentTasks), [agentTasks]);
   const pendingThreadTarget = useAgentStore((state) => state.pendingThreadTarget);
 
   const requestedThreadId = useWorkspaceViewStore((state) => state.requestedThreadId);
@@ -127,6 +137,10 @@ export function GlobalTabBar() {
     return preview?.path ?? null;
   });
   const closePreview = usePreviewStore((state) => state.close);
+  const showDiff = useWorkspaceViewStore((state) => state.showDiff);
+  const closeDiff = useDiffStore((state) => state.close);
+  const diffFileCount = useDiffStore((state) => state.order.length);
+  const showDiffTab = useDiffTabShown();
   const draft = useWorkspaceViewStore((state) => state.draft);
   const draftCompletionThreadId = useWorkspaceViewStore((state) => state.draftCompletionThreadId);
   const beginDraft = useWorkspaceViewStore((state) => state.beginDraft);
@@ -134,7 +148,6 @@ export function GlobalTabBar() {
   const clearDraftCompletion = useWorkspaceViewStore((state) => state.clearDraftCompletion);
 
   const terminalTabsRevision = useTerminalStore((state) => state.tabsRevision);
-  const terminalWorkspaceKey = useTerminalStore((state) => state.workspaceKey);
   const terminalTabs = useMemo(
     () =>
       useTerminalStore
@@ -147,16 +160,21 @@ export function GlobalTabBar() {
   const closeSession = useTerminalStore((state) => state.closeSession);
   const initializeGlobalListener = useTerminalStore((state) => state.initializeGlobalListener);
 
-  const selectedWorktreePathByProject = useWorktreeStore(
-    (state) => state.selectedWorktreePathByProject,
-  );
-  const uiMode = useUiModeStore((state) => state.mode);
+  // Tabs are scoped to the selected project (a draft's, while drafting).
+  const shellProjectId = useShellProjectId();
+  // There is no diff toggle in a header: the add menu reopens a closed tab.
+  const threadHasEdits = useThreadHasEdits();
+  const canViewChanges = !draft && threadHasEdits;
 
   const [projectsList, setProjectsList] = useState<
     Array<{ id: string; name: string; icon: string; path?: string }>
   >([]);
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [editingThreadId, setEditingThreadId] = useState<string | null>(null);
+  const [threadMenu, setThreadMenu] = useState<{
+    thread: Thread;
+    position: { x: number; y: number };
+  } | null>(null);
   const [editingThreadTitle, setEditingThreadTitle] = useState("");
   const [editingThreadOriginalTitle, setEditingThreadOriginalTitle] = useState("");
 
@@ -181,45 +199,18 @@ export function GlobalTabBar() {
   const optimisticRequestedThreadId =
     requestedThreadId && pendingThreadTarget === requestedThreadId ? requestedThreadId : null;
 
-  const activeWorkspacePath = useMemo(() => {
-    if (!activeProject) return null;
-    return normalizeWorkspacePath(
-      selectedWorktreePathByProject[activeProject.id],
-      activeProject.path,
-    );
-  }, [activeProject, selectedWorktreePathByProject]);
-
-  const activeTerminalWorkspaceKey = useMemo(() => {
-    if (!activeProject) return null;
-    const selectedPath = selectedWorktreePathByProject[activeProject.id] ?? activeProject.path;
-    return makeWorkspaceKey(activeProject.id, selectedPath);
-  }, [activeProject, selectedWorktreePathByProject]);
-
-  const visibleOpenThreads = useMemo(() => {
-    if (uiMode !== "advanced") return orderedOpenThreads;
-    return visibleWorkspaceThreadTabs(
-      orderedOpenThreads,
-      activeProject?.id ?? null,
-      activeWorkspacePath,
-      snapshotThreadId,
-      optimisticRequestedThreadId,
-    );
-  }, [
-    orderedOpenThreads,
-    uiMode,
-    activeProject,
-    activeWorkspacePath,
-    snapshotThreadId,
-    optimisticRequestedThreadId,
-  ]);
-
-  const visibleTerminalTabs = useMemo(() => {
-    if (uiMode !== "advanced" || !activeProject) return terminalTabs;
-    // TerminalStore already buckets sessions using the canonical workspace
-    // selected by the main process. Compare that bucket identity instead of
-    // raw cwd strings, which may differ through symlinks or Git realpaths.
-    return terminalWorkspaceKey === activeTerminalWorkspaceKey ? terminalTabs : [];
-  }, [activeProject, activeTerminalWorkspaceKey, terminalTabs, terminalWorkspaceKey, uiMode]);
+  // The thread behind a draft isn't on screen, so it earns no tab of its own
+  // when it belongs to another project.
+  const visibleOpenThreads = useMemo(
+    () =>
+      visibleProjectThreadTabs(
+        orderedOpenThreads,
+        shellProjectId,
+        draft ? null : snapshotThreadId,
+        optimisticRequestedThreadId,
+      ),
+    [orderedOpenThreads, shellProjectId, draft, snapshotThreadId, optimisticRequestedThreadId],
+  );
 
   const recentProjectsQuery = useRecentProjectsQuery(
     activeProject?.id,
@@ -402,17 +393,13 @@ export function GlobalTabBar() {
       if (!wasActive) return;
       // Persisted state always names *some* open tab as active, and when the
       // closed tab was its workspace's last one that is a tab from another
-      // workspace. Advanced mode hides those, so activating it would jump the
-      // user to a thread they cannot see; fall through to the draft/terminal
-      // path instead, exactly as if no tab remained.
+      // project, which the tab bar hides, so activating it would jump the user
+      // to a thread they cannot see; fall through to the draft/terminal path
+      // instead, exactly as if no tab remained.
       const nextThread = nextState.activeThreadId
         ? openThreads.find((thread) => thread.id === nextState.activeThreadId)
         : undefined;
-      const nextIsVisible =
-        uiMode !== "advanced" ||
-        (nextThread !== undefined &&
-          nextThread.project_id === activeProject?.id &&
-          isThreadInWorkspace(nextThread, activeWorkspacePath));
+      const nextIsVisible = nextThread !== undefined && nextThread.project_id === activeProject?.id;
       if (nextState.activeThreadId && nextIsVisible) {
         // Only bring the agent view forward when it was the view on screen.
         await handleSelectThread(nextState.activeThreadId, mode === "agent");
@@ -427,9 +414,7 @@ export function GlobalTabBar() {
           showTerminal(terminalId);
         } else {
           const project = activeProject;
-          const worktreePath = project
-            ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
-            : null;
+          const worktreePath = newDraftWorktreePath(project);
           beginDraft({
             projectId: project?.id ?? null,
             previousActiveProjectId: project?.id ?? null,
@@ -462,9 +447,7 @@ export function GlobalTabBar() {
       return;
     }
     const project = activeProject;
-    const worktreePath = project
-      ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
-      : null;
+    const worktreePath = newDraftWorktreePath(project);
     beginDraft({
       projectId: project?.id ?? null,
       previousActiveProjectId: project?.id ?? null,
@@ -481,8 +464,7 @@ export function GlobalTabBar() {
     setIsDropdownOpen(false);
     const project = useProjectStore.getState().activeProject;
     const workspace = resolveTerminalWorkspace({
-      preferThread:
-        useUiModeStore.getState().mode === "basic" && !useWorkspaceViewStore.getState().draft,
+      preferThread: !useWorkspaceViewStore.getState().draft,
       thread: useAgentStore.getState().snapshot,
       project,
       selectedPath: project
@@ -506,9 +488,7 @@ export function GlobalTabBar() {
       return;
     }
     const project = activeProject;
-    const worktreePath = project
-      ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
-      : null;
+    const worktreePath = newDraftWorktreePath(project);
     beginDraft({
       projectId: project?.id ?? null,
       previousActiveProjectId: project?.id ?? null,
@@ -541,27 +521,41 @@ export function GlobalTabBar() {
     if (mode === "preview" && !previewPath) showAgent();
   }, [mode, previewPath, showAgent]);
 
+  const handleCloseDiff = () => {
+    closeDiff();
+    if (useWorkspaceViewStore.getState().mode === "diff") showAgentOrDraft();
+  };
+
+  // The changes tab belongs to its thread. Switching to a thread without open
+  // changes (or starting a draft) must not leave the view on an empty tab.
+  useEffect(() => {
+    if (mode === "diff" && !showDiffTab) showAgent();
+  }, [mode, showDiffTab, showAgent]);
+
   // Draft is tab-less: use a sentinel that matches no TabItem so nothing highlights.
   const selectedThreadId = optimisticRequestedThreadId ?? snapshotThreadId ?? activeThreadId ?? "";
   const selectedTabValue =
     mode === "preview" && previewPath
       ? PREVIEW_TAB_VALUE
-      : mode === "terminal" && activeTerminalId
-        ? `${TERMINAL_TAB_PREFIX}${activeTerminalId}`
-        : draft
-          ? "__draft__"
-          : selectedThreadId;
+      : mode === "diff" && showDiffTab
+        ? DIFF_TAB_VALUE
+        : mode === "terminal" && activeTerminalId
+          ? `${TERMINAL_TAB_PREFIX}${activeTerminalId}`
+          : draft
+            ? "__draft__"
+            : selectedThreadId;
 
   const orderedTabValues = useMemo(
     () => [
       ...tabValuesInBarOrder(
         visibleOpenThreads.map((thread) => thread.id),
-        visibleTerminalTabs.map((session) => session.id),
+        terminalTabs.map((session) => session.id),
         TERMINAL_TAB_PREFIX,
       ),
       ...(previewPath ? [PREVIEW_TAB_VALUE] : []),
+      ...(showDiffTab ? [DIFF_TAB_VALUE] : []),
     ],
-    [visibleOpenThreads, visibleTerminalTabs, previewPath],
+    [visibleOpenThreads, terminalTabs, previewPath, showDiffTab],
   );
 
   const handleTabChangeRef = useRef<(value: string) => void>(() => {});
@@ -579,6 +573,10 @@ export function GlobalTabBar() {
     }
     if (value === PREVIEW_TAB_VALUE) {
       showPreview();
+      return;
+    }
+    if (value === DIFF_TAB_VALUE) {
+      showDiff();
       return;
     }
     const highlightPaint = new Promise<number>((resolve) => {
@@ -656,6 +654,9 @@ export function GlobalTabBar() {
       case "preview":
         handleClosePreview();
         return;
+      case "diff":
+        handleCloseDiff();
+        return;
       case "terminal":
         if (curTerminalId) handleCloseTerminal(curTerminalId);
         return;
@@ -722,6 +723,16 @@ export function GlobalTabBar() {
 
   return (
     <Tabs className="w-full min-w-0" value={selectedTabValue} onValueChange={handleTabChange}>
+      {threadMenu && (
+        <ThreadTabMenu
+          thread={threadMenu.thread}
+          projectPath={
+            projectsList.find((item) => item.id === threadMenu.thread.project_id)?.path ?? ""
+          }
+          position={threadMenu.position}
+          onClose={() => setThreadMenu(null)}
+        />
+      )}
       <div
         className="flex w-full max-w-[1000px] min-w-0 items-center gap-1"
         data-pipper-id="global-tab-bar"
@@ -736,7 +747,7 @@ export function GlobalTabBar() {
             const Icon = isThreadWorking
               ? TabWorkingIcon
               : project
-                ? getProjectIconComponent(project.icon)
+                ? getProjectIconComponent(project)
                 : undefined;
             const isEditing = editingThreadId === thread.id;
             const tabTitle = thread.title ?? "New thread";
@@ -748,6 +759,8 @@ export function GlobalTabBar() {
                 label={tabTitle}
                 scrollLabelOnHover
                 icon={Icon}
+                attention={threadsWaitingOnUser.has(thread.id)}
+                title={threadsWaitingOnUser.has(thread.id) ? "A subthread needs you" : undefined}
                 onClose={() => handleCloseThreadTab(thread.id)}
                 editing={isEditing}
                 editValue={isEditing ? editingThreadTitle : tabTitle}
@@ -755,11 +768,16 @@ export function GlobalTabBar() {
                 onEditCommit={commitRenameThread}
                 onEditCancel={cancelRenameThread}
                 onDoubleClick={() => startRenameThread(thread.id, tabTitle)}
+                onContextMenu={(event) => {
+                  if (!project) return;
+                  event.preventDefault();
+                  setThreadMenu({ thread, position: { x: event.clientX, y: event.clientY } });
+                }}
                 data-pipper-id={`thread-tab-${thread.id}`}
               />
             );
           })}
-          {visibleTerminalTabs.map((session, idx) => (
+          {terminalTabs.map((session, idx) => (
             <TabItem
               key={session.id}
               index={visibleOpenThreads.length + idx}
@@ -790,7 +808,7 @@ export function GlobalTabBar() {
           {previewPath && (
             <TabItem
               key={PREVIEW_TAB_VALUE}
-              index={visibleOpenThreads.length + visibleTerminalTabs.length}
+              index={visibleOpenThreads.length + terminalTabs.length}
               value={PREVIEW_TAB_VALUE}
               label={previewPath.slice(previewPath.lastIndexOf("/") + 1)}
               scrollLabelOnHover
@@ -798,6 +816,22 @@ export function GlobalTabBar() {
               onClose={handleClosePreview}
               title={previewPath}
               data-pipper-id="preview-tab"
+            />
+          )}
+          {showDiffTab && (
+            <TabItem
+              key={DIFF_TAB_VALUE}
+              index={visibleOpenThreads.length + terminalTabs.length + (previewPath ? 1 : 0)}
+              value={DIFF_TAB_VALUE}
+              label="Changes"
+              icon={PlusMinusIcon}
+              onClose={handleCloseDiff}
+              title={
+                diffFileCount > 0
+                  ? `${diffFileCount} changed ${diffFileCount === 1 ? "file" : "files"}`
+                  : "Changes"
+              }
+              data-pipper-id="diff-tab"
             />
           )}
         </TabsList>
@@ -847,9 +881,20 @@ export function GlobalTabBar() {
                     icon={ChatCircleIcon}
                     onSelect={handleNewThread}
                   />
+                  {canViewChanges && (
+                    <MenuItem
+                      index={2}
+                      label="View changes"
+                      icon={PlusMinusIcon}
+                      onSelect={() => {
+                        setIsDropdownOpen(false);
+                        openDiffView();
+                      }}
+                    />
+                  )}
                   <DropdownSeparator />
                   <MenuItem
-                    index={2}
+                    index={canViewChanges ? 3 : 2}
                     label="New project"
                     icon={FolderPlusIcon}
                     onSelect={async () => {

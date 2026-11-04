@@ -19,6 +19,16 @@ interface ToastOptions {
   action?: ToastAction;
 }
 
+/** Character caps; line clamps below keep even unbroken text to a few lines. */
+export const TOAST_TITLE_MAX = 80;
+export const TOAST_DESCRIPTION_MAX = 160;
+
+/** Collapse whitespace and cut at `max` characters, ending in an ellipsis. */
+export function clampToastText(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
+}
+
 function ToastContent({
   icon,
   title,
@@ -30,9 +40,19 @@ function ToastContent({
     <div className={cn("flex items-start gap-3 p-3 ", surfaceClasses(3))}>
       <div className="shrink-0 mt-0.5">{icon}</div>
       <div className="flex flex-col gap-0.5 min-w-0">
-        <p className="text-[14px] text-foreground font-medium leading-tight">{title}</p>
+        <p
+          className="line-clamp-2 break-words text-[14px] text-foreground font-medium leading-tight"
+          title={title}
+        >
+          {clampToastText(title, TOAST_TITLE_MAX)}
+        </p>
         {description && (
-          <p className="text-[13px] text-muted-foreground leading-snug">{description}</p>
+          <p
+            className="line-clamp-2 break-words text-[13px] text-muted-foreground leading-snug"
+            title={description}
+          >
+            {clampToastText(description, TOAST_DESCRIPTION_MAX)}
+          </p>
         )}
       </div>
       {action && (

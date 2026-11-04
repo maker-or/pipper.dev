@@ -26,7 +26,13 @@ import {
   updateWorkspaceSelection,
 } from "./launch-state";
 import { pickWorkspaceThread } from "../contracts/workspace-scope.ts";
-import { createProject, getProject, listProjects } from "./projects";
+import {
+  createProject,
+  getProject,
+  listProjects,
+  removeProject,
+  reorderProjects,
+} from "./projects";
 import {
   canOpenExternally,
   FILE_PREVIEW_SCHEME,
@@ -84,10 +90,38 @@ import {
   setSelectedAgentIds,
   saveGithubPrSnapshot,
 } from "./db";
-import { getThread, listThreads, listThreadsByIds, listProjectThreads } from "./threads";
-import type { OpenTabsState } from "../contracts/threads.ts";
+import {
+  getThread,
+  listThreads,
+  listThreadsByIds,
+  listProjectThreads,
+  updateThreadWorktreePath,
+} from "./threads";
+import { runAsUser } from "./operations/define.ts";
+import { ProvenanceStore } from "./operations/provenance.ts";
+import {
+  configureSettingsOperations,
+  SettingChangeStore,
+  undoSettingsChange,
+} from "./operations/settings.ts";
+import {
+  configureThreadOperations,
+  createThread as createThreadOperation,
+  deleteThread as deleteThreadOperation,
+  moveThread as moveThreadOperation,
+} from "./operations/threads.ts";
+import {
+  configureWorkspaceOperations,
+  createWorkspace as createWorkspaceOperation,
+  deleteWorkspace as deleteWorkspaceOperation,
+  listWorkspaces as listWorkspacesOperation,
+} from "./operations/workspaces.ts";
 import type { BrowserConfig, InlineWidgetDocument } from "../contracts/acp.ts";
-import { listMcpServers, createMcpServer, updateMcpServer, deleteMcpServer } from "./mcp-servers";
+import { ConnectorStore } from "./connectors/connector-store.ts";
+import { addConnector, removeConnector, updateConnector } from "./connectors/connector-edits.ts";
+import { ConnectorGateway } from "./connectors/connector-gateway.ts";
+import { ConnectorRequests } from "./connectors/connector-requests.ts";
+import { ensureStdioProxyScript } from "./mcp/stdio-proxy.ts";
 import {
   installAgentInstanceProvider,
   listAgentInstancesForRenderer,
@@ -127,6 +161,7 @@ import {
   setTabEventObserver,
 } from "./open-tabs";
 import { isActivationSuperseded } from "./activation.ts";
+import { activateProjectSelection } from "./project-activation.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
 import {
   captureAnalytics,
@@ -148,7 +183,7 @@ import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
 import { RemoteAccessController } from "./remote-access.ts";
-import { DesktopIdentity, withSignInParams } from "./desktop-identity.ts";
+import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
 import { RemoteDeviceStore } from "./remote-devices.ts";
 import type { RemoteScope, RemoteTransport } from "../contracts/remote.ts";
 import { ThreadBenchmarkController } from "./thread-benchmark.ts";
@@ -168,6 +203,8 @@ import { resolveLauncherUpdateManifestUrl } from "./launcher-update-config.ts";
 import { runShutdownSteps } from "./bounded-shutdown.ts";
 import { waitForPidsToExit } from "./child-process.ts";
 import { killAllProviderProcessesSync } from "./provider-processes.ts";
+import { popupNativeMenu } from "./native-menu.ts";
+import { parseNativeMenuRequest } from "../contracts/native-menu.ts";
 import {
   PIPPER_LAUNCHER_MAC_MANIFEST_URL,
   PIPPER_LAUNCHER_WINDOWS_MANIFEST_URL,
@@ -425,6 +462,7 @@ let mainWindow: BrowserWindow | null = null;
 let launchWindow: BrowserWindow | null = null;
 let monitorWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let themeLabWindow: BrowserWindow | null = null;
 let agentManager: AgentManager | null = null;
 let browserService: BrowserService | null = null;
 /**
@@ -485,17 +523,62 @@ let sleeplessController: SleeplessController | null = null;
 let remoteAccess: RemoteAccessController | null = null;
 let desktopIdentityInstance: DesktopIdentity | null = null;
 
+/** The OS keychain, through Electron's safeStorage. */
+const keychainBox: SecretBox = {
+  available: () => safeStorage.isEncryptionAvailable(),
+  encrypt: (plain) => safeStorage.encryptString(plain),
+  decrypt: (cipher) => safeStorage.decryptString(cipher),
+};
+
 /** Laptop id, sign-in state, and the pipper.dev laptop credential (encrypted at rest). */
 function desktopIdentity(): DesktopIdentity {
   desktopIdentityInstance ??= new DesktopIdentity({
     dir: app.getPath("userData"),
-    secretBox: {
-      available: () => safeStorage.isEncryptionAvailable(),
-      encrypt: (plain) => safeStorage.encryptString(plain),
-      decrypt: (cipher) => safeStorage.decryptString(cipher),
-    },
+    secretBox: keychainBox,
   });
   return desktopIdentityInstance;
+}
+
+let connectors: {
+  store: ConnectorStore;
+  gateway: ConnectorGateway;
+  requests: ConnectorRequests;
+} | null = null;
+
+/**
+ * The user's MCP servers, the gateway that serves the remote ones to
+ * sessions, and the cards agents' `add_connector` calls show.
+ */
+function requireConnectors(): {
+  store: ConnectorStore;
+  gateway: ConnectorGateway;
+  requests: ConnectorRequests;
+} {
+  if (!connectors) {
+    const store = new ConnectorStore(() => getDb(), keychainBox);
+    store.sealPlainEnv();
+    const holder: { requests: ConnectorRequests | null } = { requests: null };
+    const gateway = new ConnectorGateway({
+      store,
+      openExternal: (url) => shell.openExternal(url),
+      stdioShimPath: () =>
+        ensureStdioProxyScript(join(app.getPath("userData"), "connectors-stdio-proxy.mjs")),
+      onChanged: (connector) => {
+        broadcastToWindows("connectors:changed", connector);
+        holder.requests?.connectorChanged(connector.id);
+      },
+      clientVersion: app.getVersion(),
+    });
+    const requests = new ConnectorRequests({
+      db: () => getDb(),
+      store,
+      gateway,
+      onChanged: (request) => broadcastToWindows("connectorRequests:changed", request),
+    });
+    holder.requests = requests;
+    connectors = { store, gateway, requests };
+  }
+  return connectors;
 }
 let authCallbackServer: http.Server | null = null;
 let authCallbackPort: number | null = null;
@@ -924,7 +1007,7 @@ function makeWorkspacePeerPredicate(threadId: string): ((id: string) => boolean)
 }
 
 function resolveRendererUrl(
-  page: "main" | "launch" | "monitor" | "settings",
+  page: "main" | "launch" | "monitor" | "settings" | "theme-lab",
   stage?: string,
 ): string {
   const base = process.env["ELECTRON_RENDERER_URL"];
@@ -936,14 +1019,18 @@ function resolveRendererUrl(
         ? `${base}/monitor.html`
         : page === "settings"
           ? `${base}/settings.html`
-          : base;
+          : page === "theme-lab"
+            ? `${base}/theme-lab.html`
+            : base;
   if (stage) {
     url += `?stage=${stage}`;
   }
   return url;
 }
 
-function resolveRendererFile(page: "main" | "launch" | "monitor" | "settings"): string {
+function resolveRendererFile(
+  page: "main" | "launch" | "monitor" | "settings" | "theme-lab",
+): string {
   const fileName =
     page === "launch"
       ? "launch.html"
@@ -951,7 +1038,9 @@ function resolveRendererFile(page: "main" | "launch" | "monitor" | "settings"): 
         ? "monitor.html"
         : page === "settings"
           ? "settings.html"
-          : "index.html";
+          : page === "theme-lab"
+            ? "theme-lab.html"
+            : "index.html";
   return join(mainDir, "../renderer", fileName);
 }
 
@@ -982,11 +1071,13 @@ const PIPPER_DOCS_URL_PREFIXES = ["https://www.pipper.dev/docs/", "https://pippe
 // Workspace panel links to the branch's pull request. Only PR pages — not
 // arbitrary GitHub URLs — so a crafted `gh` response can't open anything else.
 const GITHUB_PR_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+\/?$/;
+/** A repository's home page, opened from the session panel. */
+const GITHUB_REPO_URL = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/?$/;
 
 function isAllowedExternalUrl(inputUrl: string): boolean {
   if (inputUrl === "https://cli.github.com/") return true;
   if (isAllowedClerkAuthUrl(inputUrl)) return true;
-  if (GITHUB_PR_URL.test(inputUrl)) return true;
+  if (GITHUB_PR_URL.test(inputUrl) || GITHUB_REPO_URL.test(inputUrl)) return true;
   // Onboarding verification cards link failing agents to their setup guide.
   return PIPPER_DOCS_URL_PREFIXES.some((prefix) => inputUrl.startsWith(prefix));
 }
@@ -1103,7 +1194,7 @@ async function prepareBenchmarkLaunchState(): Promise<string | null> {
   });
   const project =
     listProjects().find((candidate) => candidate.path === projectPath) ??
-    createProject({ name: "Thread Benchmark", path: projectPath, icon: "gauge" });
+    createProject({ name: "Thread Benchmark", path: projectPath, icon: "pentagon" });
   setSelectedAgentIds(["pipper-mock"]);
   await markLaunchComplete(project.id);
   setActiveProjectId(project.id);
@@ -1182,7 +1273,7 @@ function getAuthCallbackUrl(): string {
 
 function loadInto(
   win: BrowserWindow,
-  page: "main" | "launch" | "monitor" | "settings",
+  page: "main" | "launch" | "monitor" | "settings" | "theme-lab",
   stage?: string,
 ): Promise<void> {
   logStartupMilestone("loadInto:start", `page=${page}${stage ? ` stage=${stage}` : ""}`);
@@ -1345,6 +1436,49 @@ function createSettingsWindow(): void {
   });
 
   void loadInto(settingsWindow, "settings");
+}
+
+/** A temporary window for tuning the git-state colours against the shell. */
+function createThemeLabWindow(): void {
+  if (themeLabWindow && !themeLabWindow.isDestroyed()) {
+    if (themeLabWindow.isMinimized()) themeLabWindow.restore();
+    themeLabWindow.show();
+    themeLabWindow.focus();
+    return;
+  }
+
+  themeLabWindow = new BrowserWindow({
+    width: 1440,
+    height: 880,
+    minWidth: 1100,
+    minHeight: 640,
+    title: "Theme lab",
+    show: false,
+    icon: getIconPath(),
+    backgroundColor: "#171717",
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 18 } }
+      : {}),
+    webPreferences: {
+      preload: join(mainDir, "../preload/index.js"),
+      sandbox: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  themeLabWindow.on("ready-to-show", () => {
+    themeLabWindow?.show();
+    themeLabWindow?.focus();
+  });
+
+  themeLabWindow.on("closed", () => {
+    themeLabWindow = null;
+  });
+
+  themeLabWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+
+  void loadInto(themeLabWindow, "theme-lab");
 }
 
 function createMonitorWindow(): void {
@@ -1564,6 +1698,10 @@ function buildAppMenu(): void {
                 click: () => createSettingsWindow(),
               },
               {
+                label: "Theme Lab…",
+                click: () => createThemeLabWindow(),
+              },
+              {
                 label: "Send Test Notification",
                 click: () => {
                   osNotifier({
@@ -1636,6 +1774,10 @@ function buildAppMenu(): void {
               label: "Settings…",
               accelerator: "CommandOrControl+,",
               click: () => createSettingsWindow(),
+            },
+            {
+              label: "Theme Lab…",
+              click: () => createThemeLabWindow(),
             },
             { type: "separator" },
             { role: "quit" },
@@ -1806,6 +1948,49 @@ function registerIpc(): void {
 
   ipcMain.handle("projects:list", () => listProjects());
 
+  ipcMain.handle("projects:reorder", (_event, ids: unknown) => {
+    if (!Array.isArray(ids) || !ids.every((id) => typeof id === "string")) {
+      throw new Error("Invalid project order.");
+    }
+    return reorderProjects(ids);
+  });
+
+  ipcMain.handle("projects:delete", async (_event, projectId: string) => {
+    requireAuthenticatedUserForLaunch();
+    const project = getProject(projectId);
+    if (!project) throw new Error("Project not found.");
+
+    const wasActive = getActiveProjectId() === projectId;
+    const fallback = wasActive ? listProjects().find((item) => item.id !== projectId) : null;
+    if (fallback) await requireAgentManager().activateProject(fallback.id);
+
+    // Delete threads through the normal lifecycle so provider sessions, open
+    // tabs, snapshots, and running agent tasks are cleaned up before the
+    // project's cascading database delete.
+    const projectThreads = listThreads().filter((thread) => thread.project_id === projectId);
+    for (const thread of projectThreads) {
+      if (!getThread(thread.id)) continue;
+      await runAsUser(deleteThreadOperation, { thread: thread.id });
+    }
+
+    removeProject(projectId);
+    let activeProjectId = getActiveProjectId();
+    if (wasActive && !fallback) {
+      setActiveProjectId("");
+      await updateLaunchSelection({ projectId: null, threadId: null });
+      activeProjectId = null;
+    }
+
+    broadcastToWindows("projects:deleted", projectId);
+    if (wasActive && !fallback) {
+      createLaunchWindow("list");
+      setTimeout(() => {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+      }, 0);
+    }
+    return { activeProjectId };
+  });
+
   ipcMain.handle("github:getStatus", async () => {
     requireAuthenticatedUserForLaunch();
     const { getGitHubCliStatus } = await import("./github-onboarding.ts");
@@ -1938,6 +2123,13 @@ function registerIpc(): void {
     },
   );
 
+  ipcMain.handle("menu:popup", async (event, raw: unknown) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const request = parseNativeMenuRequest(raw);
+    if (!win || !request) return null;
+    return popupNativeMenu(win, request);
+  });
+
   ipcMain.handle("dialog:pickDirectory", async () => {
     const win = launchWindow ?? mainWindow ?? BrowserWindow.getFocusedWindow();
     const options: import("electron").OpenDialogOptions = {
@@ -1952,13 +2144,35 @@ function registerIpc(): void {
     return result.filePaths[0] ?? null;
   });
 
-  ipcMain.handle("worktrees:list", (_event, projectId: string) => {
-    const project = getProject(projectId);
-    if (!project) throw new Error(`Project not found: ${projectId}`);
-    // Include the project root so the title bar can show its real branch
-    // alongside the linked worktrees.
-    return listWorktrees(project.path);
+  configureWorkspaceOperations({
+    listProjects,
+    getProject,
+    listWorktrees,
+    createWorkspace,
+    cancelWorkspaceSetup,
+    removeWorktree,
+    gitStatus: (path) => getWorkspaceGitStatus(path),
+    listThreads,
+    threadTitle: (threadId) => getThread(threadId)?.title ?? null,
+    deleteThread: (threadId) => requireAgentManager().deleteThread(threadId),
+    activeThreadId: () => requireAgentManager().getState().threadId ?? null,
+    switchThread: async (threadId) => {
+      await requireAgentManager().switchThread(threadId);
+    },
+    clearActiveThread: () => requireAgentManager().clearActiveThread(),
+    removeThreadTabs,
+    readOpenTabsState,
+    broadcastTabs: (state) => broadcastOpenTabsChanged(mainWindow, state),
+    broadcastDeleted: (event) => broadcastToWindows("worktrees:deleted", event),
+    broadcastChanged: (event) => broadcastToWindows("worktrees:changed", event),
+    readWorkspaceSelections,
+    updateWorkspaceSelection,
+    provenance: new ProvenanceStore(() => getDb()),
   });
+
+  ipcMain.handle("worktrees:list", (_event, projectId: string) =>
+    runAsUser(listWorkspacesOperation, { project: projectId }),
+  );
   ipcMain.handle("worktrees:getAutoInstall", () => getWorktreeAutoInstall());
   ipcMain.handle("worktrees:setAutoInstall", (_event, enabled: boolean) =>
     setWorktreeAutoInstall(enabled),
@@ -1992,11 +2206,19 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "worktrees:switchBranch",
-    async (_event, input: { projectId: string; path: string; branch: string }) => {
+    async (
+      _event,
+      input: { projectId: string; path: string; branch: string; activate?: boolean },
+    ) => {
       const project = getProject(input.projectId);
       if (!project) throw new Error(`Project not found: ${input.projectId}`);
 
       const worktree = await switchWorktreeBranch(project.path, input.path, input.branch);
+      // Every picker showing this worktree's branch re-reads it.
+      broadcastToWindows("worktrees:changed", { projectId: project.id });
+      // The hybrid shell switches the displayed thread's branch in place; it
+      // must not swap the thread on screen for another one in that worktree.
+      if (input.activate === false) return { thread: null, worktree };
       try {
         const { thread } = await activateProjectWorktree(input.projectId, worktree.path);
         return { thread, worktree };
@@ -2020,8 +2242,8 @@ function registerIpc(): void {
     // Shared with remote/phone creation: the user's setup policy installs
     // dependencies in the background (installs can take minutes; the create
     // itself stays snappy) and streams progress to the renderer for toasts.
-    const { project, worktree } = await createWorkspace({
-      projectId: input.projectId,
+    const { project, worktree } = await runAsUser(createWorkspaceOperation, {
+      project: input.projectId,
       name: input.name,
       activation: "foreground",
     });
@@ -2224,123 +2446,9 @@ function registerIpc(): void {
     },
   );
 
-  ipcMain.handle("worktrees:delete", async (_event, input: { projectId: string; path: string }) => {
-    const project = getProject(input.projectId);
-    if (!project) throw new Error(`Project not found: ${input.projectId}`);
-    const target = (await listWorktrees(project.path)).find(
-      (worktree) => !worktree.isProjectRoot && samePath(worktree.path, input.path),
-    );
-    if (!target) throw new Error("Workspace is no longer available");
-    const threads = listThreads().filter(
-      (thread) =>
-        thread.project_id === input.projectId &&
-        thread.worktree_path != null &&
-        samePath(thread.worktree_path, target.path),
-    );
-    const manager = requireAgentManager();
-    const deletedThreadIds = new Set(threads.map((thread) => thread.id));
-    const cleanupErrors: unknown[] = [];
-
-    // Stop a queued or running dependency install so it cannot keep writing
-    // into (or later recreate files in) the workspace being removed.
-    await cancelWorkspaceSetup(target.path);
-    // Remove the Git worktree first. If Git refuses because of a lock,
-    // permissions, or a concurrent change, no chats have been deleted yet.
-    const removed = await removeWorktree(project.path, target.path, project.id);
-    // Terminals are owned by renderer workspace buckets. Notify it as soon
-    // as Git removes the worktree, even if later chat cleanup fails.
-    broadcastToWindows("worktrees:deleted", { projectId: project.id, path: target.path });
-
-    // Run every cleanup operation even if one fails. Git has already removed
-    // the workspace, so leaving the remaining tabs or threads untouched would
-    // strand them against a path that no longer exists.
-    //
-    // One persisted write drops every deleted tab: a per-thread close could
-    // fail midway and leave a stale ID in launch state that resurfaces after
-    // restart, bound to a worktree that no longer exists.
-    let tabs: OpenTabsState | null = null;
-    try {
-      tabs = await removeThreadTabs([...deletedThreadIds]);
-    } catch (error) {
-      console.error("[IPC] Failed to persist tab cleanup after worktree removal:", error);
-      cleanupErrors.push(error);
-    }
-
-    const threadResults = await Promise.allSettled(
-      threads.map((thread) => manager.deleteThread(thread.id)),
-    );
-    threadResults.forEach((result, index) => {
-      if (result.status === "rejected") {
-        const threadId = threads[index]?.id ?? "unknown";
-        console.error(
-          `[IPC] Failed to delete thread ${threadId} after worktree removal:`,
-          result.reason,
-        );
-        cleanupErrors.push(result.reason);
-      }
-    });
-
-    try {
-      // Fall back to the project's root checkout. Its path comes from the
-      // live worktree list (the same value a root switch persists), not
-      // `project.path`: for a project registered at a repository subdirectory
-      // the two can differ, and the selection must name a real workspace.
-      const rootWorktree = (await listWorktrees(project.path)).find(
-        (worktree) => worktree.isProjectRoot,
-      );
-      await updateWorkspaceSelection(project.id, rootWorktree?.path ?? project.path);
-    } catch (error) {
-      console.error(
-        `[IPC] Failed to reconcile workspace selection after deleting ${target.path}:`,
-        error,
-      );
-      cleanupErrors.push(error);
-    }
-
-    // When the persisted tab write failed, stale IDs may remain on disk. Still
-    // never broadcast them back to the renderer or reactivate a thread whose
-    // workspace has just been removed — reconcile the in-memory view instead.
-    let reconciledTabs: OpenTabsState | null = tabs;
-    if (!reconciledTabs) {
-      try {
-        const persisted = await readOpenTabsState();
-        const openThreadIds = persisted.openThreadIds.filter((id) => !deletedThreadIds.has(id));
-        reconciledTabs = {
-          openThreadIds,
-          activeThreadId:
-            persisted.activeThreadId && !deletedThreadIds.has(persisted.activeThreadId)
-              ? persisted.activeThreadId
-              : (openThreadIds[0] ?? null),
-          threadSwitchHistory: persisted.threadSwitchHistory.filter(
-            (id) => !deletedThreadIds.has(id),
-          ),
-        };
-      } catch (error) {
-        console.error("[IPC] Failed to read tabs after worktree cleanup:", error);
-        cleanupErrors.push(error);
-      }
-    }
-
-    try {
-      const activeThreadId = reconciledTabs?.activeThreadId ?? manager.getState().threadId ?? null;
-      if (activeThreadId && !deletedThreadIds.has(activeThreadId)) {
-        if (manager.getState().threadId !== activeThreadId) {
-          await manager.switchThread(activeThreadId);
-        }
-      } else {
-        await manager.clearActiveThread();
-      }
-    } catch (error) {
-      console.error("[IPC] Failed to reconcile active thread after worktree cleanup:", error);
-      cleanupErrors.push(error);
-    }
-
-    if (reconciledTabs) broadcastOpenTabsChanged(mainWindow, reconciledTabs);
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError(cleanupErrors, "Workspace removed, but some chat cleanup failed");
-    }
-    return removed;
-  });
+  ipcMain.handle("worktrees:delete", (_event, input: { projectId: string; path: string }) =>
+    runAsUser(deleteWorkspaceOperation, { project: input.projectId, path: input.path }),
+  );
 
   // Links surfaced from the workspace's own PR (CI runs, preview deploys,
   // review comments) live on arbitrary hosts. Scheme-gated only: never file:,
@@ -2522,12 +2630,16 @@ function registerIpc(): void {
     if (!project) {
       throw new Error(`Project not found: ${projectId}`);
     }
-    const previousProjectId = getActiveProjectId();
-    setActiveProjectId(projectId);
     try {
-      await requireAgentManager().activateProject(projectId);
+      const { superseded } = await activateProjectSelection({
+        projectId,
+        getActiveProjectId,
+        setActiveProjectId,
+        activate: (id) => requireAgentManager().activateProject(id),
+      });
+      // A newer click took over; it announces its own project.
+      if (superseded) return;
     } catch (err) {
-      if (previousProjectId) setActiveProjectId(previousProjectId);
       console.error(`[Main] Failed to activate project ${projectId} in agent manager:`, err);
       throw err;
     }
@@ -2551,7 +2663,7 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "threads:create",
-    (
+    async (
       _event,
       projectId: string,
       title: string | null,
@@ -2559,13 +2671,15 @@ function registerIpc(): void {
       agentId?: string | null,
       worktreePath?: string | null,
     ) => {
-      return requireAgentManager().createThread(
-        projectId,
+      const created = await runAsUser(createThreadOperation, {
+        project: projectId,
+        agent: agentId ?? null,
         title,
-        afterThreadId ?? null,
-        agentId ?? null,
-        worktreePath ?? null,
-      );
+        workspace: worktreePath ?? null,
+        after: afterThreadId ?? null,
+        activation: "foreground",
+      });
+      return created.thread;
     },
   );
 
@@ -2573,16 +2687,99 @@ function registerIpc(): void {
     return requireAgentManager().renameThread(id, title);
   });
 
-  ipcMain.handle("threads:delete", async (_event, id: string) => {
-    const isPeer = makeWorkspacePeerPredicate(id);
-    const manager = requireAgentManager();
-    await manager.deleteThread(id);
-    // After deleteThread: its own replacement switch is part of this delete.
-    const selectionAtClose = manager.selectionGeneration();
-    const next = await closeThreadTab(id, isPeer);
-    await activateTabAfterClose(manager, next, selectionAtClose);
-    broadcastOpenTabsChanged(mainWindow, next);
+  const settingChanges = new SettingChangeStore(() => getDb());
+  configureSettingsOperations({
+    getAgentTasks: () => requireAgentManager().getAgentTaskConfig(),
+    setAgentTasks: (partial) => requireAgentManager().setAgentTaskConfig(partial),
+    getBrowser: () => {
+      if (!browserService) throw new Error("Browser service is not ready");
+      return browserService.getConfig();
+    },
+    setBrowser: (partial) => {
+      if (!browserService) throw new Error("Browser service is not ready");
+      return browserService.setConfig(partial);
+    },
+    getAutoInstall: getWorktreeAutoInstall,
+    setAutoInstall: setWorktreeAutoInstall,
+    connectors: {
+      list: () => {
+        const { store, gateway } = requireConnectors();
+        return store.list().map((row) => gateway.snapshotOf(row));
+      },
+      setEnabled: (id, enabled) => {
+        requireConnectors().gateway.setEnabled(id, enabled);
+      },
+    },
+    changes: settingChanges,
   });
+  ipcMain.handle("themeLab:open", () => createThemeLabWindow());
+  ipcMain.handle("settings:getChange", (_event, id: string) => settingChanges.get(String(id)));
+  ipcMain.handle("settings:undoChange", (_event, id: string) =>
+    runAsUser(undoSettingsChange, { change: String(id) }),
+  );
+
+  configureThreadOperations({
+    getThread,
+    listModels: async (agentId) =>
+      (await requireAgentManager().getModelCatalogs())[agentId] ?? null,
+    createThread: (input) =>
+      requireAgentManager().createThread(
+        input.projectId,
+        input.title,
+        input.after,
+        input.agentId,
+        input.worktreePath,
+        input.model,
+        // A background (agent) thread must get the worktree it asked for, not
+        // fall back to the root when the worktree is missing.
+        { background: input.background, requireWorktree: input.background && !!input.worktreePath },
+      ),
+    getProject,
+    listWorktrees,
+    threadTitle: (id) => getThread(id)?.title ?? null,
+    isTurnInFlight: (id) => requireAgentManager().isThreadTurnInFlight(id),
+    deleteThread: async (id) => {
+      const isPeer = makeWorkspacePeerPredicate(id);
+      const manager = requireAgentManager();
+      await manager.deleteThread(id);
+      // After deleteThread: its own replacement switch is part of this delete.
+      const selectionAtClose = manager.selectionGeneration();
+      const next = await closeThreadTab(id, isPeer);
+      await activateTabAfterClose(manager, next, selectionAtClose);
+      broadcastOpenTabsChanged(mainWindow, next);
+    },
+    setThreadWorkspace: updateThreadWorktreePath,
+    reloadThreadSession: (id) => requireAgentManager().reloadThreadSession(id),
+    threadChanged: (id) => {
+      const manager = requireAgentManager();
+      manager.announceThreadUpdated(id);
+      // The thread on screen moved: the workspace selection follows it, so
+      // the user lands where the thread went.
+      const thread = getThread(id);
+      const project = thread ? getProject(thread.project_id) : null;
+      if (!thread || !project || manager.getState().threadId !== id) return;
+      void updateWorkspaceSelection(project.id, thread.worktree_path ?? project.path)
+        .then(() => broadcastToWindows("worktrees:changed", { projectId: project.id }))
+        .catch((error: unknown) => {
+          console.error("[threads] Failed to follow a moved thread's workspace:", error);
+        });
+    },
+    uncommittedFiles: async (path) => {
+      try {
+        return (await getWorkspaceGitStatus(path)).files.map((file) => file.path);
+      } catch {
+        return null;
+      }
+    },
+  });
+
+  ipcMain.handle("threads:delete", async (_event, id: string) => {
+    await runAsUser(deleteThreadOperation, { thread: id });
+  });
+
+  ipcMain.handle("threads:move", (_event, input: { threadId: string; workspace: string }) =>
+    runAsUser(moveThreadOperation, { thread: input.threadId, workspace: input.workspace }),
+  );
 
   ipcMain.handle("tabs:listOpen", () => readOpenTabsState());
   ipcMain.handle("tabs:isFluidPageSwipeEnabled", () => isFluidPageSwipeEnabled());
@@ -2679,7 +2876,7 @@ function registerIpc(): void {
   });
   ipcMain.handle(
     "agent:createThread",
-    (
+    async (
       _event,
       projectId: string,
       title: string | null,
@@ -2689,14 +2886,16 @@ function registerIpc(): void {
       initialModelId?: string | null,
     ) => {
       try {
-        return requireAgentManager().createThread(
-          projectId,
+        const created = await runAsUser(createThreadOperation, {
+          project: projectId,
+          agent: agentId ?? null,
           title,
-          afterThreadId ?? null,
-          agentId ?? null,
-          worktreePath ?? null,
-          initialModelId ?? null,
-        );
+          workspace: worktreePath ?? null,
+          model: initialModelId ?? null,
+          after: afterThreadId ?? null,
+          activation: "foreground",
+        });
+        return created.thread;
       } catch (e: any) {
         console.error("[IPC] agent:createThread error:", e);
         throw e;
@@ -2823,11 +3022,22 @@ function registerIpc(): void {
     windowVisibilityGate.setRendererVisible(visible === true);
   });
 
-  ipcMain.handle("subagents:getConfig", () => requireAgentManager().getSubagentConfig());
-  ipcMain.handle("subagents:setConfig", (_event, partial) =>
-    requireAgentManager().setSubagentConfig(partial),
+  ipcMain.handle("agentTasks:getConfig", () => requireAgentManager().getAgentTaskConfig());
+  ipcMain.handle("agentTasks:setConfig", (_event, partial) =>
+    requireAgentManager().setAgentTaskConfig(partial),
   );
-  ipcMain.handle("subagents:listRuns", () => requireAgentManager().getSubagentRuns());
+  ipcMain.handle("agentTasks:list", () => requireAgentManager().getAgentTasks());
+  ipcMain.handle("agentTasks:getProposals", (_event, ids: unknown) =>
+    requireAgentManager().getThreadProposals(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    ),
+  );
+  ipcMain.handle("agentTasks:startProposal", (_event, id: string) =>
+    requireAgentManager().startThreadProposal(String(id)),
+  );
+  ipcMain.handle("agentTasks:dismissProposal", (_event, id: string) =>
+    requireAgentManager().dismissThreadProposal(String(id)),
+  );
 
   ipcMain.handle(
     "widgets:getDocument",
@@ -2844,12 +3054,97 @@ function registerIpc(): void {
     return browserService.setConfig(partial);
   });
 
-  ipcMain.handle("mcp:list", () => listMcpServers());
-  ipcMain.handle("mcp:create", (_event, input) => createMcpServer(input));
-  ipcMain.handle("mcp:update", (_event, id: string, input) => updateMcpServer(id, input));
-  ipcMain.handle("mcp:delete", (_event, id: string) => {
-    deleteMcpServer(id);
+  ipcMain.handle("mcp:list", () => requireConnectors().store.list());
+  ipcMain.handle("mcp:create", (_event, input) => requireConnectors().store.create(input));
+  ipcMain.handle("mcp:update", (_event, id: string, input) => {
+    const { store, gateway } = requireConnectors();
+    gateway.forget(String(id));
+    return store.update(String(id), input);
   });
+  ipcMain.handle("mcp:delete", (_event, id: string) => {
+    const { store, gateway } = requireConnectors();
+    gateway.forget(String(id));
+    store.remove(String(id));
+  });
+  ipcMain.handle("connectors:list", () => {
+    const { store, gateway } = requireConnectors();
+    return store.list().map((row) => gateway.snapshotOf(row));
+  });
+  ipcMain.handle("connectors:add", (_event, input: unknown) => {
+    const { store, gateway } = requireConnectors();
+    return addConnector(store, gateway, input);
+  });
+  ipcMain.handle("connectors:update", (_event, id: string, input: unknown) => {
+    const { store, gateway } = requireConnectors();
+    return updateConnector(store, gateway, String(id), input);
+  });
+  ipcMain.handle("connectors:remove", (_event, id: string) => {
+    const { store, gateway } = requireConnectors();
+    removeConnector(store, gateway, String(id));
+    broadcastToWindows("connectors:removed", String(id));
+  });
+  ipcMain.handle("connectors:connect", (_event, id: string) =>
+    requireConnectors().gateway.connect(String(id)),
+  );
+  ipcMain.handle("connectorRequests:find", (_event, ref: unknown) => {
+    if (!ref || typeof ref !== "object") return null;
+    const value = ref as Record<string, unknown>;
+    if (typeof value.id === "string") return requireConnectors().requests.find({ id: value.id });
+    const input = value.input as Record<string, unknown> | undefined;
+    if (typeof value.threadId !== "string" || !input || typeof input !== "object") return null;
+    const text = (field: unknown) => (typeof field === "string" ? field : undefined);
+    return requireConnectors().requests.find({
+      threadId: value.threadId,
+      input: {
+        catalog: text(input.catalog),
+        url: text(input.url),
+        command: text(input.command),
+        args: Array.isArray(input.args)
+          ? input.args.filter((arg): arg is string => typeof arg === "string")
+          : undefined,
+      },
+    });
+  });
+  ipcMain.handle("connectorRequests:get", (_event, ids: unknown) =>
+    requireConnectors().requests.get(
+      Array.isArray(ids) ? ids.filter((id): id is string => typeof id === "string") : [],
+    ),
+  );
+  ipcMain.handle("connectorRequests:connect", (_event, id: string, answer: unknown) => {
+    const values = answer && typeof answer === "object" ? (answer as Record<string, unknown>) : {};
+    return requireConnectors().requests.connect(String(id), {
+      key: typeof values.key === "string" ? values.key : undefined,
+      values:
+        values.values && typeof values.values === "object"
+          ? Object.fromEntries(
+              Object.entries(values.values as Record<string, unknown>).filter(
+                (entry): entry is [string, string] => typeof entry[1] === "string",
+              ),
+            )
+          : undefined,
+    });
+  });
+  ipcMain.handle("connectorRequests:cancel", (_event, id: string) =>
+    requireConnectors().requests.cancel(String(id)),
+  );
+  ipcMain.handle("connectorRequests:decline", (_event, id: string) =>
+    requireConnectors().requests.decline(String(id)),
+  );
+  ipcMain.handle("connectors:signIn", (_event, id: string) =>
+    requireConnectors().gateway.signIn(String(id)),
+  );
+  ipcMain.handle("connectors:cancelSignIn", (_event, id: string) =>
+    requireConnectors().gateway.cancelSignIn(String(id)),
+  );
+  ipcMain.handle("connectors:signOut", (_event, id: string) =>
+    requireConnectors().gateway.signOut(String(id)),
+  );
+  ipcMain.handle("connectors:check", (_event, id: string) =>
+    requireConnectors().gateway.check(String(id)),
+  );
+  ipcMain.handle("connectors:setEnabled", (_event, id: string, enabled: boolean) =>
+    requireConnectors().gateway.setEnabled(String(id), Boolean(enabled)),
+  );
 
   ipcMain.handle(
     "terminal:create",
@@ -3271,6 +3566,7 @@ app.whenReady().then(async () => {
     attention: { isFocused: () => mainWindowFocused },
     notify: osNotifier,
     browser: browserService,
+    connectors: requireConnectors(),
   });
   // Database maintenance waits for agent turns to finish (see R15).
   applicationStorage.setBusyProbe(() => (agentManager?.getRunningThreadIds().length ?? 0) > 0);

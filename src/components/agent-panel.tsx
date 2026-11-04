@@ -14,6 +14,9 @@ import { ChatMessage } from "@/components/ui/chat-message";
 import { ThreadComposer, initialDraftContent } from "@/components/thread-composer";
 import { ConversationTurnIdentity } from "@/components/conversation-turn-identity";
 import { AgentRuntimeControls } from "@/components/agent-runtime-controls";
+import { ComposerWorktreePicker } from "@/components/composer-worktree-picker";
+import { pickThreadWorktree } from "@/lib/worktree-pick";
+import { newDraftWorktreePath } from "@/lib/draft-worktree";
 import { AgentAuthBanner } from "@/components/agent-auth-actions";
 import type { MentionProvider } from "@/components/mention-popover";
 import { useIcon } from "@/lib/icon-context";
@@ -24,11 +27,11 @@ import { useAgentStore } from "@/store/agent-store";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useModelCatalogStore } from "@/store/model-catalog-store";
 import { useWorktreeStore } from "@/store/worktree-store";
-import { useUiModeStore } from "@/store/ui-mode-store";
-import { useIsDiffSplit, useWorkspaceViewStore } from "@/store/workspace-view-store";
+import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { useDiffStore, type DiffTurnSummary } from "@/store/diff-store";
 import { normalizeWorkspacePath } from "../../contracts/workspace-scope.ts";
 import type { ComposerContent } from "../../contracts/composer.ts";
+import type { Worktree } from "../../contracts/worktrees.ts";
 import {
   assertCreatable,
   blankContent,
@@ -44,12 +47,15 @@ import {
   setFreeText,
   stripEntityKinds,
   titleFromText,
-  upsertEntity,
 } from "@/lib/composer-tokens";
 import { selectThread } from "@/lib/thread-actions";
 import { invalidateProjectFiles, useProjectFileIndex } from "@/lib/project-file-index";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import { InlineWidget } from "@/components/inline-widget";
+import { ThreadLinkCard } from "@/components/thread-link-card";
+import { ThreadProposalCard } from "@/components/thread-proposal-card";
+import { SettingsChangeCard } from "@/components/settings-change-card";
+import { ConnectorRequestCard } from "@/components/connector-request-card";
 import { buildMessageBodyBlocks, type MessageBodyBlock } from "@/lib/inline-widgets";
 import { AssistantTraceDeck } from "@/components/ui/assistant-trace-deck";
 import { ThinkingIndicator } from "@/components/ui/thinking-indicator";
@@ -57,9 +63,12 @@ import { AgentSlashCommandMenu } from "@/components/agent-slash-command-menu";
 import { AgentContinueMenu } from "@/components/agent-continue-menu";
 import { AgentQuestionCard, AgentQuestionDock } from "@/components/agent-question";
 import { cn } from "@/lib/utils";
+import { surfaceBgClass } from "@/lib/surface-classes";
+import { useSurface } from "@/lib/surface-context";
 import { isInstanceSelected } from "@/lib/agent-selection";
 import { beginRendererInteraction } from "@/lib/monitor-runtime-observer";
 import { toast } from "@/components/ui/toast";
+import { errorToast } from "@/lib/error-toast";
 import type { AgentPanelSnapshot } from "@/store/agent-store";
 import { useContinuationStore } from "@/store/continuation-store";
 import {
@@ -81,10 +90,12 @@ import {
   type ChatImageAttachment,
 } from "@/lib/agent-message-images";
 import { CONTINUE_COMMAND, matchAgentCommands, mergeAgentCommands } from "@/lib/agent-commands";
-import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subagent-orchestration";
-import { SubagentComposer, type SubagentComposerSubmit } from "@/components/subagent-composer";
-import { SubagentActivity } from "@/components/subagent-activity";
+import { isSubagentTrigger, SUBAGENT_COMMAND } from "@/lib/subthread-orchestration";
+import { SubthreadComposer, type SubthreadComposerSubmit } from "@/components/subthread-composer";
+import { AgentTaskOrigin } from "@/components/agent-task-activity";
 import { DiffSummaryCard } from "@/components/diff-summary-card";
+import { NextStepCard } from "@/components/next-step-card";
+import { nextStepFromParts } from "@/lib/next-step";
 /** Max agents shown in (and selectable from) the `/continue` picker. */
 const MAX_CONTINUE_AGENTS = 8;
 const SCROLL_LIVE_EDGE_PX = 24;
@@ -99,23 +110,6 @@ const messageTimeFormatter = new Intl.DateTimeFormat("en-US", {
 const iconButtonClass =
   "inline-flex size-6 items-center justify-center rounded-full  text-muted-foreground/60 hover:text-foreground hover:bg-hover transition-colors duration-100 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-ring";
 const COMPOSER_TURN_MARKER = <ConversationTurnIdentity role="user" emphasis="composer" />;
-
-type ComposerProjectContext = {
-  id: string;
-  name: string;
-  icon?: string | null;
-};
-
-function withProjectChip(
-  content: ComposerContent,
-  project: ComposerProjectContext,
-): ComposerContent {
-  const entities = getEntityTokens(content).filter((entity) => entity.kind !== "project");
-  return buildContent(
-    [{ kind: "project", id: project.id, label: project.name, icon: project.icon }, ...entities],
-    getFreeText(content),
-  );
-}
 
 type ConversationScrollMode = "reading" | "anchoring" | "following";
 type PendingScrollAction = {
@@ -516,10 +510,12 @@ function MessageBody({
   diffSummary,
   traceDeckOpen,
   onTraceDeckOpenChange,
+  isLatestTurn = false,
 }: {
   messages: MessageLike[];
   threadId?: string | null;
   isStreaming?: boolean;
+  isLatestTurn?: boolean;
   activeMessages?: MessageLike[];
   diffSummary?: DiffTurnSummary;
   traceDeckOpen?: boolean;
@@ -528,7 +524,11 @@ function MessageBody({
   const role = messages[0]?.role;
   const assistantContent = useMemo(() => {
     if (role !== "assistant") {
-      return { allTraceParts: [] as any[], bodyBlocks: [] as MessageBodyBlock[] };
+      return {
+        allTraceParts: [] as any[],
+        bodyBlocks: [] as MessageBodyBlock[],
+        nextStep: null,
+      };
     }
 
     const allTraceParts: any[] = [];
@@ -554,11 +554,12 @@ function MessageBody({
     return {
       allTraceParts,
       bodyBlocks: buildMessageBodyBlocks(bodyParts, threadId),
+      nextStep: nextStepFromParts(bodyParts),
     };
   }, [messages, role, threadId]);
 
   if (role === "assistant") {
-    const { allTraceParts, bodyBlocks } = assistantContent;
+    const { allTraceParts, bodyBlocks, nextStep } = assistantContent;
 
     return (
       <div className="space-y-3">
@@ -576,6 +577,14 @@ function MessageBody({
         {bodyBlocks.map((block, index) =>
           block.kind === "widget" ? (
             <InlineWidget key={block.key} widgetRef={block.ref} threadId={threadId} />
+          ) : block.kind === "thread" ? (
+            <ThreadLinkCard key={block.key} link={block.link} />
+          ) : block.kind === "proposal" ? (
+            <ThreadProposalCard key={block.key} proposalId={block.proposalId} />
+          ) : block.kind === "settings" ? (
+            <SettingsChangeCard key={block.key} changeId={block.changeId} />
+          ) : block.kind === "connector" ? (
+            <ConnectorRequestCard key={block.key} requestRef={block.ref} />
           ) : (
             <div
               key={`text-${index}`}
@@ -590,6 +599,10 @@ function MessageBody({
         )}
 
         {!isStreaming && diffSummary && <DiffSummaryCard summary={diffSummary} />}
+
+        {!isStreaming && nextStep && (
+          <NextStepCard step={nextStep} threadId={threadId} answerable={isLatestTurn} />
+        )}
       </div>
     );
   }
@@ -674,6 +687,7 @@ export interface AgentPanelProps {
 
 export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   "use no memo";
+  const surface = useSurface();
   const { activeProject } = useProjectStore();
   const { threads, loadProjectThreads } = useThreadStore();
   const {
@@ -683,7 +697,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     authMethods,
     uiRequest,
     uiRequestQueue,
-    subagentRuns,
+    agentTasks,
     connect,
     refresh,
     hydrateToolCalls,
@@ -721,7 +735,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     images: ChatImageAttachment[];
   } | null>(null);
   const [previewImage, setPreviewImage] = useState<ChatImageAttachment | null>(null);
-  const [dismissedAgentError, setDismissedAgentError] = useState<string | null>(null);
   const [traceDeckOpenByKey, setTraceDeckOpenByKey] = useState<Record<string, boolean>>({});
   const messagesScrollRef = useRef<HTMLDivElement>(null);
   const composerRegionRef = useRef<HTMLDivElement>(null);
@@ -760,27 +773,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   const draft = useWorkspaceViewStore((state) => state.draft);
   const beginDraft = useWorkspaceViewStore((state) => state.beginDraft);
   const completeDraft = useWorkspaceViewStore((state) => state.completeDraft);
-  const setDraftProject = useWorkspaceViewStore((state) => state.setDraftProject);
   const setDraftAgent = useWorkspaceViewStore((state) => state.setDraftAgent);
   const setDraftModel = useWorkspaceViewStore((state) => state.setDraftModel);
   const setDraftDirty = useWorkspaceViewStore((state) => state.setDraftDirty);
-  const markDraftUserEditedProject = useWorkspaceViewStore(
-    (state) => state.markDraftUserEditedProject,
-  );
   const isDraftMode = draft != null;
-  // Advanced workspace UI: the selected workspace already fixes the project
-  // (and worktree), so the @project composer chip is redundant and hidden.
-  const isAdvancedUI = useUiModeStore((state) => state.mode) === "advanced";
-  const liveComposerProject = useMemo<ComposerProjectContext | null>(() => {
-    if (isDraftMode || isAdvancedUI) return null;
-    const projectId = snapshot?.projectId ?? activeProject?.id ?? null;
-    if (!projectId) return null;
-    return (
-      projectsList.find((project) => project.id === projectId) ??
-      (activeProject?.id === projectId ? activeProject : null)
-    );
-  }, [activeProject, isAdvancedUI, isDraftMode, projectsList, snapshot?.projectId]);
-  const isDiffSplit = useIsDiffSplit();
   const selectedWorktreePathByProject = useWorktreeStore(
     (state) => state.selectedWorktreePathByProject,
   );
@@ -799,10 +795,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       // created. Bind only untouched drafts so their project/CWD context is
       // still auto-populated without overwriting user choices.
       if (!draft?.projectId && !draft?.dirty && activeProject) {
-        const worktreePath = normalizeWorkspacePath(
-          selectedWorktreePathByProject[activeProject.id],
-          activeProject.path,
-        );
+        const worktreePath = newDraftWorktreePath(activeProject);
         beginDraft({
           projectId: activeProject.id,
           previousActiveProjectId: activeProject.id,
@@ -813,9 +806,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     }
     if (requestedThreadId || snapshot?.threadId) return;
     const project = activeProject;
-    const worktreePath = project
-      ? normalizeWorkspacePath(selectedWorktreePathByProject[project.id], project.path)
-      : null;
+    const worktreePath = newDraftWorktreePath(project);
     beginDraft({
       projectId: project?.id ?? null,
       previousActiveProjectId: project?.id ?? null,
@@ -841,20 +832,8 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     }
     if (draftBootstrappedRef.current) return;
     draftBootstrappedRef.current = true;
-    const projectObj =
-      draft.projectId != null
-        ? (projectsList.find((p) => p.id === draft.projectId) ??
-          (activeProject?.id === draft.projectId ? activeProject : null))
-        : null;
-    const softProject =
-      draft.projectId != null
-        ? {
-            id: draft.projectId,
-            name: projectObj?.name ?? "Project",
-            icon: projectObj?.icon ?? null,
-          }
-        : null;
-    const content = initialDraftContent(isAdvancedUI ? null : softProject);
+    // The shell owns the project, so a draft opens with no @project chip.
+    const content = initialDraftContent(null);
     // Soft-default agent into draft state (no @agent chip — model-first UX).
     // Prefer the currently connected agent when it is in the user's pool.
     const registry = useAgentRegistryStore.getState();
@@ -868,96 +847,36 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     if (pool.length > 0) {
       const connectedId = useAgentStore.getState().state?.agentId ?? null;
       const preferred = (connectedId ? pool.find((a) => a.id === connectedId) : null) ?? pool[0]!;
-      setDraftAgent(preferred.id);
+      // A soft default, not the user's pick: an untouched draft still closes
+      // without a discard prompt.
+      setDraftAgent(preferred.id, { markDirty: false });
     }
     setDraftContent(content);
     requestAnimationFrame(() => composerTextareaRef.current?.focus());
-  }, [draft, projectsList, activeProject, isAdvancedUI, setDraftAgent]);
+  }, [draft, setDraftAgent]);
 
-  // External chrome (title-bar project switcher) can change draft.projectId;
-  // keep the composer chip in sync without wiping free text. Also clear agent
-  // when the project identity changes so @agent is offered again.
+  // The shell owns the project context, so drafts keep no project chip. Strip
+  // any legacy chip that arrives (e.g. restored content) without wiping text.
   useEffect(() => {
-    if (!draft || isAdvancedUI) return;
-    const contentProject = extractProjectId(draftContent);
-    if ((draft.projectId ?? null) === (contentProject ?? null)) return;
-    if (draft.projectId) {
-      const projectObj =
-        projectsList.find((p) => p.id === draft.projectId) ??
-        (activeProject?.id === draft.projectId ? activeProject : null);
-      const name = projectObj?.name ?? "Project";
-      const icon = projectObj?.icon ?? null;
-      setDraftContent((prev) => {
-        let next = upsertEntity(prev, {
-          kind: "project",
-          id: draft.projectId!,
-          label: name,
-          icon,
-        });
-        if (contentProject != null && contentProject !== draft.projectId) {
-          next = removeEntityKind(removeEntityKind(next, "agent"), "model");
-          // Keep a soft-default agent so send still works without an @agent chip.
-          const registry = useAgentRegistryStore.getState();
-          const pool = registry.agents.filter(
-            (a) =>
-              (registry.selectedAgentIds.length === 0 ||
-                isInstanceSelected(a, registry.selectedAgentIds)) &&
-              a.available !== false,
-          );
-          setDraftAgent(pool[0]?.id ?? null);
-          setDraftModel(null);
-        }
-        return next;
-      });
-    } else {
-      setDraftContent((prev) => removeEntityKind(prev, "project"));
-    }
-    // Only react to store project id and the UI mode — not every content
-    // keystroke. Returning to Basic must re-add the chip the Advanced-mode
-    // strip below removed, or the first send fails with `missing_project`.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: store → chip bridge
-  }, [draft?.projectId, isAdvancedUI]);
-  // Advanced UI keeps no project chip: the workspace owns the project context.
-  // Strip any legacy chip that arrives (e.g. restored content) without wiping text.
-  useEffect(() => {
-    if (!isAdvancedUI || !draft) return;
+    if (!draft) return;
     if (extractProjectId(draftContent) == null) return;
     setDraftContent((prev) => removeEntityKind(prev, "project"));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: one-way chip strip
-  }, [isAdvancedUI, draft, draftContent]);
+  }, [draft, draftContent]);
 
   // Keep draft store fields aligned with chips so chrome can bind.
   const handleDraftContentChange = (next: ComposerContent) => {
-    const prevProject = extractProjectId(draftContent);
-    const nextProject = extractProjectId(next);
-    let content = next;
-    // Switching project invalidates a prior model pick; agent is inferred from
-    // the model (or the soft default in draft.agentId), not a user chip step.
-    if (nextProject !== prevProject && prevProject != null) {
-      content = removeEntityKind(removeEntityKind(content, "agent"), "model");
-    }
+    const content = next;
     setDraftContent(content);
-    setDraftProject(nextProject);
     // Prefer explicit agent chip / model.owner; keep soft default when neither
     // is present so multi-agent drafts still create without an @agent step.
     const inferredAgent = resolveAgentId(content);
     if (inferredAgent) setDraftAgent(inferredAgent);
     setDraftModel(extractModelId(content));
-    if (nextProject !== prevProject) {
-      markDraftUserEditedProject();
-      // A draft project chip is only a creation target. Activating the project
-      // in main would restore its last thread while this draft is still open.
-      if (!isDraftMode && nextProject && window.omni?.projects?.setActive) {
-        void window.omni.projects.setActive(nextProject).catch(() => {
-          /* soft-sync is best-effort */
-        });
-      }
-    }
     // Once the user types or changes chips, stay dirty until send/discard.
     // Never flip dirty back to false mid-edit (would skip discard confirm).
     const becameDirty =
       Boolean(extractTextContent(content)) ||
-      nextProject !== (draft?.projectId ?? null) ||
       (inferredAgent != null && inferredAgent !== (draft?.agentId ?? null)) ||
       extractModelId(content) !== (draft?.modelId ?? null);
     if (becameDirty || draft?.dirty) setDraftDirty(true);
@@ -999,11 +918,17 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     for (const item of raw) {
       if (!item || typeof item !== "object") continue;
       if ("value" in item && "name" in item) {
-        out.push({ value: String((item as any).value), name: String((item as any).name) });
+        out.push({
+          value: String((item as any).value),
+          name: String((item as any).name),
+        });
       } else if ("options" in item && Array.isArray((item as any).options)) {
         for (const nested of (item as any).options) {
           if (nested && typeof nested === "object" && "value" in nested) {
-            out.push({ value: String(nested.value), name: String(nested.name ?? nested.value) });
+            out.push({
+              value: String(nested.value),
+              name: String(nested.name ?? nested.value),
+            });
           }
         }
       }
@@ -1401,7 +1326,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       "selectstart",
     ];
     for (const eventName of intentEvents) {
-      scrollContainer.addEventListener(eventName, stopOnReaderIntent, { passive: true });
+      scrollContainer.addEventListener(eventName, stopOnReaderIntent, {
+        passive: true,
+      });
     }
     document.addEventListener("keydown", stopOnReaderIntent, true);
 
@@ -1464,7 +1391,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     awaitingAssistantAfterUserRef.current = pending.kind === "new-turn" ? targetIndex : null;
     cancelConversationAnchor();
     markProgrammaticScroll();
-    conversationVirtualizer.scrollToIndex(targetIndex, { align: "start", behavior: "auto" });
+    conversationVirtualizer.scrollToIndex(targetIndex, {
+      align: "start",
+      behavior: "auto",
+    });
     anchorRafRef.current = requestAnimationFrame(() => {
       const scrollContainer = messagesScrollRef.current;
       if (!scrollContainer) {
@@ -1584,7 +1514,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   }, [threadId]);
 
   const prepareNewTurnScroll = (targetThreadId: string | null) => {
-    pendingScrollActionRef.current = { kind: "new-turn", threadId: targetThreadId };
+    pendingScrollActionRef.current = {
+      kind: "new-turn",
+      threadId: targetThreadId,
+    };
     awaitingAssistantAfterUserRef.current = null;
     cancelConversationScrollAnimation();
     cancelConversationAnchor();
@@ -1633,23 +1566,20 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       if (!trimmed && !sendFiles.length && !editState?.images.length) return;
     }
     await handleSend(trimmed || getFreeText(textOnly), sendFiles);
-    setLiveContent(
-      liveComposerProject ? withProjectChip(blankContent(), liveComposerProject) : blankContent(),
-    );
+    setLiveContent(blankContent());
     setInputValue("");
   };
 
   const handleLiveContentChange = (next: ComposerContent) => {
-    const content = liveComposerProject ? withProjectChip(next, liveComposerProject) : next;
-    setLiveContent(content);
-    setInputValue(getFreeText(content));
+    setLiveContent(next);
+    setInputValue(getFreeText(next));
   };
 
   const handleDraftSend = async (content: ComposerContent, files: File[]) => {
     const check = assertCreatable(content, {
       defaultAgentId: draft?.agentId ?? null,
-      // Advanced UI: no project chip — the workspace owns the project context.
-      defaultProjectId: isAdvancedUI ? (draft?.projectId ?? activeProject?.id ?? null) : null,
+      // No project chip: the shell owns the project context.
+      defaultProjectId: draft?.projectId ?? activeProject?.id ?? null,
     });
     if (!check.ok) {
       const description =
@@ -1840,7 +1770,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                 // blocks by hand here would bypass that filter (a supplied
                 // `prompt` short-circuits assemblePromptBlocks in the main path).
                 prompt: [
-                  { type: "text", text: buildContinuationText(pendingTranscript) },
+                  {
+                    type: "text",
+                    text: buildContinuationText(pendingTranscript),
+                  },
                   ...assemblePromptBlocks({
                     message: trimmed,
                     images: newImages,
@@ -2080,7 +2013,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   const handleOrchestrationSubmit = async ({
     prompt,
     orchestratorAgentId,
-  }: SubagentComposerSubmit) => {
+  }: SubthreadComposerSubmit) => {
     setIsSubmitting(true);
     try {
       // The orchestrator runs in a thread owned by its agent. Reuse the
@@ -2089,10 +2022,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       const needsNewThread = !threadId || orchestratorAgentId !== (snapshot?.agentId ?? null);
       if (needsNewThread) {
         const projectId = activeProject?.id;
-        if (!projectId) throw new Error("Open a project before orchestrating subagents.");
+        if (!projectId) throw new Error("Open a project before orchestrating subthreads.");
         const count = threads.filter((thread) => thread.project_id === projectId).length + 1;
         // Orchestration threads bind to the current workspace like any other
-        // thread, so the orchestrator (and its subagents, which inherit the
+        // thread, so the orchestrator (and its subthreads, which inherit the
         // session cwd) runs in the tree the user is looking at.
         const worktreePath = normalizeWorkspacePath(
           useWorktreeStore.getState().selectedWorktreePathByProject[projectId],
@@ -2134,18 +2067,52 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   };
 
   // Antigravity sign-in failures are rendered as the persistent auth banner
-  // above (with in-place sign-in buttons), not as a dismissible switch error.
-  // Suppress the raw error only when that banner actually renders; a text
-  // match without an auth_required message must stay visible.
+  // above (with in-place sign-in buttons), not as an error toast. Suppress
+  // the raw error only when that banner actually renders; a text match
+  // without an auth_required message must still be reported.
   const authBannerVisible = Boolean(snapshot?.authRequiredMessage);
   const visibleAgentError =
-    agentError &&
-    agentError !== dismissedAgentError &&
-    !(snapshot?.agentId === "antigravity-acp" && authBannerVisible)
+    agentError && !(snapshot?.agentId === "antigravity-acp" && authBannerVisible)
       ? agentError
       : null;
+  // Errors surface as a toast, once each; nothing is drawn in the conversation.
+  const toastedAgentError = useRef<string | null>(null);
+  useEffect(() => {
+    if (!visibleAgentError) {
+      toastedAgentError.current = null;
+      return;
+    }
+    if (toastedAgentError.current === visibleAgentError) return;
+    toastedAgentError.current = visibleAgentError;
+    toast(errorToast(visibleAgentError));
+  }, [visibleAgentError]);
   const runtimeControlsDisabled =
     isRuntimeActionPending || isSwitchingThread || isConnecting || !snapshot;
+  // Hybrid shell: the composer rail picks the worktree. A draft binds the
+  // worktree it will be created in; a live thread moves to it (between turns).
+  const worktreePickerProjectId = isDraftMode
+    ? (draft?.projectId ?? null)
+    : (snapshot?.projectId ?? null);
+  const worktreePickerProject = worktreePickerProjectId
+    ? (projectsList.find((project) => project.id === worktreePickerProjectId) ??
+      (activeProject?.id === worktreePickerProjectId ? activeProject : null))
+    : null;
+  const worktreePickerPath = isDraftMode ? (draft?.worktreePath ?? null) : (snapshot?.cwd ?? null);
+  const handleWorktreePick = (worktree: Worktree) =>
+    pickThreadWorktree(worktree, {
+      draft: isDraftMode,
+      threadId: snapshot?.threadId ?? null,
+    });
+  const worktreePicker = worktreePickerProject?.path ? (
+    <ComposerWorktreePicker
+      projectId={worktreePickerProject.id}
+      projectPath={worktreePickerProject.path}
+      currentPath={worktreePickerPath}
+      disabled={!isDraftMode && runtimeControlsDisabled}
+      onSelect={handleWorktreePick}
+    />
+  ) : null;
+
   const composerDisabled = isDraftMode
     ? false
     : isSwitchingThread ||
@@ -2155,16 +2122,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       isAborting ||
       Boolean(editState && isStreaming);
 
-  const draftProjectItems = useMemo(
-    () =>
-      projectsList.map((p) => ({
-        id: p.id,
-        label: p.name,
-        description: "path" in p && typeof p.path === "string" ? p.path : undefined,
-        icon: p.icon ?? null,
-      })),
-    [projectsList],
-  );
   // Draft agent picker: prefer the user's selected agents, but never show an
   // empty list when other available agents exist (common when registry loaded
   // late or selectedAgentIds is still empty).
@@ -2189,7 +2146,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       await useAgentRegistryStore.getState().load();
       const known = useModelCatalogStore.getState().byAgentId;
       const refresh = draftAgentId && !known[draftAgentId]?.length ? [draftAgentId] : [];
-      const catalogs = await window.omni?.agent?.getModelCatalogs?.({ refresh });
+      const catalogs = await window.omni?.agent?.getModelCatalogs?.({
+        refresh,
+      });
       if (!catalogs) return;
       const remember = useModelCatalogStore.getState().remember;
       for (const [agentId, models] of Object.entries(catalogs)) {
@@ -2240,7 +2199,11 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
       // freshest catalog. Otherwise fall back to last-seen models for that agent.
       const liveForAgent =
         snapshot?.agentId === agentId && models.length > 0
-          ? models.map((m) => ({ modelId: m.modelId, name: m.name, provider: m.provider }))
+          ? models.map((m) => ({
+              modelId: m.modelId,
+              name: m.name,
+              provider: m.provider,
+            }))
           : null;
       const source = liveForAgent ?? catalogByAgentId[agentId] ?? [];
       const agentLabel = agentNameById.get(agentId) ?? formatProviderName(agentId);
@@ -2325,16 +2288,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
     });
   }, [inputValue, isDraftMode]);
 
-  // Keep the project entity bound to the active thread internally. The live
-  // composer hides it because an existing thread already fixes the project.
-  useEffect(() => {
-    if (isDraftMode || !liveComposerProject) return;
-    setLiveContent((prev) => {
-      if (extractProjectId(prev) === liveComposerProject.id) return prev;
-      return withProjectChip(prev, liveComposerProject);
-    });
-  }, [isDraftMode, liveComposerProject]);
-
   const handleReasoningChange = (value: string) => {
     if (!thoughtLevelConfigId) return;
     setConfigOption(thoughtLevelConfigId, value).catch((err) => {
@@ -2369,7 +2322,10 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
   return (
     <section
       data-pipper-id="agent-panel"
-      className="relative z-20 h-full w-full flex flex-col bg-surface-1  overflow-visible"
+      className={cn(
+        "relative z-20 flex h-full w-full flex-col overflow-visible",
+        surfaceBgClass(surface),
+      )}
     >
       <AgentQuestionDock activeSessionId={activeSessionId} />
       {previewImage && (
@@ -2398,10 +2354,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
             }
             className={cn(
               "relative z-10 flex min-h-0 w-full flex-1 flex-col",
-              // A full-bleed conversation reads badly, so the global view caps
-              // it to a centred column. Inside the diff split the panel is
-              // already narrow, so it uses the full width.
-              !isDiffSplit && "mx-auto w-full max-w-4xl xl:max-w-5xl",
+              // A full-bleed conversation reads badly, so it is capped to a
+              // centred column.
+              "mx-auto w-full max-w-4xl xl:max-w-5xl",
             )}
           >
             <div
@@ -2553,6 +2508,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                                   messages={messages}
                                   threadId={snapshot?.threadId ?? null}
                                   isStreaming={isStreaming}
+                                  isLatestTurn={virtualRow.index === allMessages.length - 1}
                                   activeMessages={activeMessages}
                                   diffSummary={
                                     firstToolCallId ? diffSummaries[firstToolCallId] : undefined
@@ -2569,7 +2525,12 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                                         if (!Array.isArray(content)) return [];
                                         return content
                                           .filter(
-                                            (part): part is { type: "toolCall"; id: string } =>
+                                            (
+                                              part,
+                                            ): part is {
+                                              type: "toolCall";
+                                              id: string;
+                                            } =>
                                               Boolean(
                                                 part &&
                                                 typeof part === "object" &&
@@ -2624,19 +2585,6 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                         methods={authMethods}
                         onAuthenticated={() => refresh()}
                       />
-                    )}
-                    {visibleAgentError && (
-                      <div className="flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-[12px] text-red-500">
-                        <WarningIcon className="mt-0.5 size-4 shrink-0" />
-                        <span className="min-w-0 flex-1">{visibleAgentError}</span>
-                        <button
-                          type="button"
-                          className="shrink-0 text-red-500/80 hover:text-red-500"
-                          onClick={() => setDismissedAgentError(visibleAgentError)}
-                        >
-                          Dismiss
-                        </button>
-                      </div>
                     )}
                     {isConnecting && (
                       <div className="rounded-lg border border-border bg-surface-2 px-3 py-2 text-[12px] text-muted-foreground">
@@ -2748,11 +2696,14 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                         />
                       ) : null}
 
-                      <SubagentActivity
-                        runs={subagentRuns}
-                        agents={registryAgents}
-                        activeSessionId={activeSessionId}
-                        className="relative z-10 mb-1.5"
+                      <AgentTaskOrigin
+                        tasks={agentTasks}
+                        threadId={threadId || null}
+                        threadTitle={(id) =>
+                          threads.find((thread) => thread.id === id)?.title ?? null
+                        }
+                        onOpenThread={(parentThreadId) => void selectThread(parentThreadId)}
+                        className="relative z-10 mb-1"
                       />
 
                       {isDraftMode ? (
@@ -2765,7 +2716,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                           onSend={(content, files) => void handleDraftSend(content, files)}
                           disabled={composerDisabled}
                           isSubmitting={isSubmitting}
-                          projects={isAdvancedUI ? [] : draftProjectItems}
+                          projects={[]}
                           agents={[]}
                           models={modelMentionItems}
                           modelProviders={modelProviderItems}
@@ -2778,14 +2729,14 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                           showImageAttach={false}
                           appearance="plain"
                           hideSendButton
-                          hideProjectChip={isAdvancedUI}
+                          hideProjectChip
                           textareaRef={composerTextareaRef}
                           onTextareaKeyDown={handleComposerKeyDown}
                         />
                       ) : inlineRequest ? (
                         <AgentQuestionCard request={inlineRequest} className="relative z-10" />
                       ) : orchestrationOpen ? (
-                        <SubagentComposer
+                        <SubthreadComposer
                           className="relative z-10"
                           agents={registryAgents}
                           defaultOrchestratorId={snapshot?.agentId ?? null}
@@ -2878,7 +2829,9 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
 
             <div data-pipper-id="composer-rail" className="relative z-20 shrink-0 mt-6 px-3 py-2">
               <div className="mx-auto flex min-h-9 w-full max-w-4xl items-center">
-                {!isDraftMode && (
+                {isDraftMode ? (
+                  worktreePicker
+                ) : (
                   <AgentRuntimeControls
                     reasoningLevels={thoughtLevelValues}
                     currentReasoningIndex={currentThoughtIndex}
@@ -2906,6 +2859,7 @@ export function AgentPanel({ demoInputValue }: AgentPanelProps = {}) {
                     sessionTokens={snapshot?.stats?.used}
                     sessionCost={snapshot?.stats?.cost?.amount}
                     rateLimit={snapshot?.usage?.rateLimit}
+                    workspace={worktreePicker}
                   />
                 )}
               </div>

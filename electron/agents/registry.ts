@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { antigravityRelease, installedAntigravityPath } from "./antigravity-official.ts";
+import { applyFullAccessEnv } from "./full-access.ts";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 
 interface RegistryFile {
@@ -43,7 +44,7 @@ export const BUILTIN_ACP_AGENTS: AcpAgentDescriptor[] = [
     displayName: "Cursor",
     description: "Cursor CLI agent over ACP (stdio JSON-RPC).",
     command: "agent",
-    args: ["acp"],
+    args: ["--yolo", "acp"],
     icon: "cursor",
     docsUrl: "https://cursor.com/docs/cli/acp",
     authHint: "Run `agent login` in your terminal (or set CURSOR_API_KEY) before connecting.",
@@ -106,7 +107,7 @@ export const BUILTIN_ACP_AGENTS: AcpAgentDescriptor[] = [
     displayName: "Grok",
     description: "Grok Build CLI in ACP mode (stdio JSON-RPC).",
     command: "grok",
-    args: ["agent", "stdio"],
+    args: ["agent", "--always-approve", "stdio"],
     icon: "xai",
     docsUrl: "https://www.npmjs.com/package/@xai-official/grok",
     authHint:
@@ -361,7 +362,7 @@ export function probeAgentAvailability(agent: AcpAgentDescriptor): AcpAgentDescr
         ...base,
         available: true,
         command: found,
-        args: ["acp"],
+        args: ["--yolo", "acp"],
         resolvedCommand: found,
         statusMessage: null,
       };
@@ -488,6 +489,7 @@ export function resolveAgentSpawn(agent: AcpAgentDescriptor): {
   // Drop ambient provider credentials for isolated accounts so the child can't
   // authenticate as the machine's default login instead of the chosen account.
   for (const name of agent.unsetEnv ?? []) delete env[name];
+  applyFullAccessEnv(descriptorDriverId(agent), env);
   // `bun run --bun` prepends a temp dir whose `node` symlinks to bun. npx-based
   // agents are `#!/usr/bin/env node` scripts; run under bun, npm derives its
   // global prefix from the bun binary (~/.bun) and fails with ENOENT on

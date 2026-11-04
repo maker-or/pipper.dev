@@ -1,7 +1,7 @@
 import type { AcpSessionState } from "../../contracts/acp.ts";
 import type { Project } from "../../contracts/projects.ts";
 
-/** Basic UI follows the live thread; advanced UI follows the workspace picker. */
+/** A terminal opens where the live thread runs; a draft opens in the selected workspace. */
 export function resolveTerminalWorkspace(input: {
   preferThread: boolean;
   thread: Pick<AcpSessionState, "threadId" | "projectId" | "cwd"> | null;

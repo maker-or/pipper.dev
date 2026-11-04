@@ -1224,7 +1224,7 @@ function canonical(path: string): string {
  * where the filesystem is case-insensitive and git and the OS may disagree on
  * casing. Never use this as a value — it is lossy; return `canonical` instead.
  */
-function pathKey(path: string): string {
+export function pathKey(path: string): string {
   const real = canonical(path);
   return process.platform === "win32" ? real.toLowerCase() : real;
 }

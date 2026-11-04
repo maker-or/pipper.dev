@@ -4,6 +4,8 @@
  * app-level envelopes and store shapes.
  */
 
+import type { AgentTaskSnapshot } from "./agent-tasks.ts";
+import type { Thread } from "./threads.ts";
 import type {
   AgentCapabilities,
   AuthMethod,
@@ -294,6 +296,22 @@ export interface AcpPermissionRequest {
     name: string;
     kind: "allow_once" | "allow_always" | "reject_once" | "reject_always" | string;
   }>;
+  /**
+   * Set for Pipper's own destructive calls (deleting what the agent doesn't
+   * own): the renderer draws the hold-to-confirm card instead of a plain
+   * choice. The allow option confirms; the reject option declines.
+   */
+  confirm?: DestructiveConfirmation;
+}
+
+/** The hold-to-confirm card's content, computed by Pipper. */
+export interface DestructiveConfirmation {
+  /** "Delete workspace feature-auth". */
+  title: string;
+  /** The button reads "Hold to <verb>". */
+  verb: string;
+  /** What is lost: "3 threads", "uncommitted changes in 4 files", … */
+  impact: string[];
 }
 
 export interface AcpPermissionResponse {
@@ -368,6 +386,10 @@ export type AcpBridgeEvent =
   | { type: "permission-request"; request: AcpPermissionRequest }
   | { type: "permission-resolved"; sessionId: string; requestId?: string | number }
   | { type: "thread-closed"; threadId: string }
+  /** The thread's row is gone (thread-closed only means its session closed). */
+  | { type: "thread-deleted"; threadId: string }
+  /** The thread's row changed outside the renderer (moved to another workspace). */
+  | { type: "thread-updated"; thread: Thread }
   | {
       type: "connection";
       agentId: string | null;
@@ -384,8 +406,8 @@ export type AcpBridgeEvent =
   | { type: "running-threads"; threadIds: string[] }
   /** A widget's code changed (update_widget); frames showing it reload. */
   | { type: "widget-updated"; widgetId: string; threadId: string | null }
-  /** Snapshot of all subagent runs whenever any run changes state. */
-  | { type: "subagent-runs"; runs: SubagentRunSnapshot[] }
+  /** Recent agent tasks (child threads) whenever any task changes. */
+  | { type: "agent-tasks"; tasks: AgentTaskSnapshot[] }
   /** Provider model catalogs that changed (cached in main; see getModelCatalogs). */
   | {
       type: "model-catalogs";
@@ -439,49 +461,6 @@ export interface BrowserConfig {
   idleMinutes: number;
   /** "ask" prompts in the thread before a page may download a file. */
   downloads: "ask" | "block";
-}
-
-/**
- * User preferences for the client-hosted subagent tool. Persisted as
- * `subagents.json` in the app's userData directory so each user can pick
- * which of their installed ACP agents may be spawned as subagents.
- */
-export interface SubagentConfig {
-  enabled: boolean;
-  /** Agent ids offered as subagents, or "all" installed (non-mock) agents. */
-  allowedAgents: string[] | "all";
-  /** Max subagent runs executing at once across the app; extra calls queue. */
-  maxConcurrent: number;
-  /**
-   * How deep subagent chains may go. Depth 0 is a user-facing session; a
-   * spawn at depth d creates a session at depth d+1, which only receives the
-   * subagent tool while d+1 < maxDepth.
-   */
-  maxDepth: number;
-  /** Auto-approve permission requests raised by headless subagent sessions. */
-  autoApprovePermissions: boolean;
-  /** Wall-clock budget per subagent run before the client cancels it. */
-  runTimeoutMs: number;
-}
-
-export type SubagentRunStatus = "queued" | "running" | "finished" | "failed" | "cancelled";
-
-/** Renderer-facing snapshot of one subagent run, for activity UI. */
-export interface SubagentRunSnapshot {
-  runId: string;
-  /** ACP session id of the orchestrator that spawned this run, when known. */
-  parentSessionId: string | null;
-  /** ACP session id of the subagent's own session, once created. */
-  sessionId: string | null;
-  agentId: string;
-  /** Truncated task text for display. */
-  task: string;
-  status: SubagentRunStatus;
-  depth: number;
-  startedAt: number;
-  finishedAt: number | null;
-  /** Truncated tail of the subagent's final text, once finished. */
-  resultPreview: string | null;
 }
 
 export interface McpServerRecord {

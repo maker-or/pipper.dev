@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, type ComponentProps } from "react";
+import { useEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import { StopIcon } from "@phosphor-icons/react";
 import { AnimatePresence, motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
@@ -40,6 +40,8 @@ interface AgentRuntimeControlsProps {
   isStreaming?: boolean;
   isStopping?: boolean;
   onStop?: () => void;
+  /** Workspace picker, shown after the model. */
+  workspace?: ReactNode;
 }
 
 export function AgentRuntimeControls({
@@ -61,6 +63,7 @@ export function AgentRuntimeControls({
   isStreaming = false,
   isStopping = false,
   onStop,
+  workspace,
 }: AgentRuntimeControlsProps) {
   const [reasoningOpen, setReasoningOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
@@ -89,7 +92,7 @@ export function AgentRuntimeControls({
 
   const hasReasoningLevels = reasoningLevels.length > 0;
   const hasModelPicker = Boolean(modelName && modelId && modelItems.length > 0 && onModelChange);
-  if (!hasReasoningLevels && !contextUsage && !modelName && !isStreaming) return null;
+  if (!hasReasoningLevels && !contextUsage && !modelName && !isStreaming && !workspace) return null;
 
   return (
     <div ref={rootRef} className="relative flex w-full items-center justify-between gap-3">
@@ -120,6 +123,7 @@ export function AgentRuntimeControls({
             <span className="truncate">{modelName}</span>
           </Button>
         )}
+        {workspace}
       </div>
 
       <AnimatePresence>

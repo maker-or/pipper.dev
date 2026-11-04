@@ -88,6 +88,16 @@ describe("draft thread creation behavior", () => {
     expect(extractTextContent(ready).includes("@")).toBe(false);
   });
 
+  test("an untouched draft with a soft-default agent closes without asking", () => {
+    useWorkspaceViewStore.getState().beginDraft({ projectId: "p1" });
+    useWorkspaceViewStore.getState().setDraftAgent("claude", { markDirty: false });
+    expect(useWorkspaceViewStore.getState().draft?.agentId).toBe("claude");
+    expect(useWorkspaceViewStore.getState().draft?.dirty).toBe(false);
+    // Picking an agent is an edit.
+    useWorkspaceViewStore.getState().setDraftAgent("codex");
+    expect(useWorkspaceViewStore.getState().draft?.dirty).toBe(true);
+  });
+
   test("title is derived from first message text", () => {
     expect(titleFromText("Ship draft UX")).toBe("Ship draft UX");
   });

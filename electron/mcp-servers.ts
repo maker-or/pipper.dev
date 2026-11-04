@@ -87,34 +87,26 @@ export function deleteMcpServer(id: string): void {
   getDb().prepare("DELETE FROM mcp_servers WHERE id = ?").run(id);
 }
 
-/** Convert DB rows to ACP McpServer payloads. */
-export function toAcpMcpServers(
-  rows: McpServerRecord[],
-  caps: { http?: boolean; sse?: boolean } | null | undefined,
+/**
+ * ACP entries for local (stdio) connectors, which every agent accepts (ACP
+ * requires stdio MCP). Remote connectors aren't here: they reach sessions
+ * through Pipper's connector gateway, which holds their sign-in.
+ */
+export function toAcpMcpServers<Row extends McpServerRecord & { enabled?: number }>(
+  rows: Row[],
+  envFor: (row: Row) => Record<string, string>,
 ): Array<Record<string, unknown>> {
-  if (!caps?.http && !caps?.sse) return [];
   const out: Array<Record<string, unknown>> = [];
   for (const row of rows) {
-    if (row.transport_type === "http" && caps.http && row.url) {
-      // `headers` is a required array in the ACP HttpMcpServer schema (opencode
-      // rejects the entry with -32602 if it's absent).
-      out.push({ type: "http", name: row.name, url: row.url, headers: [] });
-    } else if (row.transport_type === "sse" && caps.sse && row.url) {
-      out.push({ type: "sse", name: row.name, url: row.url, headers: [] });
-    } else if (row.transport_type === "stdio" && row.command) {
-      // stdio MCP is always sendable when agent has any MCP transport; some agents accept it without flag.
+    if (row.enabled === 0) continue;
+    if (row.transport_type === "stdio" && row.command) {
       let args: string[] = [];
-      let env: Record<string, string> = {};
       try {
         if (row.args) args = JSON.parse(row.args) as string[];
       } catch {
         args = [];
       }
-      try {
-        if (row.env) env = JSON.parse(row.env) as Record<string, string>;
-      } catch {
-        env = {};
-      }
+      const env = envFor(row);
       out.push({
         type: "stdio",
         name: row.name,

@@ -1,15 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  ChatCircleIcon,
-  CircleNotchIcon,
-  ClockCounterClockwiseIcon,
-  PlusIcon,
-} from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CircleNotchIcon, ClockCounterClockwiseIcon, PlusIcon } from "@phosphor-icons/react";
+import type { Project } from "../../contracts/projects.ts";
 import { cn } from "@/lib/utils";
 import { useProjectStore } from "@/store/project-store";
 import { useAgentStore } from "@/store/agent-store";
+import { useAgentRegistryStore } from "@/store/agent-registry-store";
+import { agentLogoKey, providerLogoIcon } from "@/components/provider-logos";
 import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { confirmDiscardDraft, selectThread } from "@/lib/thread-actions";
 import { useQueryClient } from "@tanstack/react-query";
@@ -17,6 +15,7 @@ import { OPEN_TABS_QUERY_KEY } from "@/lib/thread-queries";
 import { Dropdown, DropdownLabel, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
 import type { Thread } from "../../contracts/threads.ts";
+import { nestThreads, taskStatusText } from "@/lib/agent-task-tree";
 
 const PAGE_SIZE = 5;
 
@@ -36,9 +35,16 @@ function formatTimestamp(ts: number | undefined): string {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-export function ProjectThreadsDropdown() {
-  const activeProject = useProjectStore((s) => s.activeProject);
+/**
+ * The project's thread history. `project` overrides the active project (the
+ * hybrid shell passes a draft's project while drafting).
+ */
+export function ProjectThreadsDropdown({ project }: { project?: Project | null } = {}) {
+  const storeProject = useProjectStore((s) => s.activeProject);
+  const activeProject = project === undefined ? storeProject : project;
   const activeThreadId = useAgentStore((s) => s.snapshot?.threadId);
+  const agentTasks = useAgentStore((s) => s.agentTasks);
+  const agents = useAgentRegistryStore((s) => s.agents);
   const queryClient = useQueryClient();
 
   const [isOpen, setIsOpen] = useState(false);
@@ -151,9 +157,11 @@ export function ProjectThreadsDropdown() {
     }
   };
 
+  const rows = useMemo(() => nestThreads(threads, agentTasks), [threads, agentTasks]);
+
   if (!activeProject) return null;
 
-  const checkedIndex = threads.findIndex((t) => t.id === activeThreadId);
+  const checkedIndex = rows.findIndex((row) => row.thread.id === activeThreadId);
 
   return (
     <div ref={containerRef} className="relative inline-block">
@@ -199,17 +207,27 @@ export function ProjectThreadsDropdown() {
               </DropdownLabel>
             ) : (
               <>
-                {threads.map((thread, idx) => (
-                  <MenuItem
-                    key={thread.id}
-                    index={idx}
-                    label={thread.title?.trim() || "Untitled thread"}
-                    description={formatTimestamp(thread.last_used_at || thread.created_at)}
-                    icon={ChatCircleIcon}
-                    checked={thread.id === activeThreadId}
-                    onSelect={() => void handleSelectThread(thread.id)}
-                  />
-                ))}
+                {rows.map(({ thread, depth, task }, idx) => {
+                  const when = formatTimestamp(thread.last_used_at || thread.created_at);
+                  // Each thread shows the agent it runs on; nesting is the indent.
+                  const agent = agents.find((item) => item.id === thread.agent_id);
+                  const icon = providerLogoIcon(
+                    agentLogoKey(agent, thread.agent_id),
+                    agent?.displayName ?? thread.agent_id,
+                  );
+                  return (
+                    <MenuItem
+                      key={thread.id}
+                      index={idx}
+                      label={thread.title?.trim() || "Untitled thread"}
+                      description={task ? `${taskStatusText(task)} · ${when}` : when}
+                      icon={icon}
+                      checked={thread.id === activeThreadId}
+                      onSelect={() => void handleSelectThread(thread.id)}
+                      style={depth > 0 ? { paddingLeft: `${depth * 12}px` } : undefined}
+                    />
+                  );
+                })}
 
                 {hasMore && (
                   <>

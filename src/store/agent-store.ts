@@ -11,9 +11,10 @@ import type {
   AgentCapabilities,
   AuthMethod,
   AvailableCommand,
+  DestructiveConfirmation,
   SessionConfigOption,
-  SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
+import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import {
   createChatProjector,
   projectToolResultMessages,
@@ -86,6 +87,38 @@ function applyThreadTitleUpdate(threadId: string, title: string): void {
   }));
 }
 
+/**
+ * A thread deleted in main by someone other than this renderer (an agent, or a
+ * workspace delete): drop it from the same caches a title update patches, so
+ * the sidebar and lists don't wait for a refresh.
+ */
+function applyThreadDeleted(threadId: string): void {
+  queryClient.setQueriesData<ThreadPage | undefined>({ queryKey: ["project-threads"] }, (current) =>
+    current
+      ? { ...current, threads: current.threads.filter((thread) => thread.id !== threadId) }
+      : current,
+  );
+  useThreadStore.getState().forgetThread(threadId);
+}
+
+/**
+ * A thread row changed in main (it moved to another workspace): replace it in
+ * every cache that holds it, so its tab, the workspace grouping and the
+ * sidebar follow without a refetch.
+ */
+function applyThreadUpdated(thread: Thread): void {
+  const replace = (item: Thread) => (item.id === thread.id ? { ...item, ...thread } : item);
+  queryClient.setQueryData<(OpenTabsState & { openThreads: Thread[] }) | undefined>(
+    OPEN_TABS_QUERY_KEY,
+    (current) =>
+      current ? { ...current, openThreads: current.openThreads.map(replace) } : current,
+  );
+  queryClient.setQueriesData<ThreadPage | undefined>({ queryKey: ["project-threads"] }, (current) =>
+    current ? { ...current, threads: current.threads.map(replace) } : current,
+  );
+  useThreadStore.setState((state) => ({ threads: state.threads.map(replace) }));
+}
+
 /** A question surfaced to the user, mapped from an ACP permission request. */
 export interface UiRequest {
   id: string;
@@ -100,6 +133,8 @@ export interface UiRequest {
    *  Null when the owning session isn't bound to a thread. */
   threadId: string | null;
   optionIds?: string[];
+  /** Set for Pipper's destructive confirmations: draw the hold-to-confirm card. */
+  confirm?: DestructiveConfirmation;
 }
 
 interface AgentState {
@@ -117,8 +152,8 @@ interface AgentState {
   threadToolCalls: Record<string, Record<string, AcpToolCallState>>;
   /** Renderer-visible switch target; null once main has authoritatively settled. */
   pendingThreadTarget: string | null;
-  /** Subagent runs spawned via the client-hosted spawn_subagent tool. */
-  subagentRuns: SubagentRunSnapshot[];
+  /** Recent tasks (child threads) started through the pipper-agents tools. */
+  agentTasks: AgentTaskSnapshot[];
   permissionRequest: AcpPermissionRequest | null;
   /** Pending questions from agents (mapped from ACP request_permission),
    *  in arrival order. Multiple background threads can each raise a question;
@@ -554,14 +589,16 @@ function applyBridgeEvent(
     return { threadToolCalls };
   }
 
-  // Subagent activity is global (not per-thread); apply regardless of which
-  // thread is displayed or being switched into.
-  if (payload.type === "subagent-runs") {
-    return { subagentRuns: payload.runs };
+  // Tasks are global (not per-thread); apply regardless of which thread is
+  // displayed or being switched into.
+  if (payload.type === "agent-tasks") {
+    return { agentTasks: payload.tasks };
   }
 
   // Catalogs live in the model-catalog store (applied by the bridge listener).
   if (payload.type === "model-catalogs") return {};
+  // Thread lists live in the thread store and queries (bridge listener).
+  if (payload.type === "thread-deleted" || payload.type === "thread-updated") return {};
 
   if (
     pendingThreadTarget &&
@@ -686,6 +723,7 @@ function applyBridgeEvent(
         sessionId: payload.request.sessionId,
         threadId: payload.request.threadId ?? null,
         optionIds: options.map((o) => o.optionId),
+        ...(payload.request.confirm ? { confirm: payload.request.confirm } : {}),
       };
       // Enqueue rather than overwrite, so concurrent requests from one session
       // remain answerable. A repeated JSON-RPC id is the only safe dedupe key.
@@ -852,7 +890,7 @@ export const useAgentStore = create<AgentState>((set, get) => ({
   runningThreadIds: [],
   threadToolCalls: {},
   pendingThreadTarget: null,
-  subagentRuns: [],
+  agentTasks: [],
   permissionRequest: null,
   uiRequestQueue: [],
   uiRequest: null,
@@ -910,6 +948,12 @@ export const useAgentStore = create<AgentState>((set, get) => ({
         }
         if (payload.type === "title") {
           applyThreadTitleUpdate(payload.threadId, payload.title);
+        }
+        if (payload.type === "thread-deleted") {
+          applyThreadDeleted(payload.threadId);
+        }
+        if (payload.type === "thread-updated") {
+          applyThreadUpdated(payload.thread);
         }
         if (payload.type === "model-catalogs") {
           const remember = useModelCatalogStore.getState().remember;
@@ -978,6 +1022,10 @@ export const useAgentStore = create<AgentState>((set, get) => ({
       if (window.omni.agent.getRunningThreads) {
         const runningThreadIds = await window.omni.agent.getRunningThreads();
         set({ runningThreadIds });
+      }
+      // Tasks only arrive as change events; seed them so nesting survives a reload.
+      if (window.omni.agentTasks?.list) {
+        set({ agentTasks: await window.omni.agentTasks.list() });
       }
     } catch (err) {
       set({
@@ -1180,10 +1228,16 @@ export const useAgentStore = create<AgentState>((set, get) => ({
     const failed = (err: unknown): boolean => {
       if (switchId !== latestThreadSwitchId) return false;
       if (pendingThreadTarget === threadId) pendingThreadTarget = null;
-      set({
-        pendingThreadTarget: null,
-        error: err instanceof Error ? err.message : "Failed to switch thread",
-      });
+      const message = err instanceof Error ? err.message : "Failed to switch thread";
+      // The thread was deleted while something still pointed at it (a
+      // finished-thread card, a stale list): drop it everywhere instead of
+      // leaving a dead entry to click again.
+      if (/Thread not found/i.test(message)) {
+        useThreadStore.getState().forgetThread(threadId);
+        set({ pendingThreadTarget: null, error: "That thread was deleted." });
+        return true;
+      }
+      set({ pendingThreadTarget: null, error: message });
       return true;
     };
     try {

@@ -7,11 +7,11 @@ import {
   WarningCircle,
 } from "@phosphor-icons/react";
 import { AgentAccountsSettings } from "@/components/agent-accounts-settings";
+import { ConnectorSettings } from "@/components/connector-settings";
 import { RemoteAccessSettings } from "@/components/remote-access-settings";
 import { SleeplessControl } from "@/components/sleepless-control";
 import { WorkspaceStateGallery } from "@/components/workspace-state-gallery";
 import { ThemePicker } from "@/components/theme-picker";
-import { WorkspaceModePicker } from "@/components/workspace-mode-picker";
 import { createProviderLogoIcon } from "@/components/provider-logos";
 import { Elevated } from "@/lib/elevated";
 import type { IconComponent } from "@/lib/icon-context";
@@ -54,6 +54,7 @@ type SectionId =
   | "design"
   | "appearance"
   | "agents"
+  | "connectors"
   | "browser"
   | "accounts"
   | "keyboard"
@@ -61,10 +62,13 @@ type SectionId =
   | "remote"
   | "storage";
 
-const NAV_ITEMS: Array<{ id: SectionId; label: string }> = [
-  { id: "appearance", label: "Appearance" },
+const NAV_ITEMS: Array<{ id: SectionId; label: string; hidden?: boolean }> = [
+  // Hidden while Pipper is designed dark-first; AppearanceView and the theme
+  // picker stay so it can come back by dropping `hidden`.
+  { id: "appearance", label: "Appearance", hidden: true },
   { id: "design", label: "Design system" },
   { id: "agents", label: "Agents" },
+  { id: "connectors", label: "Connectors" },
   { id: "browser", label: "Browser" },
   { id: "accounts", label: "Account" },
   { id: "keyboard", label: "Keyboard & trackpad" },
@@ -72,6 +76,8 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string }> = [
   { id: "storage", label: "Storage" },
   { id: "remote", label: "Remote" },
 ];
+
+const VISIBLE_NAV_ITEMS = NAV_ITEMS.filter((item) => !item.hidden);
 
 /**
  * Registry id → anchor on the marketing setup guide (`/docs/agents`).
@@ -358,6 +364,10 @@ const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
     title: "Agents",
     blurb: "Choose which coding agents Pipper can use.",
   },
+  connectors: {
+    title: "Connectors",
+    blurb: "Give every agent other services' tools. Sign in once here; Pipper keeps the keys.",
+  },
   browser: {
     title: "Agent browser",
     blurb: "Headless pages your agents can open to read docs and test web apps.",
@@ -380,6 +390,24 @@ const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
   },
 };
 
+function DesignView() {
+  return (
+    <div className="flex flex-col gap-5">
+      <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70">
+        <SettingRow
+          title="Theme lab"
+          description="Tune the git-state colours live against the shell, then copy the CSS."
+        >
+          <Button size="sm" variant="secondary" onClick={() => void window.omni.themeLab.open()}>
+            Open theme lab
+          </Button>
+        </SettingRow>
+      </Elevated>
+      <WorkspaceStateGallery />
+    </div>
+  );
+}
+
 function AppearanceView() {
   return (
     <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70">
@@ -387,10 +415,6 @@ function AppearanceView() {
         <SettingRow title="Theme">
           <ThemePicker />
         </SettingRow>
-        <div className="px-4 py-4">
-          <div className="text-[13px] font-medium text-foreground">Workspace mode</div>
-          <WorkspaceModePicker className="mt-3" />
-        </div>
       </div>
     </Elevated>
   );
@@ -842,7 +866,7 @@ function RemoteView() {
 }
 
 export function SettingsApp() {
-  const [section, setSection] = useState<SectionId>("appearance");
+  const [section, setSection] = useState<SectionId>(VISIBLE_NAV_ITEMS[0]!.id);
   const meta = SECTION_META[section];
 
   return (
@@ -860,7 +884,7 @@ export function SettingsApp() {
               <SidebarGroup>
                 <SidebarGroupContent>
                   <SidebarMenu>
-                    {NAV_ITEMS.map((item) => (
+                    {VISIBLE_NAV_ITEMS.map((item) => (
                       <SidebarMenuItem key={item.id}>
                         <SidebarMenuButton
                           isActive={section === item.id}
@@ -884,7 +908,7 @@ export function SettingsApp() {
           <SidebarInset className="bg-surface-1">
             <ScrollArea className="h-full min-h-0 flex-1" scrollFade cueSize="tight">
               <main
-                className={`mx-auto w-full min-w-0 flex-1 px-7 py-8 pb-12 ${section === "design" ? "max-w-[1200px]" : "max-w-[640px]"}`}
+                className={`mx-auto w-full min-w-0 flex-1 px-7 py-8 pb-12 ${section === "design" ? "max-w-[1200px]" : section === "connectors" ? "max-w-[760px]" : "max-w-[640px]"}`}
               >
                 <div className="mb-5">
                   <h1 className="text-[26px] font-semibold tracking-[-0.035em] text-foreground">
@@ -895,9 +919,10 @@ export function SettingsApp() {
                   ) : null}
                 </div>
 
-                {section === "design" && <WorkspaceStateGallery />}
+                {section === "design" && <DesignView />}
                 {section === "appearance" && <AppearanceView />}
                 {section === "agents" && <AgentsSettingsSection />}
+                {section === "connectors" && <ConnectorSettings />}
                 {section === "browser" && <BrowserView />}
                 {section === "accounts" && <AccountsView />}
                 {section === "keyboard" && <KeyboardView />}

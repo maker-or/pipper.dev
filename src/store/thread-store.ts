@@ -20,10 +20,12 @@ interface ThreadState {
   loadProjectThreads: (projectId: string, options?: { reset?: boolean }) => Promise<void>;
   renameThread: (id: string, title: string) => Promise<Thread | null>;
   deleteThread: (id: string) => Promise<void>;
+  /** Drop a thread already deleted in main (by an agent, or with its workspace). */
+  forgetThread: (id: string) => void;
   addThread: (thread: Thread) => void;
 }
 
-export const useThreadStore = create<ThreadState>((set) => ({
+export const useThreadStore = create<ThreadState>((set, get) => ({
   threads: [],
   pagesByProject: {},
   isLoading: false,
@@ -134,16 +136,8 @@ export const useThreadStore = create<ThreadState>((set) => ({
   deleteThread: async (id) => {
     try {
       await window.omni.threads.delete(id);
-      // Drop any unsent `/continue` transcript staged for this thread.
-      useContinuationStore.getState().clearPending(id);
-      useThreadCompletionStore.getState().dismissThread(id);
-      set((state) => ({
-        threads: state.threads.filter((t) => t.id !== id),
-        // A local mutation did not advance the server-backed pagination
-        // cursor, so deleting it must not move that cursor backwards either.
-        pagesByProject: state.pagesByProject,
-        error: null,
-      }));
+      get().forgetThread(id);
+      set({ error: null });
     } catch (err) {
       console.error("Failed to delete thread:", err);
       set({
@@ -151,6 +145,17 @@ export const useThreadStore = create<ThreadState>((set) => ({
       });
       throw err;
     }
+  },
+  forgetThread: (id) => {
+    // Drop any unsent `/continue` transcript staged for this thread.
+    useContinuationStore.getState().clearPending(id);
+    useThreadCompletionStore.getState().dismissThread(id);
+    set((state) => ({
+      threads: state.threads.filter((t) => t.id !== id),
+      // A local mutation did not advance the server-backed pagination
+      // cursor, so deleting it must not move that cursor backwards either.
+      pagesByProject: state.pagesByProject,
+    }));
   },
   addThread: (thread) => {
     set((state) => {

@@ -8,21 +8,17 @@ import { sendWorkspaceAgentPrompt } from "@/lib/workspace-agent-prompt";
 import { encodeContextString } from "@/lib/git-skills";
 
 /**
- * Tell the preview store which workspace this shell is showing: the same
- * project and checkout its file tree lists (projectId null when it shows
- * none). `enabled` is false for a shell that is not the one on screen: it must
- * not write at all, because React runs a parent's effects after its child's
- * and a hidden parent shell would overwrite the visible child shell's value.
+ * Tell the preview store which workspace is on screen: the same project and
+ * checkout its file tree lists (projectId null when it shows none).
  */
 export function useShowPreviewWorkspace(
-  enabled: boolean,
   projectId: string | null,
   worktreePath: string | null,
 ): void {
   const key = projectId ? previewWorkspaceKey(projectId, worktreePath) : null;
   useEffect(() => {
-    if (enabled) usePreviewStore.getState().setShownWorkspace(key);
-  }, [enabled, key]);
+    usePreviewStore.getState().setShownWorkspace(key);
+  }, [key]);
 }
 
 /** Key of the workspace whose preview tab the tab bar and panel show. */

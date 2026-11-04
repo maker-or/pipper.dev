@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -8,8 +8,12 @@ import {
   type AskUserAnswer,
   type AskUserQuestion,
 } from "@/components/ui/ask-user-questions";
+import { HoldToConfirmButton } from "@/components/hold-to-confirm-button";
+import { Button } from "@/components/ui/button";
 import { useAgentStore, type UiRequest } from "@/store/agent-store";
 import { useThreadStore } from "@/store/thread-store";
+import { fontWeights } from "@/lib/font-weight";
+import { useShape } from "@/lib/shape-context";
 import { spring } from "@/lib/springs";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +42,23 @@ export function AgentQuestionCard({
 }) {
   const respondToUiRequest = useAgentStore((s) => s.respondToUiRequest);
 
+  if (request.confirm) {
+    return (
+      <DestructiveConfirmCard request={request} confirm={request.confirm} className={className} />
+    );
+  }
+  return <ChoiceCard request={request} className={className} respond={respondToUiRequest} />;
+}
+
+function ChoiceCard({
+  request,
+  className,
+  respond: respondToUiRequest,
+}: {
+  request: UiRequest;
+  className?: string;
+  respond: ReturnType<typeof useAgentStore.getState>["respondToUiRequest"];
+}) {
   const handleComplete = useCallback(
     (answers: Record<string, AskUserAnswer>) => {
       const answer = answers[request.sessionId];
@@ -62,6 +83,71 @@ export function AgentQuestionCard({
       className={cn("w-full max-w-none bg-surface-2", className)}
     />
   );
+}
+
+/**
+ * Pipper's own destructive call on something the agent doesn't own: what it
+ * would do, a red button that confirms only when held, and a plain decline.
+ */
+function DestructiveConfirmCard({
+  request,
+  confirm,
+  className,
+}: {
+  request: UiRequest;
+  confirm: NonNullable<UiRequest["confirm"]>;
+  className?: string;
+}) {
+  const respondToUiRequest = useAgentStore((s) => s.respondToUiRequest);
+  const shape = useShape();
+  const [answered, setAnswered] = useState(false);
+  const { title, verb } = confirm;
+  const [confirmName, declineName] = request.options ?? [];
+  const answer = (value: string | undefined) => {
+    if (answered || value === undefined) return;
+    setAnswered(true);
+    void respondToUiRequest({ requestId: request.id, value }).catch(() => setAnswered(false));
+  };
+
+  return (
+    // Same frame and type scale as the question card it replaces; red is
+    // kept for the action, not the frame.
+    <section
+      data-pipper-id="destructive-confirm-card"
+      aria-label={title}
+      className={cn("relative w-full bg-card border border-border", shape.container, className)}
+    >
+      <div className="px-4 pt-4 sm:px-5 sm:pt-5">
+        <h3
+          className="text-[16px] leading-snug text-foreground"
+          style={{ fontVariationSettings: fontWeights.semibold }}
+        >
+          {title}
+        </h3>
+      </div>
+      <div className="flex items-start gap-2 px-4 pt-4 pb-4 sm:px-5 sm:pb-5">
+        <HoldToConfirmButton
+          label={`Hold to ${verb}`}
+          accessibleLabel={`Hold to ${lowerFirst(title)}`}
+          disabled={answered}
+          onConfirm={() => answer(confirmName)}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={answered}
+          onClick={() => answer(declineName)}
+        >
+          {declineName ?? "Don't allow"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
+function lowerFirst(text: string): string {
+  return text.charAt(0).toLowerCase() + text.slice(1);
 }
 
 /** Bottom-right dock for questions raised by a session the user is NOT

@@ -14,7 +14,12 @@ import type {
   WorkspaceGitActionResult,
   WorkspaceGitStatus,
 } from "../../contracts/git.ts";
-import type { OpenTabsState, Thread, ThreadPage } from "../../contracts/threads.ts";
+import type {
+  OpenTabsState,
+  Thread,
+  ThreadMoveResult,
+  ThreadPage,
+} from "../../contracts/threads.ts";
 import type {
   AcpAgentDescriptor,
   AcpAgentInstance,
@@ -34,9 +39,21 @@ import type {
   BrowserConfig,
   InlineWidgetDocument,
   InlineWidgetRef,
-  SubagentConfig,
-  SubagentRunSnapshot,
 } from "../../contracts/acp.ts";
+import type { SettingChangeRecord } from "../../contracts/settings.ts";
+import type {
+  ConnectorAddInput,
+  ConnectorRequestAnswer,
+  ConnectorRequestRef,
+  ConnectorRequestSnapshot,
+  ConnectorSnapshot,
+  ConnectorUpdateInput,
+} from "../../contracts/connectors.ts";
+import type {
+  AgentTaskConfig,
+  AgentTaskSnapshot,
+  ThreadProposalSnapshot,
+} from "../../contracts/agent-tasks.ts";
 import type {
   LauncherDownloadProgress,
   LauncherUpdateDiagnostics,
@@ -61,6 +78,7 @@ import type {
   MonitorTabMismatchReport,
 } from "../../contracts/monitor.ts";
 import type { SleeplessPreferences, SleeplessStatus } from "../../contracts/sleepless.ts";
+import type { NativeMenuRequest } from "../../contracts/native-menu.ts";
 import type {
   ThreadBenchmarkIngestedTurn,
   ThreadBenchmarkMode,
@@ -145,6 +163,9 @@ declare global {
       };
       projects: {
         list: () => Promise<Project[]>;
+        /** Saves the rail order and returns the projects in it. */
+        reorder: (projectIds: string[]) => Promise<Project[]>;
+        delete: (projectId: string) => Promise<{ activeProjectId: string | null }>;
         create: (input: CreateProjectInput) => Promise<Project>;
         getActive: () => Promise<Project | null>;
         /** `requestId` lets the caller abandon the scan via `cancelListFiles`. */
@@ -161,6 +182,7 @@ declare global {
         setActive: (projectId: string) => Promise<void>;
         onActiveChanged: (callback: (projectId: string) => void) => () => void;
         onListChanged: (callback: (project: Project) => void) => () => void;
+        onDeleted?: (callback: (projectId: string) => void) => () => void;
       };
       files: {
         stat: (target: FilePreviewTarget) => Promise<FilePreviewInfo>;
@@ -176,6 +198,7 @@ declare global {
         onDeleted: (
           callback: (workspace: { projectId: string; path: string }) => void,
         ) => () => void;
+        onChanged: (callback: (event: { projectId: string }) => void) => () => void;
         switch: (input: { projectId: string; path: string }) => Promise<Thread>;
         getSelections: () => Promise<Record<string, string>>;
         onSetupProgress: (callback: (progress: WorktreeSetupProgress) => void) => () => void;
@@ -184,7 +207,9 @@ declare global {
           projectId: string;
           path: string;
           branch: string;
-        }) => Promise<{ thread: Thread; worktree: Worktree }>;
+          /** False keeps the displayed thread; the default opens one in the worktree. */
+          activate?: boolean;
+        }) => Promise<{ thread: Thread | null; worktree: Worktree }>;
         archive: (input: { projectId: string; path: string }) => Promise<WorkspaceGitActionResult>;
         restore: (input: { projectId: string; path: string }) => Promise<WorkspaceGitActionResult>;
         continue: (input: { projectId: string; path: string }) => Promise<Worktree>;
@@ -237,6 +262,7 @@ declare global {
         ) => () => void;
       };
       threads: {
+        move: (input: { threadId: string; workspace: string }) => Promise<ThreadMoveResult>;
         list: () => Promise<Thread[]>;
         listByIds: (ids: string[]) => Promise<Thread[]>;
         listProject: (input: {
@@ -332,10 +358,20 @@ declare global {
         reportEditorText: (text: string) => void;
         onEvent: (callback: (payload: AcpBridgeEvent) => void) => () => void;
       };
-      subagents: {
-        getConfig: () => Promise<SubagentConfig>;
-        setConfig: (partial: Partial<SubagentConfig>) => Promise<SubagentConfig>;
-        listRuns: () => Promise<SubagentRunSnapshot[]>;
+      themeLab: {
+        open: () => Promise<void>;
+      };
+      settings: {
+        getChange: (id: string) => Promise<SettingChangeRecord | null>;
+        undoChange: (id: string) => Promise<SettingChangeRecord>;
+      };
+      agentTasks: {
+        getConfig: () => Promise<AgentTaskConfig>;
+        setConfig: (partial: Partial<AgentTaskConfig>) => Promise<AgentTaskConfig>;
+        list: () => Promise<AgentTaskSnapshot[]>;
+        getProposals: (ids: string[]) => Promise<ThreadProposalSnapshot[]>;
+        startProposal: (id: string) => Promise<ThreadProposalSnapshot>;
+        dismissProposal: (id: string) => Promise<ThreadProposalSnapshot>;
       };
       widgets: {
         getDocument: (
@@ -353,8 +389,39 @@ declare global {
         update: (id: string, input: Partial<McpServerInput>) => Promise<McpServerRecord | null>;
         delete: (id: string) => Promise<void>;
       };
+      /** The cards agents' `add_connector` calls show in their thread. */
+      connectorRequests: {
+        get: (ids: string[]) => Promise<ConnectorRequestSnapshot[]>;
+        /** By id, or by the thread and the connector its call named. */
+        find: (ref: ConnectorRequestRef) => Promise<ConnectorRequestSnapshot | null>;
+        /** Connects (signing in if needed); resolves when it's done or failed. */
+        connect: (id: string, answer?: ConnectorRequestAnswer) => Promise<ConnectorRequestSnapshot>;
+        cancel: (id: string) => Promise<void>;
+        decline: (id: string) => Promise<ConnectorRequestSnapshot>;
+        onChanged: (callback: (request: ConnectorRequestSnapshot) => void) => () => void;
+      };
+      connectors: {
+        list: () => Promise<ConnectorSnapshot[]>;
+        add: (input: ConnectorAddInput) => Promise<ConnectorSnapshot>;
+        update: (id: string, input: ConnectorUpdateInput) => Promise<ConnectorSnapshot>;
+        remove: (id: string) => Promise<void>;
+        /** Connects, and opens the sign-in page first if the server asks for one. */
+        connect: (id: string) => Promise<ConnectorSnapshot>;
+        /** Opens the server's sign-in page; resolves once signed in and connected. */
+        signIn: (id: string) => Promise<ConnectorSnapshot>;
+        cancelSignIn: (id: string) => Promise<void>;
+        signOut: (id: string) => Promise<ConnectorSnapshot>;
+        /** Connects again and refreshes the tools. */
+        check: (id: string) => Promise<ConnectorSnapshot>;
+        setEnabled: (id: string, enabled: boolean) => Promise<ConnectorSnapshot>;
+        onChanged: (callback: (connector: ConnectorSnapshot) => void) => () => void;
+        onRemoved: (callback: (id: string) => void) => () => void;
+      };
       dialog: {
         pickDirectory: () => Promise<string | null>;
+      };
+      menu: {
+        popup: (request: NativeMenuRequest) => Promise<string | null>;
       };
       terminal: {
         create: (sessionId: string, cwd?: string, cols?: number, rows?: number) => Promise<void>;

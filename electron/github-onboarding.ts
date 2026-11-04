@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import type { GitHubCliStatus, GitHubRepositoryPage } from "../contracts/github.ts";
-import type { Project } from "../contracts/projects.ts";
+import { shapeForSeed, type Project } from "../contracts/projects.ts";
 import { ghBinary } from "./git-workspace.ts";
 import { createProject, listProjects } from "./projects.ts";
 import { foreignGitEnv, gitBinary } from "./worktree-manager.ts";
@@ -174,7 +174,7 @@ async function cloneAndRegister(fullName: string): Promise<Project> {
     const projectPath = await realpath(project.path).catch(() => null);
     if (projectPath === path) return project;
   }
-  return createProject({ name: fullName, path, icon: "GithubLogo" });
+  return createProject({ name: fullName, path, icon: shapeForSeed(fullName) });
 }
 
 export function cloneGitHubRepository(input: string): Promise<Project> {

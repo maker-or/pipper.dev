@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { RemotePermission } from "../contracts/remote.ts";
 import type * as acp from "@agentclientprotocol/sdk";
-import type { AcpBridgeEvent, AcpPermissionRequest } from "../contracts/acp.ts";
+import type {
+  AcpBridgeEvent,
+  AcpPermissionRequest,
+  DestructiveConfirmation,
+} from "../contracts/acp.ts";
 import type { AgentOsNotification } from "./os-notifications.ts";
 
 /** Cancel unanswered permissions after this long; never grant unattended access. */
@@ -11,11 +15,11 @@ interface PendingPermission {
   decisionId: string;
   resolve: (response: acp.RequestPermissionResponse) => void;
   request: AcpPermissionRequest;
-  timer: ReturnType<typeof setTimeout>;
+  timer: ReturnType<typeof setTimeout> | null;
 }
 
 export interface PermissionCoordinatorDeps {
-  /** Auto-answer for headless subagent sessions; null means "ask the user". */
+  /** Policy answer (agent-task workspace rules); null means "ask the user". */
   autoResponse: (params: acp.RequestPermissionRequest) => acp.RequestPermissionResponse | null;
   findThreadBySessionId: (sessionId: string) => string | null;
   emit: (event: AcpBridgeEvent) => void;
@@ -28,6 +32,10 @@ export interface PermissionCoordinatorDeps {
  * per (sessionId, requestId); a re-request of the same key displaces the old
  * one with a cancellation, and every unresolved request settles after a
  * timeout so an agent can never block forever on a hidden prompt.
+ *
+ * Destructive confirmations (`confirm`) are the exception: no agent waits on
+ * them (the tool call already returned), so they stay answerable until the
+ * user answers or the session closes.
  */
 export class PermissionCoordinator {
   private readonly deps: PermissionCoordinatorDeps;
@@ -45,9 +53,11 @@ export class PermissionCoordinator {
   handle(
     params: acp.RequestPermissionRequest,
     requestId: string | number | null,
+    confirm?: DestructiveConfirmation,
   ): Promise<acp.RequestPermissionResponse> {
-    // Subagent sessions have no UI surface to answer on; resolve per config.
-    const auto = this.deps.autoResponse(params);
+    // A policy may answer without a prompt (see AgentTaskService), but never a
+    // destructive confirmation: that is always the user's.
+    const auto = confirm ? null : this.deps.autoResponse(params);
     if (auto) return Promise.resolve(auto);
 
     const sessionId = params.sessionId;
@@ -63,19 +73,22 @@ export class PermissionCoordinator {
         name: opt.name,
         kind: opt.kind,
       })),
+      ...(confirm ? { confirm } : {}),
     };
 
     return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        const pending = this.pending.get(key);
-        if (!pending) return;
-        this.pending.delete(key);
-        resolve({ outcome: { outcome: "cancelled" } });
-        this.deps.emit({ type: "permission-resolved", sessionId, requestId: stableRequestId });
-      }, PERMISSION_TIMEOUT_MS);
+      const timer = confirm
+        ? null
+        : setTimeout(() => {
+            const pending = this.pending.get(key);
+            if (!pending) return;
+            this.pending.delete(key);
+            resolve({ outcome: { outcome: "cancelled" } });
+            this.deps.emit({ type: "permission-resolved", sessionId, requestId: stableRequestId });
+          }, PERMISSION_TIMEOUT_MS);
       const displaced = this.pending.get(key);
       if (displaced) {
-        clearTimeout(displaced.timer);
+        if (displaced.timer) clearTimeout(displaced.timer);
         displaced.resolve({ outcome: { outcome: "cancelled" } });
         this.deps.emit({ type: "permission-resolved", sessionId, requestId: stableRequestId });
       }
@@ -143,7 +156,7 @@ export class PermissionCoordinator {
     const pending = key ? this.pending.get(key) : undefined;
     if (!pending) return;
     this.pending.delete(key!);
-    clearTimeout(pending.timer);
+    if (pending.timer) clearTimeout(pending.timer);
     if (response.cancelled || !response.optionId) {
       pending.resolve({ outcome: { outcome: "cancelled" } });
     } else {
@@ -162,7 +175,7 @@ export class PermissionCoordinator {
     for (const [key, pending] of this.pending) {
       if (pending.request.sessionId !== sessionId) continue;
       this.pending.delete(key);
-      clearTimeout(pending.timer);
+      if (pending.timer) clearTimeout(pending.timer);
       pending.resolve({ outcome: { outcome: "cancelled" } });
       this.deps.emit({
         type: "permission-resolved",

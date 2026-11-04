@@ -1,4 +1,12 @@
 import type { InlineWidgetRef } from "../../contracts/acp.ts";
+import type { ConnectorRequestRef } from "../../contracts/connectors.ts";
+import { connectorRequestFromToolPart, connectorRequestKey } from "./connector-request-links.ts";
+import { settingsChangeFromToolPart } from "./settings-change-links.ts";
+import {
+  threadLinkFromToolPart,
+  threadProposalFromToolPart,
+  type ThreadLink,
+} from "./thread-links.ts";
 
 /**
  * Finds the widgets an agent showed with the `show_widget` MCP tool.
@@ -67,12 +75,17 @@ export function widgetRefKey(ref: InlineWidgetRef): string {
 
 export type MessageBodyBlock =
   | { kind: "text"; text: string }
-  | { kind: "widget"; ref: InlineWidgetRef; key: string };
+  | { kind: "widget"; ref: InlineWidgetRef; key: string }
+  | { kind: "thread"; link: ThreadLink; key: string }
+  | { kind: "proposal"; proposalId: string; key: string }
+  | { kind: "settings"; changeId: string; key: string }
+  | { kind: "connector"; ref: ConnectorRequestRef; key: string };
 
 /**
  * An assistant turn's visible body in timeline order: text segments with
- * widgets between them, where the agent showed them. Consecutive text joins
- * into one block, and a widget shown twice appears once.
+ * widgets and links to threads the agent started between them, where the
+ * agent made them. Consecutive text joins into one block, and a widget shown
+ * twice (or a thread started twice) appears once.
  */
 export function buildMessageBodyBlocks(
   parts: unknown[],
@@ -87,6 +100,42 @@ export function buildMessageBodyBlocks(
       const last = blocks.at(-1);
       if (last?.kind === "text") last.text = `${last.text}\n\n${typed.text}`;
       else blocks.push({ kind: "text", text: typed.text });
+      continue;
+    }
+    const changeId = settingsChangeFromToolPart(part);
+    if (changeId) {
+      const key = `settings:${changeId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "settings", changeId, key });
+      }
+      continue;
+    }
+    const connectorRef = connectorRequestFromToolPart(part, threadId);
+    if (connectorRef) {
+      const key = connectorRequestKey(connectorRef);
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "connector", ref: connectorRef, key });
+      }
+      continue;
+    }
+    const proposalId = threadProposalFromToolPart(part);
+    if (proposalId) {
+      const key = `proposal:${proposalId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "proposal", proposalId, key });
+      }
+      continue;
+    }
+    const link = threadLinkFromToolPart(part);
+    if (link) {
+      const key = `thread:${link.threadId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        blocks.push({ kind: "thread", link, key });
+      }
       continue;
     }
     const ref = widgetRefFromToolPart(part, threadId);

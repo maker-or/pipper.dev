@@ -26,7 +26,18 @@ export {
   type PlanEntry,
   type SessionConfigOption,
   type SessionUpdate,
-  type SubagentConfig,
-  type SubagentRunSnapshot,
-  type SubagentRunStatus,
 } from "./acp.ts";
+export type {
+  AgentTaskConfig,
+  AgentTaskOutcome,
+  AgentTaskSnapshot,
+  AgentTaskStatus,
+  AgentTaskWorkspaceMode,
+} from "./agent-tasks.ts";
+export {
+  type NextStep,
+  type NextStepAction,
+  NEXT_STEP_LIMITS,
+  WRAP_UP_TOOL_NAME,
+  parseNextStep,
+} from "./next-step.ts";

@@ -28,7 +28,7 @@ describe("agent slash commands", () => {
       },
       {
         name: "subagent",
-        description: "Orchestrate subagents across your installed agents",
+        description: "Orchestrate subthreads across your installed agents",
         inputHint: null,
         source: "client",
       },
@@ -46,9 +46,9 @@ describe("agent slash commands", () => {
     const commands = mergeAgentCommands([
       { name: "subagent", description: "agent-side variant" },
     ] as never);
-    const subagent = commands.filter((command) => command.name === "subagent");
-    expect(subagent).toHaveLength(1);
-    expect(subagent[0]!.source).toBe("client");
+    const subthread = commands.filter((command) => command.name === "subagent");
+    expect(subthread).toHaveLength(1);
+    expect(subthread[0]!.source).toBe("client");
   });
 
   test("matches case-insensitively and ranks prefix matches before substring matches", () => {

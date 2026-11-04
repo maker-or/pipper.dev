@@ -151,14 +151,23 @@ async function setup(options: { limits?: Partial<BrowserLimits>; http?: boolean 
   return { host, service };
 }
 
-async function openSession(service: BrowserService, sessionId: string, http = true) {
-  const attached = await service.attachMcpServers([], {
-    mcpCapabilities: http ? { http: true } : {},
-  });
+async function openSession(
+  service: BrowserService,
+  sessionId: string,
+  http = true,
+  shareKey: string | null = null,
+  /** A shared endpoint's URL, for sessions that aren't given the server again. */
+  sharedUrl?: string,
+) {
+  const attached = await service.attachMcpServers(
+    [],
+    { mcpCapabilities: http ? { http: true } : {} },
+    shareKey,
+  );
   if (!attached.token) throw new Error("expected a token");
   service.bindSession(attached.token, sessionId);
-  const entry = attached.servers[0] as { url?: string; args?: string[]; type: string };
-  const url = entry.url ?? entry.args?.[1] ?? "";
+  const entry = attached.servers[0] as { url?: string; args?: string[]; type: string } | undefined;
+  const url = entry?.url ?? entry?.args?.[1] ?? sharedUrl ?? "";
   let id = 1;
   const call = async (name: string, args: Record<string, unknown> = {}): Promise<ToolCall> => {
     const res = await fetch(url, {
@@ -387,8 +396,8 @@ describe("agent browser service", () => {
   test("agents without HTTP MCP get the same tools through the stdio shim", async () => {
     const { service } = await setup();
     const { entry, call } = await openSession(service, "s1", false);
-    expect(entry.type).toBe("stdio");
-    expect(entry.args?.[0]).toMatch(/browser-stdio-proxy\.mjs$/);
+    expect(entry?.type).toBe("stdio");
+    expect(entry?.args?.[0]).toMatch(/browser-stdio-proxy\.mjs$/);
     const result = await call("browser_open", { url: "https://a.test" });
     expect(result.isError).toBe(false);
   });
@@ -666,5 +675,71 @@ describe("agent browser service", () => {
     }
     expect(instructions).toContain("widget_guide");
     expect(instructions).toContain("preview_widget");
+  });
+});
+
+describe("an endpoint shared by a directory's sessions (OpenCode)", () => {
+  const SHARE = "connection-1\0/repo";
+
+  async function sharedSetup() {
+    const { host, service } = await setup();
+    let calling: string | null = "s1";
+    service.setWidgetHooks({
+      resolveThread: () => null,
+      onWidgetUpdated: () => undefined,
+      sessionForToolCall: async () => calling,
+    });
+    const one = await openSession(service, "s1", true, SHARE);
+    const two = await openSession(service, "s2", true, SHARE, one.url);
+    return {
+      host,
+      service,
+      one,
+      two,
+      callAs: (sessionId: string | null) => {
+        calling = sessionId;
+      },
+    };
+  }
+
+  test("only the first session is given the server; each keeps its own pages and storage", async () => {
+    const { host, service, one, two, callAs } = await sharedSetup();
+    expect(one.entry).toBeDefined();
+    expect(two.entry).toBeUndefined();
+    expect(service.endpointCount()).toBe(1);
+
+    callAs("s1");
+    await one.call("browser_open", { url: "https://a.test" });
+    callAs("s2");
+    await two.call("browser_open", { url: "https://b.test" });
+
+    expect(host.pages).toHaveLength(2);
+    expect(host.pages[0].partition).not.toBe(host.pages[1].partition);
+    callAs("s1");
+    const pages = await one.call("browser_pages");
+    expect(pages.text).toContain("a.test");
+    expect(pages.text).not.toContain("b.test");
+  });
+
+  test("closing one session closes only its pages; the endpoint goes with the last", async () => {
+    const { host, service, one, callAs } = await sharedSetup();
+    callAs("s1");
+    await one.call("browser_open", { url: "https://a.test" });
+
+    service.releaseSessionMcp("s1");
+    await vi.waitFor(() => expect(host.cleared).toHaveLength(1));
+    expect(host.pages[0].closed).toBe(true);
+    expect(service.endpointCount()).toBe(1);
+
+    service.releaseSessionMcp("s2");
+    expect(service.endpointCount()).toBe(0);
+  });
+
+  test("an ambiguous caller is refused with a retry hint", async () => {
+    const { one, callAs } = await sharedSetup();
+    callAs(null);
+    const result = await one.call("browser_open", { url: "https://a.test" });
+    expect(result.isError).toBe(true);
+    expect(result.text).toMatch(/couldn't tell which thread made this call/);
   });
 });

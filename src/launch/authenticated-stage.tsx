@@ -3,7 +3,7 @@ import { ArrowArcLeftIcon, CircleNotch, FolderIcon, GithubLogo } from "@phosphor
 import type { Project } from "../../contracts/projects.ts";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabItem, TabPanel } from "@/components/ui/tabs";
-import { ProjectIcon } from "@/components/ui/icon-picker";
+import { ProjectShapeIcon } from "@/components/project-shape";
 import { cn } from "@/lib/utils";
 import { AddProjectForm } from "./add-project-form";
 import { GitHubProjectPicker } from "./github-project-picker";
@@ -11,8 +11,6 @@ import { AmbientPixelField } from "@/components/ambient-pixel-field";
 import { AgentSelector } from "@/components/agent-selector";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { SleeplessOnboarding } from "@/components/sleepless-onboarding";
-import { WorkspaceModePicker } from "@/components/workspace-mode-picker";
-import { useUiModeStore, type UiMode } from "@/store/ui-mode-store";
 import { trackOnboarding } from "./onboarding-analytics";
 
 interface AuthenticatedStageProps {
@@ -26,12 +24,11 @@ interface AuthenticatedStageProps {
   handleProjectCreated: (project: Project) => void;
 }
 
-type LaunchStage = "agent" | "sleepless" | "shortcuts" | "mode" | "list" | "add";
+type LaunchStage = "agent" | "sleepless" | "shortcuts" | "list" | "add";
 
 const AGENT_PICK_STORAGE_KEY = "pipper.launch.agentPicked";
 const SLEEPLESS_ONBOARDING_STORAGE_KEY = "pipper.launch.sleeplessConfigured";
 const SHORTCUTS_ONBOARDING_STORAGE_KEY = "pipper.launch.shortcutsShown";
-const MODE_ONBOARDING_STORAGE_KEY = "pipper.launch.modeChosen";
 
 function isOnboardingFlagSet(key: string): boolean {
   try {
@@ -59,21 +56,8 @@ export function AuthenticatedStage({
 }: AuthenticatedStageProps) {
   const selectedAgentIds = useAgentRegistryStore((s) => s.selectedAgentIds);
   const loadAgents = useAgentRegistryStore((s) => s.load);
-  const currentUiMode = useUiModeStore((s) => s.mode);
-  const setUiMode = useUiModeStore((s) => s.setMode);
-  const [pendingMode, setPendingMode] = useState<UiMode>(currentUiMode);
   const [projectSource, setProjectSource] = useState("local");
   const [isAddingProject, setIsAddingProject] = useState(false);
-
-  const continueAfterMode = (mode: UiMode) => {
-    setUiMode(mode);
-    try {
-      sessionStorage.setItem(MODE_ONBOARDING_STORAGE_KEY, "1");
-    } catch {
-      // ignore sessionStorage errors
-    }
-    setStage("list");
-  };
 
   const [stage, setStage] = useState<LaunchStage>(() => {
     if (typeof window !== "undefined") {
@@ -91,10 +75,7 @@ export function AuthenticatedStage({
       if (stageParam === "shortcuts") {
         return "shortcuts";
       }
-      if (stageParam === "mode") {
-        return "mode";
-      }
-      // First-run funnel: agent → sleepless → shortcuts → mode → list.
+      // First-run funnel: agent → sleepless → shortcuts → list.
       // Returning users who completed an earlier step resume at the next unfinished one.
       if (!isOnboardingFlagSet(AGENT_PICK_STORAGE_KEY)) {
         return "agent";
@@ -104,9 +85,6 @@ export function AuthenticatedStage({
       }
       if (!isOnboardingFlagSet(SHORTCUTS_ONBOARDING_STORAGE_KEY)) {
         return "shortcuts";
-      }
-      if (!isOnboardingFlagSet(MODE_ONBOARDING_STORAGE_KEY)) {
-        return "mode";
       }
     }
     return "list";
@@ -133,7 +111,7 @@ export function AuthenticatedStage({
           "w-full z-10 rounded-2xl p-8 flex max-h-full flex-col gap-6 overflow-y-auto",
           stage === "agent"
             ? "max-w-3xl"
-            : stage === "sleepless" || stage === "shortcuts" || stage === "mode"
+            : stage === "sleepless" || stage === "shortcuts"
               ? "max-w-xl"
               : "max-w-md",
         )}
@@ -161,7 +139,7 @@ export function AuthenticatedStage({
                 } catch {
                   // ignore
                 }
-                setStage(isOnboardingFlagSet(MODE_ONBOARDING_STORAGE_KEY) ? "list" : "mode");
+                setStage("list");
               }}
             />
           </>
@@ -186,7 +164,7 @@ export function AuthenticatedStage({
                 setStage("shortcuts");
                 return;
               }
-              setStage(isOnboardingFlagSet(MODE_ONBOARDING_STORAGE_KEY) ? "list" : "mode");
+              setStage("list");
             }}
           />
         ) : stage === "shortcuts" ? (
@@ -223,30 +201,8 @@ export function AuthenticatedStage({
                 } catch {
                   // ignore
                 }
-                setStage(isOnboardingFlagSet(MODE_ONBOARDING_STORAGE_KEY) ? "list" : "mode");
+                setStage("list");
               }}
-            >
-              Continue
-            </Button>
-          </div>
-        ) : stage === "mode" ? (
-          <div className="flex flex-col gap-5">
-            <header className="flex flex-col gap-1">
-              <h1 className="text-2xl font-bold tracking-tight text-foreground">
-                How do you want to work?
-              </h1>
-              <p className="text-sm leading-6 text-muted-foreground">
-                Basic keeps one simple chat layout. Advanced creates a separate workspace for every
-                thread, so you can work on multiple features in parallel. You can change this later
-                in settings.
-              </p>
-            </header>
-            <WorkspaceModePicker value={pendingMode} onChange={setPendingMode} />
-            <Button
-              type="button"
-              size="md"
-              className="w-full"
-              onClick={() => continueAfterMode(pendingMode)}
             >
               Continue
             </Button>
@@ -362,10 +318,7 @@ export function AuthenticatedStage({
                                 isActive && "bg-accent border-accent",
                               )}
                             >
-                              <ProjectIcon
-                                name={project.icon}
-                                className="size-4 text-muted-foreground group-hover:text-foreground shrink-0"
-                              />
+                              <ProjectShapeIcon project={project} className="size-6 shrink-0" />
                               <span className="flex-1 truncate font-medium">{project.name}</span>
                               <ArrowArcLeftIcon
                                 className="size-3.5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"

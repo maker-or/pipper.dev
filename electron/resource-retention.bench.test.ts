@@ -17,7 +17,6 @@ vi.mock("electron", () => ({
 
 import { ThreadSnapshotStore } from "./thread-snapshot-store.ts";
 import { AgentConnectionManager } from "./agent-connection-manager.ts";
-import { SubagentManager } from "./subagents/subagent-manager.ts";
 
 const enabled = process.env.PIPPER_RESOURCE_BENCH === "1";
 const measurements: Record<string, unknown> = {};
@@ -96,69 +95,6 @@ test.skipIf(!enabled)(
   },
   120_000,
 );
-
-test.skipIf(!enabled)("measure completed subagent transcript retention", async () => {
-  let session = 0;
-  const manager = new SubagentManager({
-    baseDir: root!,
-    listAgents: () => [
-      {
-        id: "bench",
-        name: "bench",
-        displayName: "Bench",
-        command: "bench",
-        args: [],
-        available: true,
-      },
-    ],
-    host: {
-      baseMcpServers: () => [],
-      emitEvent: () => {},
-      acquireConnection: async () => ({
-        agentId: "bench",
-        agentCapabilities: {},
-        agent: {
-          notify: async () => {},
-          request: async (method, params) => {
-            if (method === "session/new") return { sessionId: `sub-${session++}` };
-            if (method === "session/prompt") {
-              manager.handleSessionUpdate(params.sessionId, {
-                sessionUpdate: "agent_message_chunk",
-                content: { type: "text", text: randomBytes(384 * 1024).toString("base64") },
-              });
-              manager.handleSessionUpdate(params.sessionId, {
-                sessionUpdate: "tool_call",
-                toolCallId: "write",
-                title: "Write",
-                rawInput: { text: randomBytes(384 * 1024).toString("base64") },
-              });
-            }
-            return {};
-          },
-        },
-      }),
-    },
-  });
-  const internal = manager as any;
-  // Avoid starting an MCP listener; exercise the real run lifecycle with a
-  // scripted ACP transport and maxDepth=1 (children get no nested MCP tool).
-  internal.tokens.set("bench", { sessionId: "parent", cwd: root!, depth: 0 });
-  internal.config.maxDepth = 1;
-  const before = memory();
-  for (let index = 0; index < 24; index++) {
-    expect(
-      (await internal.runSubagent("bench", { agent_id: "bench", task: "memory workload" })).length,
-    ).toBe(512 * 1024);
-  }
-  const after = memory();
-  measurements.completedSubagents = {
-    runs: 24,
-    before,
-    after,
-    retainedHeapBytes: after.heapUsed - before.heapUsed,
-  };
-  manager.dispose();
-});
 
 test.skipIf(!enabled)(
   "measure snapshot disk budget using real SQLite rows and gzip sidecars",

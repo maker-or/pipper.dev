@@ -1,6 +1,23 @@
 ---
 import Layout from "../layouts/Layout.astro";
 import ProductDemo from "../components/ProductDemo.tsx";
+import AgentTile from "../components/AgentTile.astro";
+import { CONNECTOR_CATALOG } from "../../../contracts/connector-catalog.ts";
+
+// Every catalog connector that has a mark in the app (svgl.app), in catalog
+// order. Files are `<id>.svg`, or `<id>-light.svg` when the app also ships a
+// dark version; the page is light, so it takes the light one.
+const logoFiles = import.meta.glob<{ default: { src: string } }>(
+    "../../../src/assets/connector-logos/*.svg",
+    { eager: true },
+);
+const logoFor = (id: string) =>
+    logoFiles[`../../../src/assets/connector-logos/${id}-light.svg`] ??
+    logoFiles[`../../../src/assets/connector-logos/${id}.svg`];
+const connectorLogos = CONNECTOR_CATALOG.flatMap((entry) => {
+    const file = logoFor(entry.id);
+    return file ? [{ name: entry.name, src: file.default.src }] : [];
+});
 ---
 
 <Layout
@@ -129,127 +146,13 @@ import ProductDemo from "../components/ProductDemo.tsx";
                 <div class="agent-matrix" aria-hidden="true">
                     {
                         Array.from({ length: 16 }).map((_, index) => (
-                            <span
-                                class:list={[
-                                    "agent-tile",
-                                    `agent-tile--${index % 4}`,
-                                ]}
-                            >
-                                {index % 4 === 0 && (
-                                    <svg
-                                        class="agent-glyph"
-                                        width="139"
-                                        height="133"
-                                        viewBox="0 0 139 133"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        role="presentation"
-                                    >
-                                        <path
-                                            d="M63.1362 1.93107C66.6799 -0.643566 71.4784 -0.643561 75.022 1.93107L133.99 44.7737C137.534 47.3484 139.016 51.912 137.663 56.0778L115.139 125.399C113.786 129.565 109.903 132.385 105.523 132.385H32.635C28.2547 132.385 24.3727 129.565 23.0191 125.399L0.495382 56.0778C-0.858183 51.912 0.624639 47.3484 4.16832 44.7737L63.1362 1.93107Z"
-                                            fill="#088139"
-                                        />
-                                    </svg>
-                                )}
-                                {index % 4 === 1 && (
-                                    <svg
-                                        class="agent-glyph"
-                                        width="161"
-                                        height="150"
-                                        viewBox="0 0 161 150"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        role="presentation"
-                                    >
-                                        <rect
-                                            width="161"
-                                            height="50"
-                                            rx="25"
-                                            fill="#B1620D"
-                                        />
-                                        <rect
-                                            y="50"
-                                            width="161"
-                                            height="50"
-                                            rx="25"
-                                            fill="#B1620D"
-                                        />
-                                        <rect
-                                            y="100"
-                                            width="161"
-                                            height="50"
-                                            rx="25"
-                                            fill="#B1620D"
-                                        />
-                                    </svg>
-                                )}
-                                {index % 4 === 2 && (
-                                    <svg
-                                        class="agent-glyph"
-                                        width="128"
-                                        height="128"
-                                        viewBox="0 0 128 128"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        role="presentation"
-                                    >
-                                        <circle
-                                            cx="96"
-                                            cy="32"
-                                            r="32"
-                                            fill="#5F92FE"
-                                        />
-                                        <circle
-                                            cx="32"
-                                            cy="32"
-                                            r="32"
-                                            fill="#5F92FE"
-                                        />
-                                        <circle
-                                            cx="32"
-                                            cy="96"
-                                            r="32"
-                                            fill="#5F92FE"
-                                        />
-                                        <circle
-                                            cx="96"
-                                            cy="96"
-                                            r="32"
-                                            fill="#5F92FE"
-                                        />
-                                        <rect
-                                            width="63"
-                                            height="70"
-                                            transform="translate(34 32)"
-                                            fill="#5F92FE"
-                                        />
-                                    </svg>
-                                )}
-                                {index % 4 === 3 && (
-                                    <svg
-                                        class="agent-glyph"
-                                        width="147"
-                                        height="145"
-                                        viewBox="0 0 147 145"
-                                        fill="none"
-                                        xmlns="http://www.w3.org/2000/svg"
-                                        role="presentation"
-                                    >
-                                        <path
-                                            d="M54.4823 9.7498C63.6334 -3.25253 82.9076 -3.25253 92.0587 9.7498V9.7498C96.6426 16.2628 104.273 19.9373 112.223 19.4603V19.4603C128.094 18.5081 140.111 33.5772 135.651 48.8387V48.8387C133.417 56.4834 135.302 64.7397 140.631 70.658V70.658C151.271 82.473 146.982 101.264 132.27 107.292V107.292C124.9 110.312 119.62 116.933 118.316 124.79V124.79C115.712 140.475 98.3471 148.838 84.4607 141.094V141.094C77.5049 137.215 69.0362 137.215 62.0803 141.094V141.094C48.1939 148.838 30.8285 140.475 28.2252 124.79V124.79C26.9211 116.933 21.6409 110.312 14.2712 107.292V107.292C-0.441472 101.264 -4.73037 82.473 5.90965 70.658V70.658C11.2394 64.7397 13.1238 56.4834 10.8898 48.8387V48.8387C6.42976 33.5772 18.447 18.5081 34.3182 19.4603V19.4603C42.2684 19.9373 49.8984 16.2628 54.4823 9.7498V9.7498Z"
-                                            fill="#A23EEB"
-                                        />
-                                    </svg>
-                                )}
-                            </span>
+                            <AgentTile variant={(index % 4) as 0 | 1 | 2 | 3} />
                         ))
                     }
                 </div>
             </div>
         </div>
     </section>
-
-
 
     <section class="sleepless-section" aria-labelledby="sleepless-title">
         <div class="sleepless-card">
@@ -289,103 +192,55 @@ import ProductDemo from "../components/ProductDemo.tsx";
             </div>
         </div>
     </section>
-    <section class="feature-section" aria-labelledby="workflow-title">
-        <div class="feature-board">
-            <div
-                class="feature-cursor-cloud feature-cursor-cloud--parallel"
-                aria-hidden="true"
-            >
-                <span
-                    class="feature-cursor feature-cursor--orange feature-cursor--parallel-1"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-                <span
-                    class="feature-cursor feature-cursor--red feature-cursor--parallel-2"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-                <span
-                    class="feature-cursor feature-cursor--purple feature-cursor--parallel-3"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-                <span
-                    class="feature-cursor feature-cursor--blue feature-cursor--parallel-4"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-                <span
-                    class="feature-cursor feature-cursor--green feature-cursor--parallel-5"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-                <span
-                    class="feature-cursor feature-cursor--orange feature-cursor--parallel-6"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-                <span
-                    class="feature-cursor feature-cursor--red feature-cursor--parallel-7"
-                >
-                    <svg viewBox="0 0 54 54" role="presentation">
-                        <path
-                            d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z"
-                        ></path>
-                    </svg>
-                </span>
-            </div>
-
-            <div class="feature-center">
-                <h2 id="workflow-title" class="feature-title">
-                    <span class="feature-line"><span class="feature-muted">Choose your own workflow</span></span>
-                    <span class="feature-line"><span class="feature-emphasis">simple</span><span class="feature-muted"> or </span><span class="feature-emphasis">worktree</span><span class="feature-muted"> first interface</span></span>
+    <section class="story-section" aria-labelledby="handoff-title">
+        <div class="story-card">
+            <div class="story-copy">
+                <span class="story-quote story-quote--open" aria-hidden="true">“</span>
+                <h2 id="handoff-title">
+                    One thread,<br />a team of agents
                 </h2>
+                <span class="story-quote story-quote--close" aria-hidden="true">”</span>
             </div>
-
-            <div
-                class="feature-cursor-cloud feature-cursor-cloud--subagents"
-                aria-hidden="true"
-            >
-                {
-                    Array.from({ length: 8 }).map((_, index) => (
-                        <span
-                            class:list={[
-                                "feature-cursor",
-                                "feature-cursor--blue",
-                                `feature-cursor--subagent-${index + 1}`,
-                            ]}
-                        >
-                            <svg viewBox="0 0 54 54" role="presentation">
-                                <path d="M8.7 25.1 39.2 9.8c2.8-1.4 5.8 1.2 4.8 4.2l-9.5 30.1c-.9 2.8-4.8 3.1-6.1.5l-6.4-12.8-12.6-1.6c-3-.4-3.5-3.9-.7-5.1Z" />
-                            </svg>
-                        </span>
-                    ))
-                }
+            <div class="story-art" aria-hidden="true">
+                <div class="handoff-tree">
+                    <span class="handoff-parent">@claude</span>
+                    <ul class="handoff-children">
+                        <li>
+                            <span class="handoff-agent handoff-agent--codex">@codex</span>
+                            <span class="handoff-task">Fix the failing tests</span>
+                        </li>
+                        <li>
+                            <span class="handoff-agent handoff-agent--grok">@grok</span>
+                            <span class="handoff-task">Research the new API</span>
+                        </li>
+                        <li>
+                            <span class="handoff-agent handoff-agent--opencode">@opencode</span>
+                            <span class="handoff-task">Update the docs</span>
+                        </li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </section>
+    <section class="story-section" aria-labelledby="connectors-title">
+        <div class="story-card story-card--reverse">
+            <div class="story-art" aria-hidden="true">
+                <ul class="connector-grid">
+                    {
+                        connectorLogos.map((logo) => (
+                            <li class="connector-logo" title={logo.name}>
+                                <img src={logo.src} alt={logo.name} width="28" height="28" />
+                            </li>
+                        ))
+                    }
+                </ul>
+            </div>
+            <div class="story-copy">
+                <span class="story-quote story-quote--open" aria-hidden="true">“</span>
+                <h2 id="connectors-title">
+                    Sign in once,<br />for every agent
+                </h2>
+                <span class="story-quote story-quote--close" aria-hidden="true">”</span>
             </div>
         </div>
     </section>
@@ -593,58 +448,6 @@ import ProductDemo from "../components/ProductDemo.tsx";
         justify-self: end;
     }
 
-    .agent-tile {
-        position: relative;
-        display: grid;
-        aspect-ratio: 1;
-        place-items: center;
-        border-radius: 1.08rem;
-    }
-
-    .agent-tile--0 {
-        background: #27b45c;
-    }
-    .agent-tile--1 {
-        background: #ffb24f;
-    }
-    .agent-tile--2 {
-        background: #86aff1;
-    }
-    .agent-tile--3 {
-        background: #b247ee;
-    }
-
-    .agent-glyph {
-        position: relative;
-        display: block;
-        width: 72%;
-        height: auto;
-        max-height: 76%;
-    }
-
-    .feature-section {
-        box-sizing: border-box;
-        width: 100vw;
-        min-height: 100svh;
-        padding: clamp(1.15rem, 3vw, 3.75rem);
-        background: var(--canvas-bg);
-    }
-
-    .feature-board {
-        position: relative;
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        box-sizing: border-box;
-        min-height: calc(100svh - clamp(2.3rem, 6vw, 7.5rem));
-        padding: clamp(3.1rem, 4.7vw, 5rem) clamp(2rem, 5.6vw, 6.8rem)
-            clamp(2.5rem, 5vw, 5rem);
-        border: none;
-        overflow: hidden;
-        isolation: isolate;
-    }
-
     .sleepless-section {
         box-sizing: border-box;
         display: grid;
@@ -807,182 +610,206 @@ import ProductDemo from "../components/ProductDemo.tsx";
         width: min(92%, 48rem);
         height: auto;
     }
-    .feature-center {
+
+    /* Bordered two-column story cards: copy on one side, art on the other. */
+    .story-section {
+        box-sizing: border-box;
+        display: grid;
+        /* Full width with a full-width track, so every card resolves to the
+           same width whatever its content. */
+        width: 100%;
+        grid-template-columns: minmax(0, 1fr);
+        min-height: 82svh;
+        place-items: center;
+        padding: clamp(2rem, 7vw, 6rem) clamp(1.25rem, 6vw, 5rem);
+        background: var(--canvas-bg);
+    }
+
+    .story-card {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        width: min(100%, 72rem);
+        min-height: clamp(23rem, 43vw, 32rem);
+        border: 1px solid #bdbdbd;
+    }
+
+    .story-copy {
         position: relative;
-        z-index: 2;
         display: flex;
         flex-direction: column;
+        justify-content: center;
+        padding: clamp(1.5rem, 4vw, 3.5rem) clamp(1.25rem, 3.5vw, 3rem);
+    }
+
+    .story-copy h2 {
+        margin: 0;
+        color: #303030;
+        font-family: "Figtree Variable", sans-serif;
+        font-size: clamp(2.15rem, 4.2vw, 3.6rem);
+        font-weight: 480;
+        letter-spacing: -0.08em;
+        line-height: 1.1;
+    }
+
+    .story-art {
+        display: flex;
         align-items: center;
         justify-content: center;
-        text-align: center;
-        max-width: 58rem;
-        margin: 0 auto;
-        padding: clamp(0.75rem, 2vw, 1.5rem);
-        pointer-events: auto;
+        padding: clamp(1.5rem, 4vw, 3rem);
+        border-left: 1px solid #bdbdbd;
     }
 
-    .feature-title {
-        position: relative;
-        z-index: 2;
-        margin: 0;
-        color: #272727;
+    /* The quote marks around each card's heading, like the cards above. */
+    .story-quote {
+        position: absolute;
+        color: #858585;
         font-family: "Figtree Variable", sans-serif;
-        font-size: clamp(2.2rem, 3.8vw, 4rem);
-        font-weight: 500;
-        letter-spacing: -0.085em;
-        line-height: 1.12;
-        text-align: center;
+        font-size: clamp(2rem, 3vw, 2.75rem);
+        font-weight: 700;
+        line-height: 1;
     }
 
-    .feature-line {
-        display: block;
-    }
-
-    .feature-muted {
-        opacity: 0.38;
-    }
-
-    .feature-emphasis {
-        opacity: 1;
-    }
-
-    .feature-cursor-cloud {
-        position: absolute;
-        z-index: 1;
-        pointer-events: none;
-    }
-
-    .feature-cursor-cloud--parallel {
-        top: clamp(2.5rem, 7vh, 5rem);
-        left: clamp(3rem, 6vw, 7rem);
-        transform: none;
-        width: min(26rem, 25vw);
-        height: 19rem;
-    }
-
-    .feature-cursor-cloud--subagents {
-        top: auto;
-        bottom: clamp(2.5rem, 7vh, 5rem);
-        right: clamp(3rem, 6vw, 7rem);
-        transform: none;
-        width: min(26rem, 25vw);
-        height: 19rem;
-    }
-
-    .feature-cursor {
-        position: absolute;
-        display: block;
-        width: clamp(2.8rem, 4.1vw, 4.8rem);
-        filter: drop-shadow(0.1rem 0.18rem 0.08rem rgb(0 0 0 / 0.34));
-        transform-origin: center;
-    }
-
-    .feature-cursor svg {
-        display: block;
-        width: 100%;
-        height: auto;
-        overflow: visible;
-    }
-
-    .feature-cursor path {
-        stroke: #191919;
-        stroke-width: 1.6;
-        stroke-linejoin: round;
-    }
-
-    .feature-cursor--orange path {
-        fill: var(--canvas-orange);
-    }
-    .feature-cursor--red path {
-        fill: #ff4043;
-    }
-    .feature-cursor--purple path {
-        fill: var(--canvas-purple);
-    }
-    .feature-cursor--blue path {
-        fill: #78a8ff;
-    }
-    .feature-cursor--green path {
-        fill: #63cc38;
-    }
-
-    /* Parallel work gets a loose, mixed-color scatter of the same canvas cursor. */
-    .feature-cursor--parallel-1 {
-        top: 25%;
-        left: 0;
-        transform: rotate(-55deg) scale(0.96);
-    }
-    .feature-cursor--parallel-2 {
-        top: 0;
-        left: 29%;
-        transform: rotate(-48deg) scale(1.02);
-    }
-    .feature-cursor--parallel-3 {
+    .story-quote--open {
         top: 22%;
-        left: 57%;
-        transform: rotate(-62deg) scale(0.94);
-    }
-    .feature-cursor--parallel-4 {
-        top: 58%;
-        left: -6%;
-        transform: rotate(-45deg) scale(0.98);
-    }
-    .feature-cursor--parallel-5 {
-        top: 52%;
-        left: 30%;
-        transform: rotate(-58deg) scale(1.04);
-    }
-    .feature-cursor--parallel-6 {
-        top: 49%;
-        left: 80%;
-        transform: rotate(-50deg) scale(0.96);
-    }
-    .feature-cursor--parallel-7 {
-        top: 86%;
-        left: 56%;
-        transform: rotate(-64deg) scale(1.01);
+        left: clamp(1rem, 1.4vw, 1.4rem);
     }
 
-    /* Subagents stay in one visual language: uniform blue cursors, all aimed upward. */
-    .feature-cursor--subagent-1 {
-        top: 2%;
-        left: 28%;
-        transform: rotate(-55deg);
+    .story-quote--close {
+        right: clamp(1rem, 1.4vw, 1.4rem);
+        bottom: 23%;
     }
-    .feature-cursor--subagent-2 {
-        top: 20%;
-        left: 59%;
-        transform: rotate(-50deg);
+
+    /* The art column on the left, the copy on the right. */
+    .story-card--reverse .story-art {
+        order: -1;
+        border-right: 1px solid #bdbdbd;
+        border-left: 0;
     }
-    .feature-cursor--subagent-3 {
-        top: 0;
-        left: 91%;
-        transform: rotate(-60deg);
+
+    /* Connectors: every catalog mark, in rows of seven. */
+    .connector-grid {
+        display: flex;
+        width: min(100%, 30rem);
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 0.7rem;
+        margin: 0;
+        padding: 0;
+        list-style: none;
     }
-    .feature-cursor--subagent-4 {
-        top: 41%;
-        left: 46%;
-        transform: rotate(-53deg);
+
+    .connector-logo {
+        display: grid;
+        width: 3.4rem;
+        height: 3.4rem;
+        place-items: center;
+        border: 1px solid #d6d6d6;
+        border-radius: 0.9rem;
+        background: #f7f6f4;
     }
-    .feature-cursor--subagent-5 {
-        top: 52%;
-        left: 88%;
-        transform: rotate(-58deg);
+
+    .connector-logo img {
+        display: block;
+        width: 1.7rem;
+        height: 1.7rem;
     }
-    .feature-cursor--subagent-6 {
-        top: 76%;
-        left: 26%;
-        transform: rotate(-48deg);
+
+    /* Subthreads: one thread handing work to other agents, as a small tree. */
+    .handoff-tree {
+        display: flex;
+        width: min(100%, 27rem);
+        flex-direction: column;
+        gap: 1rem;
+        font-family: "Figtree Variable", sans-serif;
     }
-    .feature-cursor--subagent-7 {
-        top: 77%;
-        left: 55%;
-        transform: rotate(-62deg);
+
+    .handoff-parent {
+        align-self: flex-start;
+        padding: 0.45rem 1.1rem 0.55rem;
+        border-radius: 999px;
+        background: #ffad4b;
+        color: #a95c09;
+        font-size: clamp(1.4rem, 2vw, 1.9rem);
+        font-weight: 420;
+        letter-spacing: -0.08em;
+        line-height: 1;
     }
-    .feature-cursor--subagent-8 {
-        top: 73%;
-        left: 2%;
-        transform: rotate(-55deg);
+
+    .handoff-children {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin: 0 0 0 1.5rem;
+        padding: 0 0 0 1.4rem;
+        border-left: 2px solid #d0d0d0;
+        list-style: none;
+    }
+
+    .handoff-children li {
+        position: relative;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr);
+        align-items: center;
+        gap: 0.7rem;
+        padding: 0.7rem 0.85rem;
+        border: 1px solid #d6d6d6;
+        border-radius: 0.8rem;
+        background: #f7f6f4;
+    }
+
+    /* The branch from the parent's line into each task. */
+    .handoff-children li::before {
+        position: absolute;
+        top: 50%;
+        left: calc(-1.4rem - 2px);
+        width: 1.4rem;
+        height: 2px;
+        background: #d0d0d0;
+        content: "";
+    }
+
+    /* The parent's line stops at the last branch. */
+    .handoff-children li:last-child::after {
+        position: absolute;
+        top: calc(50% + 2px);
+        bottom: -1px;
+        /* Wide enough to cover the line past the tile's own 1px border. */
+        left: calc(-1.4rem - 4px);
+        width: 4px;
+        background: var(--canvas-bg);
+        content: "";
+    }
+
+    .handoff-agent {
+        padding: 0.2rem 0.6rem 0.25rem;
+        border-radius: 999px;
+        font-size: 0.95rem;
+        letter-spacing: -0.04em;
+        white-space: nowrap;
+    }
+
+    .handoff-agent--codex {
+        background: color-mix(in srgb, var(--canvas-blue) 14%, white);
+        color: var(--canvas-blue);
+    }
+
+    .handoff-agent--grok {
+        background: color-mix(in srgb, var(--canvas-purple) 14%, white);
+        color: var(--canvas-purple);
+    }
+
+    .handoff-agent--opencode {
+        background: #e4e4e2;
+        color: #303030;
+    }
+
+    .handoff-task {
+        overflow: hidden;
+        color: #303030;
+        font-size: 0.95rem;
+        letter-spacing: -0.02em;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
 
     .home-content {
@@ -1347,32 +1174,7 @@ import ProductDemo from "../components/ProductDemo.tsx";
         .agent-matrix {
             width: min(100%, 44rem);
             justify-self: start;
-        }
-
-        .feature-board {
-            min-height: calc(100svh - 4rem);
-            padding: 4rem 1.5rem;
-        }
-
-        .feature-cursor-cloud--parallel {
-            top: 5%;
-            left: 7%;
-            transform: none;
-            width: min(17rem, 27vw);
-            height: 14rem;
-            opacity: 0.8;
-        }
-
-        .feature-cursor-cloud--subagents {
-            top: auto;
-            bottom: 5%;
-            right: 7%;
-            transform: none;
-            width: min(17rem, 27vw);
-            height: 14rem;
-            opacity: 0.8;
-        }
-    }
+        }}
 
     @media (max-width: 58rem) {
         .home-shell {
@@ -1488,19 +1290,24 @@ import ProductDemo from "../components/ProductDemo.tsx";
         .agent-matrix {
             gap: 0.8rem;
         }
-        .agent-tile {
-            border-radius: 0.65rem;
+        .agent-matrix {
+            --agent-tile-radius: 0.65rem;
         }
-        .feature-section {
-            padding: 0.75rem;
+
+        .story-section {
+            min-height: auto;
+            padding: 3rem 1rem;
         }
-        .feature-board {
-            min-height: calc(100svh - 1.5rem);
-            padding: 2.5rem 1.1rem 2rem;
+        .story-card {
+            grid-template-columns: minmax(0, 1fr);
         }
-        .feature-title {
-            font-size: clamp(1.85rem, 8vw, 2.6rem);
-            line-height: 1.15;
+        .story-art {
+            border-top: 1px solid #bdbdbd;
+            border-left: 0;
+        }
+        .story-card--reverse .story-art {
+            order: 0;
+            border-right: 0;
         }
         .sleepless-section {
             min-height: auto;
@@ -1573,25 +1380,7 @@ import ProductDemo from "../components/ProductDemo.tsx";
         }
         .mobile-control-art img {
             width: min(90%, 28rem);
-        }
-        .feature-cursor-cloud--parallel {
-            top: 2%;
-            left: 0;
-            transform: none;
-            width: 10rem;
-            height: 10rem;
-            opacity: 0.7;
-        }
-        .feature-cursor-cloud--subagents {
-            top: auto;
-            bottom: 2%;
-            right: 0;
-            transform: none;
-            width: 10rem;
-            height: 10rem;
-            opacity: 0.7;
-        }
-    }
+        }}
 
     @media (prefers-reduced-motion: reduce) {
         .selection-frame,

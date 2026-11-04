@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ClipFade } from "@/components/clip-fade";
 import { ArrowUpRight, CaretDown, ChatCircle } from "@phosphor-icons/react";
 import type { WorkspacePrComment } from "../../contracts/git.ts";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
@@ -221,9 +222,7 @@ function CommentCard({
         <MarkdownRenderer className="text-[13px] leading-6 text-muted-foreground">
           {markdown}
         </MarkdownRenderer>
-        {clipped && !expanded ? (
-          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-linear-to-t from-surface-1 to-transparent" />
-        ) : null}
+        {clipped && !expanded ? <ClipFade /> : null}
       </div>
       {clipped && !expanded ? (
         <button

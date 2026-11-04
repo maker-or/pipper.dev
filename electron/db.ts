@@ -2,6 +2,11 @@ import { DatabaseSync } from "node:sqlite";
 import { app } from "electron";
 import { join } from "node:path";
 import { ensureThreadSnapshotSchema } from "./thread-snapshot-schema.ts";
+import { ensureAgentTaskSchema } from "./agent-tasks/agent-task-store.ts";
+import { ensureProvenanceSchema } from "./operations/provenance.ts";
+import { ensureSettingChangeSchema } from "./operations/settings.ts";
+import { ensureConnectorRequestSchema } from "./connectors/connector-requests.ts";
+import { ensureConnectorSchema } from "./connectors/connector-store.ts";
 
 let db: DatabaseSync | null = null;
 
@@ -181,6 +186,16 @@ export function getDb(): DatabaseSync {
       icon TEXT
     );
   `);
+  ensureColumn("projects", "sort_order", "ALTER TABLE projects ADD COLUMN sort_order INTEGER;");
+  // Projects from before the rail could be reordered keep their name order,
+  // case-insensitive like the rail sorted them.
+  db.exec(`
+    UPDATE projects SET sort_order = (
+      SELECT COUNT(*) FROM projects AS other
+      WHERE other.name COLLATE NOCASE < projects.name COLLATE NOCASE
+        OR (other.name COLLATE NOCASE = projects.name COLLATE NOCASE AND other.id < projects.id)
+    ) WHERE sort_order IS NULL;
+  `);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS threads (
@@ -212,6 +227,12 @@ export function getDb(): DatabaseSync {
   // can paint synchronously; tool bodies and large images live in
   // generation-named body files (see thread-snapshot-store.ts).
   ensureThreadSnapshotSchema(db);
+  // Tasks a thread started through the pipper-agents MCP server.
+  ensureAgentTaskSchema(db);
+  // Which thread created which resource (see electron/operations/provenance.ts).
+  ensureProvenanceSchema(db);
+  // Settings changes agents made (see electron/operations/settings.ts).
+  ensureSettingChangeSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS user_agent_selections (
@@ -276,6 +297,8 @@ export function getDb(): DatabaseSync {
       updated_at INTEGER
     );
   `);
+  ensureConnectorSchema(db);
+  ensureConnectorRequestSchema(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS inline_widgets (

@@ -1,0 +1,257 @@
+import type { AcpSessionSlice } from "../../src/lib/acp-session-reducer.ts";
+import type { AgentTaskOutcome, AgentTaskStatus } from "../../contracts/agent-tasks.ts";
+import type { AgentTaskRow } from "./agent-task-store.ts";
+import { WRAP_UP_TOOL_NAME, parseNextStep, type NextStep } from "../../contracts/next-step.ts";
+
+/** Longest report stored on a task row and returned in a receipt. */
+export const MAX_REPORT_CHARS = 6_000;
+const MAX_FILES_LISTED = 50;
+
+/** What one settled turn left behind, read from the child's session slice. */
+export interface TurnSummary {
+  text: string;
+  toolCalls: Record<string, number>;
+  /** The turn's last valid wrap_up, read back from its tool call input. */
+  nextStep: NextStep | null;
+}
+
+/**
+ * The last turn of a session: assistant text and tool calls after the final
+ * user message. ACP text chunks are transport fragments, so they are joined
+ * without separators.
+ */
+export function summarizeLastTurn(slice: AcpSessionSlice): TurnSummary {
+  let start = 0;
+  for (let i = slice.entries.length - 1; i >= 0; i--) {
+    if (slice.entries[i].type === "user_text") {
+      start = i + 1;
+      break;
+    }
+  }
+  let text = "";
+  const toolCalls: Record<string, number> = {};
+  let nextStep: NextStep | null = null;
+  for (const entry of slice.entries.slice(start)) {
+    if (entry.type === "agent_text") text += entry.text;
+    else if (entry.type === "tool_call") {
+      const call = slice.toolCalls[entry.toolCallId];
+      const kind = call?.kind ?? "other";
+      toolCalls[kind] = (toolCalls[kind] ?? 0) + 1;
+      if (call?.status === "completed" && WRAP_UP_TOOL_NAME.test((call.title ?? "").trim())) {
+        const parsed = parseNextStep(call.rawInput);
+        if (parsed.ok) nextStep = parsed.value;
+      }
+    }
+  }
+  return { text: text.trim(), toolCalls, nextStep };
+}
+
+export interface ConversationMessage {
+  index: number;
+  role: "user" | "agent" | "tool";
+  text: string;
+}
+
+export interface ConversationPage {
+  messages: ConversationMessage[];
+  /** Messages in the whole conversation. */
+  total: number;
+  /** Pass as `before` for the page before this one; null at the start. */
+  next_before: number | null;
+}
+
+const MESSAGE_CHARS = 2_000;
+const PAGE_MESSAGES = 40;
+const PAGE_CHARS = 20_000;
+
+/**
+ * A thread's conversation as another agent reads it: the user's and the
+ * agent's text, and one line per tool call. Thoughts and tool output are
+ * left out; each message is clipped.
+ */
+export function conversationMessages(slice: AcpSessionSlice): ConversationMessage[] {
+  const raw: Array<{ role: ConversationMessage["role"]; text: string }> = [];
+  for (const entry of slice.entries) {
+    if (entry.type === "user_text") raw.push({ role: "user", text: entry.text });
+    else if (entry.type === "agent_text") {
+      const last = raw.at(-1);
+      if (last?.role === "agent") last.text += entry.text;
+      else raw.push({ role: "agent", text: entry.text });
+    } else if (entry.type === "tool_call") {
+      const call = slice.toolCalls[entry.toolCallId];
+      const status = call?.status && call.status !== "completed" ? ` (${call.status})` : "";
+      raw.push({
+        role: "tool",
+        text: `${call?.kind ?? "other"}: ${call?.title?.trim() || "tool call"}${status}`,
+      });
+    }
+  }
+  return raw
+    .map((message) => ({ role: message.role, text: clip(message.text.trim(), MESSAGE_CHARS) }))
+    .filter((message) => message.text)
+    .map((message, index) => ({ index, ...message }));
+}
+
+/** The page of messages ending just before `before` (default: the newest). */
+export function pageConversation(
+  messages: ConversationMessage[],
+  before?: number,
+): ConversationPage {
+  const end = Math.min(before ?? messages.length, messages.length);
+  let start = end;
+  let chars = 0;
+  while (start > 0 && end - start < PAGE_MESSAGES) {
+    const size = messages[start - 1]!.text.length;
+    // Always include one message, however long.
+    if (end > start && chars + size > PAGE_CHARS) break;
+    chars += size;
+    start--;
+  }
+  return {
+    messages: messages.slice(start, end),
+    total: messages.length,
+    next_before: start > 0 ? start : null,
+  };
+}
+
+const STATUS_LINE = /^\s*STATUS:\s*(done|blocked|needs_input)\s*$/im;
+
+/** The outcome the child declared, or "done" when it didn't say. */
+export function parseOutcome(report: string): AgentTaskOutcome {
+  const lines = report.trimEnd().split("\n");
+  for (let i = lines.length - 1; i >= Math.max(0, lines.length - 5); i--) {
+    const match = STATUS_LINE.exec(lines[i]);
+    if (match) return match[1].toLowerCase() as AgentTaskOutcome;
+  }
+  return "done";
+}
+
+export function clip(text: string, max: number): string {
+  // Copy the prefix: V8 sliced strings can keep a multi-MiB report alive.
+  return text.length <= max
+    ? text
+    : `${text
+        .slice(0, max - 1)
+        .split("")
+        .join("")}…`;
+}
+
+/** First message a task's thread receives: the contract plus the brief. */
+export function composeBrief(input: {
+  parentThreadId: string;
+  parentTitle: string | null;
+  task: string;
+  doneWhen: string[];
+  workspacePath: string;
+  ownWorkspace: boolean;
+}): string {
+  const lines = [
+    `You were started as a subthread by another agent in Pipper, from the thread ${
+      input.parentTitle ? `"${input.parentTitle}" ` : ""
+    }(thread_id ${input.parentThreadId}). The user can see this thread and may reply here.`,
+    `If you need an answer to continue, message_thread that thread_id with the question and end your turn; the reply arrives as your next message.`,
+    `Work in ${input.workspacePath}.${
+      input.ownWorkspace
+        ? " This is your own worktree and branch; commit your work there when it is complete."
+        : " This folder is shared with other agents; change only what the task needs."
+    }`,
+    "",
+    "<task>",
+    input.task,
+    "</task>",
+  ];
+  if (input.doneWhen.length > 0) {
+    lines.push("", "<done_when>", ...input.doneWhen.map((item) => `- ${item}`), "</done_when>");
+  }
+  lines.push(
+    "",
+    "When you stop, call wrap_up: its recap and ask go to the agent that started you. Set blocked when you need an answer to continue, and put the question in ask.",
+    "Then end with a self-contained report (what you did or found, file paths, anything left open), and a last line that is exactly one of:",
+    "STATUS: done",
+    "STATUS: blocked",
+    "STATUS: needs_input",
+    "Use needs_input when you need an answer to continue; ask the question in the report.",
+  );
+  return lines.join("\n");
+}
+
+export interface ReceiptFacts {
+  waitingForPermission: boolean;
+  filesChanged: string[] | null;
+  toolCalls: Record<string, number> | null;
+  durationMs: number | null;
+}
+
+/** Plain-object receipt returned to the parent agent as JSON. */
+export function buildReceipt(task: AgentTaskRow, facts: ReceiptFacts): Record<string, unknown> {
+  const receipt: Record<string, unknown> = {
+    thread_id: task.childThreadId,
+    title: task.title,
+    agent_id: task.agentId,
+    status: facts.waitingForPermission ? "waiting_for_permission" : task.status,
+    outcome: task.outcome,
+    turns: task.turns,
+    workspace: task.workspaceMode,
+    workspace_path: task.workspacePath,
+  };
+  if (task.branch) receipt.branch = task.branch;
+  if (task.stopReason) receipt.stop_reason = task.stopReason;
+  if (task.error) receipt.error = task.error;
+  if (facts.durationMs != null) receipt.duration_ms = facts.durationMs;
+  if (facts.toolCalls && Object.keys(facts.toolCalls).length > 0) {
+    receipt.tool_calls = facts.toolCalls;
+  }
+  if (facts.filesChanged) {
+    receipt.files_changed = facts.filesChanged.slice(0, MAX_FILES_LISTED);
+    if (facts.filesChanged.length > MAX_FILES_LISTED) {
+      receipt.files_changed_total = facts.filesChanged.length;
+    }
+  }
+  if (task.nextStep) {
+    receipt.recap = task.nextStep.recap;
+    if (task.nextStep.ask) receipt.ask = task.nextStep.ask;
+    if (task.nextStep.actions.length > 0) {
+      receipt.suggested_answers = task.nextStep.actions.map((action) => action.message);
+    }
+  }
+  if (task.report) receipt.report = task.report;
+  return receipt;
+}
+
+const SETTLED: ReadonlySet<AgentTaskStatus> = new Set([
+  "idle",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "interrupted",
+]);
+
+export function isSettled(status: AgentTaskStatus): boolean {
+  return SETTLED.has(status);
+}
+
+export function isActive(status: AgentTaskStatus): boolean {
+  return status === "starting" || status === "running";
+}
+
+/** One note for the parent thread covering every task that just settled. */
+export function composeParentNote(tasks: AgentTaskRow[]): string {
+  const lines = [
+    tasks.length === 1
+      ? "[Pipper] A subthread you started has stopped."
+      : `[Pipper] ${tasks.length} subthreads you started have stopped.`,
+  ];
+  for (const task of tasks) {
+    const outcome = task.status === "idle" ? (task.outcome ?? "done") : task.status;
+    const preview =
+      task.nextStep?.recap ??
+      (task.report ? clip(task.report.replace(/\s+/g, " "), 280) : task.error);
+    lines.push(`- ${task.title} (thread_id ${task.childThreadId}, ${task.agentId}): ${outcome}`);
+    if (preview) lines.push(`  ${preview}`);
+    if (task.nextStep?.ask) lines.push(`  Asks: ${task.nextStep.ask}`);
+  }
+  lines.push(
+    "Call get_thread for the full receipt, message_thread to follow up, or carry on with your work.",
+  );
+  return lines.join("\n");
+}

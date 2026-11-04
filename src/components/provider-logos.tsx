@@ -385,3 +385,25 @@ export function createProviderLogoIcon(provider: string, label?: string): IconCo
     );
   };
 }
+
+/** The logo key for an agent: its catalog icon, else its driver, else its id. */
+export function agentLogoKey(
+  agent: { id: string; icon?: string | null; driverId?: string } | undefined,
+  agentId: string,
+): string {
+  return agent?.icon ?? agent?.driverId ?? agent?.id ?? agentId;
+}
+
+const logoIcons = new Map<string, IconComponent>();
+
+/** `createProviderLogoIcon`, one component per logo and label, so lists that
+ *  render it per row keep the same component across renders. */
+export function providerLogoIcon(provider: string, label?: string): IconComponent {
+  const key = `${provider}\0${label ?? ""}`;
+  let icon = logoIcons.get(key);
+  if (!icon) {
+    icon = createProviderLogoIcon(provider, label);
+    logoIcons.set(key, icon);
+  }
+  return icon;
+}

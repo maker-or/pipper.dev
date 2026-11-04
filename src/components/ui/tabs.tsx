@@ -370,6 +370,8 @@ interface TabItemProps extends ComponentPropsWithoutRef<typeof TabsPrimitive.Tab
    * still named for hover and assistive tech.
    */
   iconOnly?: boolean;
+  /** An amber dot on the icon: something in this tab waits on the user. */
+  attention?: boolean;
   /** @internal Auto-assigned by TabsList. */
   _index?: number;
 }
@@ -388,6 +390,7 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
       onEditCancel,
       scrollLabelOnHover = false,
       iconOnly = false,
+      attention = false,
       _index = 0,
       className,
       ...props
@@ -477,14 +480,23 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
         {...props}
       >
         {Icon && (
-          <Icon
-            size={16}
-            strokeWidth={isActive ? 2 : 1.5}
-            className={cn(
-              "transition-[color,stroke-width] duration-80",
-              isActive ? "text-foreground" : "text-muted-foreground",
+          <span className="relative flex shrink-0">
+            <Icon
+              size={16}
+              strokeWidth={isActive ? 2 : 1.5}
+              className={cn(
+                "transition-[color,stroke-width] duration-80",
+                isActive ? "text-foreground" : "text-muted-foreground",
+              )}
+            />
+            {attention && (
+              <span
+                data-pipper-id="tab-attention"
+                aria-hidden="true"
+                className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-amber-500 ring-1 ring-background"
+              />
             )}
-          />
+          </span>
         )}
         {iconOnly && !editing ? null : editing ? (
           <input
@@ -530,7 +542,7 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
             autoComplete="off"
             autoCorrect="off"
             className={cn(
-              "min-w-0 w-[10ch] max-w-56 bg-transparent border-none p-0 outline-none",
+              "min-w-0 w-[16ch] max-w-56 bg-transparent border-none p-0 outline-none",
               "text-[13px] leading-none text-foreground",
             )}
           />
@@ -539,8 +551,8 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
             ref={labelViewportRef}
             className={cn(
               // max-width (not fixed width) keeps short titles snug while
-              // still capping long ones at a consistent 9ch viewport.
-              "inline-block max-w-[9ch] overflow-hidden text-[13px] whitespace-nowrap align-middle",
+              // still capping long ones at a consistent 15ch viewport.
+              "inline-block max-w-[15ch] overflow-hidden text-[13px] whitespace-nowrap align-middle",
               // Overflowing labels fade out at the right edge instead of
               // hard-clipping; the fade lifts on hover so the scroll reveals
               // the full label.

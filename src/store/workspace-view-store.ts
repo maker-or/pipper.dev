@@ -1,5 +1,4 @@
 import { create } from "zustand";
-import { useDiffStore } from "@/store/diff-store";
 import type { DraftState } from "../../contracts/composer.ts";
 
 /**
@@ -11,6 +10,8 @@ import type { DraftState } from "../../contracts/composer.ts";
  * - `terminal` — a single terminal session, filling 100% width.
  * - `preview` — the active workspace's file preview tab (see preview-store),
  *   filling 100% width.
+ * - `diff` — the active thread's changes tab (hybrid shell), filling 100%
+ *   width. Basic shows the same changes as a split beside the thread instead.
  *
  * Agent threads and terminals share one tab strip in the header. Only the
  * mode + which terminal is active live here; the active *thread* identity
@@ -21,7 +22,7 @@ import type { DraftState } from "../../contracts/composer.ts";
  * Chrome (title-bar project name, file tree, etc.) must read draft.projectId
  * rather than ambient activeProject while a draft is active.
  */
-export type WorkspaceMode = "agent" | "terminal" | "preview";
+export type WorkspaceMode = "agent" | "terminal" | "preview" | "diff";
 
 export type BeginDraftOptions = {
   /** Soft-default project chip from ambient active project. */
@@ -54,18 +55,27 @@ interface WorkspaceViewState {
   showAgent: () => void;
   showTerminal: (sessionId: string) => void;
   showPreview: () => void;
+  showDiff: () => void;
   setActiveTerminalId: (sessionId: string | null) => void;
   requestThread: (threadId: string | null) => void;
   beginDraft: (options?: BeginDraftOptions) => void;
   endDraft: () => void;
   completeDraft: (threadId: string) => void;
   clearDraftCompletion: () => void;
-  setDraftProject: (projectId: string | null, worktreePath?: string | null) => void;
-  setDraftAgent: (agentId: string | null) => void;
+  /**
+   * `markDirty: false` moves the draft without counting it as an edit (the
+   * hybrid shell's project cards), so an empty draft still closes unasked.
+   */
+  setDraftProject: (
+    projectId: string | null,
+    worktreePath?: string | null,
+    options?: { markDirty?: boolean },
+  ) => void;
+  /** `markDirty: false` for a soft default the user didn't pick. */
+  setDraftAgent: (agentId: string | null, options?: { markDirty?: boolean }) => void;
   setDraftModel: (modelId: string | null) => void;
   setDraftWorktree: (worktreePath: string | null) => void;
   setDraftDirty: (dirty: boolean) => void;
-  markDraftUserEditedProject: () => void;
 }
 
 export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
@@ -78,6 +88,7 @@ export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
   showAgent: () => set({ mode: "agent" }),
   showTerminal: (sessionId) => set({ mode: "terminal", activeTerminalId: sessionId }),
   showPreview: () => set({ mode: "preview" }),
+  showDiff: () => set({ mode: "diff" }),
   setActiveTerminalId: (sessionId) => set({ activeTerminalId: sessionId }),
   requestThread: (threadId) => set({ requestedThreadId: threadId }),
 
@@ -104,7 +115,7 @@ export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
   completeDraft: (threadId) => set({ draft: null, draftCompletionThreadId: threadId }),
   clearDraftCompletion: () => set({ draftCompletionThreadId: null }),
 
-  setDraftProject: (projectId, worktreePath) => {
+  setDraftProject: (projectId, worktreePath, options) => {
     const draft = get().draft;
     if (!draft) return;
     const projectChanged = projectId !== draft.projectId;
@@ -119,19 +130,19 @@ export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
         // Clearing the project means chrome should unbind; keep soft flag only
         // while the auto chip is still the bound project.
         softDefaultProject: projectId != null && draft.softDefaultProject && !projectChanged,
-        dirty: draft.dirty || projectChanged,
+        dirty: draft.dirty || (projectChanged && options?.markDirty !== false),
       },
     });
   },
 
-  setDraftAgent: (agentId) => {
+  setDraftAgent: (agentId, options) => {
     const draft = get().draft;
     if (!draft) return;
     set({
       draft: {
         ...draft,
         agentId,
-        dirty: draft.dirty || agentId !== draft.agentId,
+        dirty: draft.dirty || (agentId !== draft.agentId && options?.markDirty !== false),
       },
     });
   },
@@ -165,28 +176,7 @@ export const useWorkspaceViewStore = create<WorkspaceViewState>((set, get) => ({
     if (!draft) return;
     set({ draft: { ...draft, dirty } });
   },
-
-  markDraftUserEditedProject: () => {
-    const draft = get().draft;
-    if (!draft) return;
-    set({ draft: { ...draft, softDefaultProject: false, dirty: true } });
-  },
 }));
-
-/**
- * Whether the workspace is rendering the 40:60 conversation | diff split.
- * The shell uses it to lay out the panels; the agent view uses it to decide
- * between its centered reading column (full-width global view) and the panel's
- * full width (already narrow inside the split). Draft has no thread → no split.
- */
-export function useIsDiffSplit(): boolean {
-  const mode = useWorkspaceViewStore((state) => state.mode);
-  const draft = useWorkspaceViewStore((state) => state.draft);
-  const isDiffOpen = useDiffStore((state) => state.isOpen);
-  const diffFileCount = useDiffStore((state) => state.order.length);
-  if (draft) return false;
-  return mode === "agent" && isDiffOpen && diffFileCount > 0;
-}
 
 /**
  * Project id that owns the current agent chrome (title bar, file tree).

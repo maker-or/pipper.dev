@@ -82,21 +82,23 @@ export const HEADER_TONE_COLOR: Record<HeaderTone, string> = {
 export function toneInsetShadow(tone: HeaderTone): string {
   const color = `var(--workspace-glow-${tone}, ${HEADER_TONE_COLOR[tone]})`;
   return [
-    `inset 0 0 22px 2px color-mix(in srgb, ${color} 55%, transparent)`,
-    `inset 0 0 48px 8px color-mix(in srgb, ${color} 30%, transparent)`,
+    `inset 0 0 22px 2px color-mix(in srgb, ${color} var(--workspace-glow-inner-strength, 55%), transparent)`,
+    `inset 0 0 48px 8px color-mix(in srgb, ${color} var(--workspace-glow-outer-strength, 30%), transparent)`,
   ].join(", ");
 }
 
 /**
- * Smooth tone wash for the state header's own background: the state colour at
- * low alpha near the top, easing out to fully transparent so the panel
- * background carries through the lower edge. Pairs with `toneInsetShadow`
- * (the glow brings the look) so the header reads as a coloured surface rather
- * than a flat black block, while still flowing into the body below.
+ * A header's git-state tint: the state colour at the top, easing into the
+ * surface underneath so it ends with no edge. Every stop is mixed with the
+ * surface itself rather than with transparency, so the last stop is exactly
+ * the panel background in either theme. Each theme sets how strong the top is.
  */
-export function toneWash(tone: HeaderTone): string {
-  const color = `var(--workspace-wash-${tone}, ${HEADER_TONE_COLOR[tone]})`;
-  return `var(--workspace-header-wash-${tone}, linear-gradient(to bottom, color-mix(in srgb, ${color} 28%, transparent) 0%, color-mix(in srgb, ${color} 12%, transparent) 45%, transparent 100%))`;
+export function toneFade(tone: HeaderTone): string {
+  const color = `var(--workspace-glow-background-${tone}, ${HEADER_TONE_COLOR[tone]})`;
+  const surface = "var(--workspace-state-surface)";
+  const stop = (share: number, at: string) =>
+    `color-mix(in srgb, ${color} calc(var(--workspace-header-fade-strength) * ${share}), ${surface}) ${at}`;
+  return `linear-gradient(to bottom, ${stop(1, "0%")}, ${stop(0.62, "30%")}, ${stop(0.3, "60%")}, ${stop(0.1, "82%")}, ${surface} 100%)`;
 }
 
 /**

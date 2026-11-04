@@ -87,6 +87,7 @@ export default defineConfig({
           launch: resolve(__dirname, "launch.html"),
           monitor: resolve(__dirname, "monitor.html"),
           settings: resolve(__dirname, "settings.html"),
+          "theme-lab": resolve(__dirname, "theme-lab.html"),
           remote: resolve(__dirname, "remote.html"),
         },
       },
