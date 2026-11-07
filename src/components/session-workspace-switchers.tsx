@@ -78,8 +78,7 @@ function MenuRow({
       }}
       className={cn(
         "group/row -mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 text-left text-[13px] outline-none transition-colors duration-80",
-        "hover:bg-hover focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none",
-        open && "bg-hover",
+        "focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none",
       )}
     >
       <span className="grid size-4 shrink-0 place-items-center text-muted-foreground">{icon}</span>

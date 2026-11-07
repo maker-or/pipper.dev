@@ -156,6 +156,7 @@ import {
   openThreadTab,
   readOpenTabsState,
   activateTabAfterClose,
+  reorderThreadTabs,
   setActiveThreadTab,
   setLiveThreadIdsCheck,
   setTabEventObserver,
@@ -182,6 +183,12 @@ import {
 import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema";
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
+import {
+  resolveLaunchIntroHelperPath,
+  startFirstLaunchIntro,
+  startLaunchIntro,
+  type LaunchIntroSession,
+} from "./launch-intro.ts";
 import { RemoteAccessController } from "./remote-access.ts";
 import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
 import { RemoteDeviceStore } from "./remote-devices.ts";
@@ -1600,6 +1607,24 @@ function initializeMonitorService(): void {
   });
 }
 
+/** The first-launch intro, while it holds the launch window back. */
+let launchIntro: LaunchIntroSession | null = null;
+
+/** Replays the native launch intro on demand (dock menu). No first-launch gating. */
+function replayLaunchIntro(): void {
+  const helperPath = resolveLaunchIntroHelperPath({
+    isPackaged: app.isPackaged,
+    execPath: process.execPath,
+    appPath: app.getAppPath(),
+  });
+  if (!fs.existsSync(helperPath)) {
+    console.warn(`[LaunchIntro] helper missing at ${helperPath}; cannot replay intro`);
+    return;
+  }
+  const session = startLaunchIntro({ helperPath });
+  void session.finished.then(() => session.dismiss());
+}
+
 function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void {
   console.log(`[Main] createLaunchWindow - stage: ${stage}`);
   if (launchWindow && !launchWindow.isDestroyed()) {
@@ -1617,10 +1642,10 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
     minWidth: 640,
     minHeight: 560,
     resizable: true,
-    title: "Welcome to Pipper Code (Alpha)",
     show: false,
     icon: getIconPath(),
     backgroundColor: "#171717",
+    titleBarStyle: "hidden",
     webPreferences: {
       preload: join(mainDir, "../preload/index.js"),
       sandbox: false,
@@ -1631,8 +1656,22 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
 
   launchWindow.on("ready-to-show", () => {
     console.log("[Main] launchWindow ready-to-show");
-    launchWindow?.show();
     scheduleDeferredStartupWork();
+    const intro = launchIntro;
+    if (!intro) {
+      launchWindow?.show();
+      return;
+    }
+    // Shown under the overlay as it fades, so the intro ends on the window.
+    void intro.finished.then(() => {
+      launchIntro = null;
+      if (launchWindow && !launchWindow.isDestroyed()) {
+        launchWindow.show();
+        app.focus({ steal: true });
+        launchWindow.focus();
+      }
+      intro.dismiss();
+    });
   });
 
   launchWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
@@ -2811,6 +2850,12 @@ function registerIpc(): void {
     return next;
   });
 
+  ipcMain.handle("tabs:reorder", async (_event, ids: string[]) => {
+    const next = await reorderThreadTabs(ids);
+    broadcastOpenTabsChanged(mainWindow, next);
+    return next;
+  });
+
   ipcMain.handle("tabs:getActive", async () => {
     return (await readOpenTabsState()).activeThreadId;
   });
@@ -3506,6 +3551,18 @@ app.whenReady().then(async () => {
         console.error("[Main] Failed to set macOS dock icon:", err);
       }
     }
+    app.dock?.setMenu(
+      Menu.buildFromTemplate([
+        {
+          label: "Replay Launch Intro",
+          click: () => replayLaunchIntro(),
+        },
+        {
+          label: "Show Onboarding",
+          click: () => createLaunchWindow("onboarding"),
+        },
+      ]),
+    );
   }
   buildAppMenu();
   logStartupMilestone("database:init:start");
@@ -3733,7 +3790,18 @@ app.whenReady().then(async () => {
       });
     }
   } else {
-    logStartupMilestone("launch-window:starting");
+    launchIntro = await startFirstLaunchIntro({
+      platform: process.platform,
+      env: process.env,
+      userDataDir: app.getPath("userData"),
+      onboardingCompleted: state.completed,
+      helperPath: resolveLaunchIntroHelperPath({
+        isPackaged: app.isPackaged,
+        execPath: process.execPath,
+        appPath: app.getAppPath(),
+      }),
+    });
+    logStartupMilestone("launch-window:starting", `intro=${launchIntro !== null}`);
     createLaunchWindow("list");
   }
 

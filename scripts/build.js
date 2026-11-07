@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -74,6 +74,32 @@ function buildMacSleeplessHelpers() {
   }
 }
 
+function buildLaunchIntro() {
+  if (process.platform !== "darwin") return;
+  const packageDir = join(root, "native", "launch-intro");
+  const args = [
+    "build",
+    "--package-path",
+    packageDir,
+    "--configuration",
+    "release",
+    "--arch",
+    "arm64",
+    "--product",
+    "pipper-launch-intro",
+  ];
+  runCommand("swift", args);
+  // The output directory depends on the SwiftPM build system; ask for it.
+  const binPath = spawnSync("swift", [...args, "--show-bin-path"], { encoding: "utf8" });
+  if (binPath.status !== 0) throw new Error("[build] could not locate the launch intro build");
+  const output = join(packageDir, "dist");
+  mkdirSync(output, { recursive: true });
+  copyFileSync(
+    join(binPath.stdout.trim(), "pipper-launch-intro"),
+    join(output, "pipper-launch-intro"),
+  );
+}
+
 function buildPipperIntents() {
   if (process.platform !== "darwin") return;
   const intentsDir = join(root, "native", "pipper-intents");
@@ -124,6 +150,7 @@ function buildPipperIntents() {
 
 preparePtyHelpers();
 buildMacSleeplessHelpers();
+buildLaunchIntro();
 buildPipperIntents();
 
 // Release builds must fail loud: a packaged app without a PostHog key silently

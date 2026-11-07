@@ -286,6 +286,7 @@ declare global {
         open: (threadId: string) => Promise<OpenTabsState>;
         close: (threadId: string) => Promise<OpenTabsState>;
         setActive: (threadId: string | null) => Promise<OpenTabsState>;
+        reorder: (ids: string[]) => Promise<OpenTabsState>;
         getActive: () => Promise<string | null>;
         onChanged: (callback: (state: OpenTabsState) => void) => () => void;
         onSelectByIndex: (callback: (index: number) => void) => () => void;

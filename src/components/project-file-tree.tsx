@@ -1,8 +1,11 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { FileTree, useFileTree } from "@pierre/trees/react";
 import type { ProjectFileTreeSnapshot } from "../../contracts/projects.ts";
 import { draftComments, previewWorkspaceKey, usePreviewStore } from "@/store/preview-store";
 import { openFilePreview } from "@/lib/file-preview-actions";
+import { useSurface } from "@/lib/surface-context";
+import { surfaceBgClass } from "@/lib/surface-classes";
+import { cn } from "@/lib/utils";
 
 interface ProjectFileTreeProps {
   projectId: string;
@@ -15,24 +18,26 @@ const EMPTY_SNAPSHOT: ProjectFileTreeSnapshot = {
   gitStatus: [],
 };
 
-const treeStyles = {
-  height: "100%",
-  minHeight: 0,
-  "--trees-bg-override": "var(--surface-1)",
-  "--trees-bg-muted-override": "var(--hover)",
-  "--trees-fg-override": "var(--foreground)",
-  "--trees-fg-muted-override": "var(--muted-foreground)",
-  "--trees-border-color-override": "var(--border)",
-  "--trees-selected-bg-override": "var(--active)",
-  "--trees-selected-fg-override": "var(--foreground)",
-  "--trees-focus-ring-color-override": "var(--ring)",
-  "--trees-font-family-override": '"Inter Variable", sans-serif',
-  "--trees-font-size-override": "12px",
-  "--trees-padding-inline-override": "8px",
-  "--trees-item-margin-x-override": "0px",
-  "--trees-item-padding-x-override": "7px",
-  "--trees-border-radius-override": "6px",
-} as CSSProperties;
+function createTreeStyles(surface: number): CSSProperties {
+  return {
+    height: "100%",
+    minHeight: 0,
+    "--trees-bg-override": `var(--surface-${surface})`,
+    "--trees-bg-muted-override": "var(--hover)",
+    "--trees-fg-override": "var(--foreground)",
+    "--trees-fg-muted-override": "var(--muted-foreground)",
+    "--trees-border-color-override": "var(--border)",
+    "--trees-selected-bg-override": "var(--active)",
+    "--trees-selected-fg-override": "var(--foreground)",
+    "--trees-focus-ring-color-override": "var(--ring)",
+    "--trees-font-family-override": '"Inter Variable", sans-serif',
+    "--trees-font-size-override": "12px",
+    "--trees-padding-inline-override": "8px",
+    "--trees-item-margin-x-override": "0px",
+    "--trees-item-padding-x-override": "7px",
+    "--trees-border-radius-override": "6px",
+  } as CSSProperties;
+}
 
 function ProjectFileTreeContent({
   snapshot,
@@ -43,6 +48,9 @@ function ProjectFileTreeContent({
   projectId: string;
   worktreePath: string | null;
 }) {
+  const surface = useSurface();
+  const treeStyles = useMemo(() => createTreeStyles(surface), [surface]);
+
   // The tree reads its options once; keep the latest values in refs.
   const filesRef = useRef(new Set(snapshot.paths));
   filesRef.current = new Set(snapshot.paths);
@@ -116,6 +124,7 @@ export function ProjectFileTree({ projectId, worktreePath }: ProjectFileTreeProp
   const [snapshot, setSnapshot] = useState<ProjectFileTreeSnapshot>(EMPTY_SNAPSHOT);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const surface = useSurface();
 
   useEffect(() => {
     let cancelled = false;
@@ -144,10 +153,10 @@ export function ProjectFileTree({ projectId, worktreePath }: ProjectFileTreeProp
 
   return (
     <div
-      className="flex h-full min-h-0 flex-col overflow-hidden bg-surface-1"
+      className={cn("flex h-full min-h-0 flex-col overflow-hidden", surfaceBgClass(surface))}
       data-pipper-id="project-file-tree"
     >
-      <div className="min-h-0 flex-1 bg-surface-1">
+      <div className={cn("min-h-0 flex-1", surfaceBgClass(surface))}>
         {isLoading ? (
           <div className="px-4 py-3 text-[12px] text-muted-foreground">Loading files…</div>
         ) : error ? (

@@ -20,15 +20,15 @@ interface ShapeClasses {
 
 const shapeMap: Record<ShapeVariant, ShapeClasses> = {
   pill: {
-    item: "rounded-[20px]",
-    bg: "rounded-[20px]",
-    focusRing: "rounded-[22px]",
-    mergedBg: "rounded-2xl",
-    container: "rounded-3xl",
-    button: "rounded-[20px]",
-    input: "rounded-[20px]",
-    bgRadius: 20,
-    mergedRadius: 16,
+    item: "rounded-full",
+    bg: "rounded-full",
+    focusRing: "rounded-full",
+    mergedBg: "rounded-full",
+    container: "rounded-full",
+    button: "rounded-full",
+    input: "rounded-full",
+    bgRadius: 999,
+    mergedRadius: 999,
   },
   rounded: {
     item: "rounded-lg",

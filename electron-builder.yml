@@ -38,10 +38,13 @@ mac:
       to: Resources/sleepless/omni-sleeplessd
     - from: native/sleepless/com.maker-or.omni.sleeplessd.plist
       to: Library/LaunchDaemons/com.maker-or.omni.sleeplessd.plist
+    - from: native/launch-intro/dist/pipper-launch-intro
+      to: MacOS/pipper-launch-intro
     - from: native/pipper-intents/dist/PipperIntents.appex
       to: Extensions/PipperIntents.appex
   binaries:
     - Contents/MacOS/omni-sleeplessctl
+    - Contents/MacOS/pipper-launch-intro
     - Contents/Resources/sleepless/omni-sleeplessd
 
 dmg:

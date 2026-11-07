@@ -308,6 +308,22 @@ export async function removeThreadTabs(threadIds: string[]): Promise<OpenTabsSta
   return next;
 }
 
+/**
+ * Reorder the persisted open-thread ids. Unknown or repeated ids are ignored;
+ * open tabs the caller didn't list (added meanwhile) keep their relative
+ * order after the listed ones. The active thread is unchanged.
+ */
+export async function reorderThreadTabs(ids: readonly string[]): Promise<OpenTabsState> {
+  const { next } = await mutateOpenTabs((current) => {
+    const known = new Set(current.openThreadIds);
+    const ordered = [...new Set(ids.filter((id) => known.has(id)))];
+    const listed = new Set(ordered);
+    for (const id of current.openThreadIds) if (!listed.has(id)) ordered.push(id);
+    return { ...current, openThreadIds: ordered };
+  });
+  return next;
+}
+
 export async function setActiveThreadTab(threadId: string | null): Promise<OpenTabsState> {
   const { previous, next } = await mutateOpenTabs((current) =>
     threadId

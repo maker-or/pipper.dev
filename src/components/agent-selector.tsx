@@ -137,7 +137,7 @@ export function AgentSelector({
               await onContinue?.();
             }}
           >
-            Continue to Pipper
+            Continue
           </Button>
         </div>
       </div>
@@ -294,6 +294,21 @@ function setupGuideUrl(agentId: string): string | null {
   return docId ? `${SETUP_GUIDE_BASE_URL}#${docId}` : null;
 }
 
+/** Antigravity advertises personal, API-key, and enterprise auth options. */
+function antigravityIndividualAuthMethod(methods: AgentProbeResult["authMethods"]) {
+  return (methods ?? []).find((method) => {
+    const id = method.id.toLowerCase();
+    const name = (method.name ?? "").toLowerCase();
+    const description = (method.description ?? "").toLowerCase();
+    const details = `${id} ${name} ${description}`;
+    return (
+      !("type" in method && method.type === "terminal") &&
+      !/api[\s_-]?key|enterprise|workspace|organization|organisation/.test(details) &&
+      /individual|personal|google|browser|oauth/.test(details)
+    );
+  });
+}
+
 /**
  * Setup card — stays visible for the whole walkthrough.
  * Inline: logo + name + trailing status (spinner | check | retry).
@@ -330,6 +345,9 @@ function AgentSetupCard({
     status === "ready" || isAntigravity
       ? null
       : setupGuideUrl(descriptor.driverId ?? descriptor.id);
+  const individualAuthMethod = isAntigravity
+    ? antigravityIndividualAuthMethod(result.authMethods)
+    : undefined;
 
   const openSetupGuide = async () => {
     if (!guideUrl || !window.omni?.shell?.openExternal) return;
@@ -345,13 +363,6 @@ function AgentSetupCard({
       <CardMedia icon={BrandIcon} />
       <CardHeader>
         <CardTitle>{descriptor.displayName}</CardTitle>
-        {isAntigravity && (
-          <AgentAuthActions
-            agentId={descriptor.id}
-            methods={result.authMethods}
-            onAuthenticated={onRetry}
-          />
-        )}
       </CardHeader>
       <CardFooter>
         {status === "probing" ? (
@@ -370,17 +381,28 @@ function AgentSetupCard({
           />
         ) : (
           <span className="inline-flex items-center gap-2">
-            {guideUrl && (
-              <button
-                type="button"
-                onClick={() => void openSetupGuide()}
-                title={`Open setup steps for ${descriptor.displayName}`}
-                aria-label={`Open setup guide for ${descriptor.displayName}`}
-                data-pipper-id={`agent-setup-guide-${descriptor.id}`}
-                className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                Setup guide
-              </button>
+            {status === "retry" &&
+            isAntigravity &&
+            result.status === "needs-auth" &&
+            individualAuthMethod ? (
+              <AgentAuthActions
+                agentId={descriptor.id}
+                methods={[individualAuthMethod]}
+                onAuthenticated={onRetry}
+              />
+            ) : (
+              guideUrl && (
+                <button
+                  type="button"
+                  onClick={() => void openSetupGuide()}
+                  title={`Open setup steps for ${descriptor.displayName}`}
+                  aria-label={`Open setup guide for ${descriptor.displayName}`}
+                  data-pipper-id={`agent-setup-guide-${descriptor.id}`}
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Setup guide
+                </button>
+              )
             )}
             <button
               type="button"

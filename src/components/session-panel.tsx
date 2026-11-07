@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { CaretRight, GithubLogo, X } from "@phosphor-icons/react";
+import { GithubLogo, X } from "@phosphor-icons/react";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 import type { AgentTaskSnapshot } from "../../contracts/agent-tasks.ts";
 import type { WorkspaceGitStatus } from "../../contracts/git.ts";
@@ -23,7 +23,6 @@ import {
 import { taskInFlight, taskStatusText } from "@/lib/agent-task-tree";
 import { errorToast } from "@/lib/error-toast";
 import { selectThread } from "@/lib/thread-actions";
-import { formatTokenCount } from "@/lib/format-tokens";
 import { cn } from "@/lib/utils";
 import { prBlocker, useWorkspaceGitStatus, workspaceGitTone } from "@/lib/workspace-git-status";
 import type { HeaderTone } from "@/lib/workspace-tone";
@@ -91,7 +90,7 @@ function Row({
       title={title}
       onClick={onClick}
       // Same footprint as the switcher rows above it.
-      className="-mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 text-left text-[13px] outline-none transition-colors duration-80 hover:bg-hover focus-visible:ring-1 focus-visible:ring-ring"
+      className="-mx-1.5 flex min-h-7 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 text-left text-[13px] outline-none transition-colors duration-80 focus-visible:ring-1 focus-visible:ring-ring"
     >
       {content}
     </button>
@@ -105,44 +104,6 @@ function openRepository(repository: string) {
     .catch((err) =>
       toast(errorToast(err instanceof Error ? err.message : "Could not open the repository.")),
     );
-}
-
-/** A section heading that expands its body, with a value on the right. */
-function Disclosure({
-  label,
-  value,
-  open,
-  onToggle,
-  children,
-}: {
-  label: string;
-  value: ReactNode;
-  open: boolean;
-  onToggle: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className="border-b border-border px-4 py-3 last:border-b-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={onToggle}
-        className="flex w-full items-center gap-1.5 rounded-md text-left text-[13px] outline-none focus-visible:ring-1 focus-visible:ring-ring"
-      >
-        <span className="font-medium text-foreground">{label}</span>
-        <CaretRight
-          size={10}
-          weight="fill"
-          className={cn(
-            "text-muted-foreground transition-transform duration-80",
-            open && "rotate-90",
-          )}
-        />
-        <span className="ml-auto flex items-center gap-2 text-muted-foreground">{value}</span>
-      </button>
-      {open ? <div className="mt-2 flex flex-col gap-1">{children}</div> : null}
-    </section>
-  );
 }
 
 export interface SessionWorkspace {
@@ -377,19 +338,17 @@ function PrForm({
 
 /**
  * The shell's right-hand session panel: a git-state header with the PR, the one next step and where the
- * thread runs, then Check (the PR, the subthreads the thread started and how
- * full its context is), Changes and Files. Every value comes from state
- * Pipper already keeps; a section with nothing to show is left out.
+ * thread runs, then Check (the PR and the subthreads the thread started),
+ * Changes and Files. Every value comes from state Pipper already keeps; a
+ * section with nothing to show is left out.
  */
 export function SessionPanel({ session }: { session: SessionWorkspace }) {
   const { draft, project, cwd, threadId, isStreaming, status, refresh, tone } = session;
   const threadTitle = useAgentStore((state) => state.state?.title ?? null);
-  const usage = useAgentStore((state) => (draft ? null : (state.state?.usage ?? null)));
   const agentTasks = useAgentStore((state) => state.agentTasks);
   const agents = useAgentRegistryStore((state) => state.agents);
   const dismissedSubthreads = useDismissedSubthreadsStore((state) => state.taskIds);
   const dismissSubthread = useDismissedSubthreadsStore((state) => state.dismiss);
-  const [contextOpen, setContextOpen] = useState(false);
   const [prFormOpen, setPrFormOpen] = useState(false);
   const [tab, setTab] = useState<WorkspacePanelTab>("check");
   const [changesSource, setChangesSource] = useState<ChangesSource>("git");
@@ -428,8 +387,6 @@ export function SessionPanel({ session }: { session: SessionWorkspace }) {
     );
   }
 
-  const contextPercent =
-    usage && usage.size > 0 ? Math.min(100, Math.round((usage.used / usage.size) * 100)) : null;
   const dirty = git ? git.staged + git.unstaged + git.untracked : 0;
   // A branch with nothing against its base has no totals to show.
   const branchLines =
@@ -450,7 +407,9 @@ export function SessionPanel({ session }: { session: SessionWorkspace }) {
         className={cn(
           "flex min-h-0 flex-1 flex-col",
           // The file tree scrolls itself; everything else scrolls the panel.
-          tab === "files" ? "overflow-hidden" : "overflow-y-auto pb-3",
+          tab === "files"
+            ? "overflow-hidden"
+            : "overflow-y-auto pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
         )}
       >
         <WorkspaceStateSurface
@@ -585,41 +544,6 @@ export function SessionPanel({ session }: { session: SessionWorkspace }) {
                   </p>
                 )}
               </Section>
-            ) : null}
-
-            {usage && contextPercent !== null ? (
-              <Disclosure
-                label="Context"
-                open={contextOpen}
-                onToggle={() => setContextOpen((open) => !open)}
-                value={
-                  <>
-                    <span className="tabular-nums">{contextPercent}%</span>
-                    <span
-                      aria-hidden="true"
-                      className="h-1.5 w-10 overflow-hidden rounded-full bg-muted-foreground/20"
-                    >
-                      <span
-                        className="block h-full rounded-full bg-foreground/70"
-                        style={{ width: `${contextPercent}%` }}
-                      />
-                    </span>
-                  </>
-                }
-              >
-                <p className="text-[12px] text-muted-foreground">
-                  {formatTokenCount(usage.used)} of {formatTokenCount(usage.size)} tokens used
-                </p>
-                {usage.cost ? (
-                  <p className="text-[12px] text-muted-foreground">
-                    {usage.cost.amount.toLocaleString(undefined, {
-                      style: "currency",
-                      currency: usage.cost.currency,
-                    })}{" "}
-                    this session
-                  </p>
-                ) : null}
-              </Disclosure>
             ) : null}
           </>
         )}

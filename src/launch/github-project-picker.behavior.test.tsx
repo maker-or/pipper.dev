@@ -199,7 +199,7 @@ test("never chooses a folder for a GitHub project", async () => {
     ),
   );
   expect(button("Local").getAttribute("aria-selected")).toBe("true");
-  expect(host.querySelector('input[placeholder="No folder selected"]')).not.toBeNull();
+  expect(host.textContent).toContain("No folder selected");
   expect(getStatus).not.toHaveBeenCalled();
   await act(async () => button("GitHub").click());
   expect(host.textContent).toContain("Select a repository");

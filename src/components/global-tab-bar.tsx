@@ -1,7 +1,31 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
+import {
+  cloneElement,
+  isValidElement,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactElement,
+} from "react";
 import { createPortal } from "react-dom";
+import {
+  DndContext,
+  PointerSensor,
+  closestCenter,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  useSortable,
+  arrayMove,
+} from "@dnd-kit/sortable";
+import { motion } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ChatCircleIcon,
@@ -102,6 +126,52 @@ function getProjectIconComponent(project: { id: string; icon: string | null }) {
     projectIconComponentCache.set(key, Component);
   }
   return Component;
+}
+
+/** Draggable wrapper for a thread tab (DND-Kit sortable + Framer layout). */
+function SortableThreadTab({
+  id,
+  value,
+  _index,
+  children,
+  disabled,
+}: {
+  id: string;
+  value?: string;
+  _index?: number;
+  children: React.ReactNode;
+  disabled?: boolean;
+}) {
+  void value;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id,
+    disabled,
+  });
+  return (
+    <motion.div
+      ref={setNodeRef}
+      layout={!isDragging}
+      animate={isDragging ? { scale: 0.94 } : { scale: 1 }}
+      transition={{ type: "spring", stiffness: 500, damping: 30, mass: 0.6 }}
+      style={{
+        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
+        transition,
+        touchAction: "none",
+      }}
+      className={
+        isDragging
+          ? "z-30 cursor-grabbing opacity-95 shadow-[0_12px_32px_rgba(0,0,0,0.45)] rounded-full bg-surface-3 [&_*]:!text-foreground"
+          : "cursor-grab"
+      }
+      {...attributes}
+      {...listeners}
+      data-pipper-id={`sortable-thread-tab-${id}`}
+    >
+      {isValidElement(children)
+        ? cloneElement(children as React.ReactElement, { _index } as Record<string, unknown>)
+        : children}
+    </motion.div>
+  );
 }
 
 /**
@@ -558,6 +628,51 @@ export function GlobalTabBar() {
     [visibleOpenThreads, terminalTabs, previewPath, showDiffTab],
   );
 
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }));
+  const [dragOrder, setDragOrder] = useState<Thread[] | null>(null);
+  const displayedThreads = dragOrder ?? visibleOpenThreads;
+
+  // Live-reorder while dragging so neighbours shift to make room for the
+  // drop (position 5 -> 3 pushes 3/4 aside). DOM order only changed on
+  // drag end before, so nothing ever created that space.
+  const handleDragOver = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const current = dragOrder ?? visibleOpenThreads;
+    const oldIndex = current.findIndex((t) => t.id === active.id);
+    const newIndex = current.findIndex((t) => t.id === over.id);
+    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
+    setDragOrder(arrayMove(current, oldIndex, newIndex));
+  };
+
+  const handleDragEnd = async (event: DragEndEvent) => {
+    const { active } = event;
+    const next = dragOrder ?? visibleOpenThreads;
+    if (next === visibleOpenThreads || !next.some((t) => t.id === active.id)) {
+      setDragOrder(null);
+      return;
+    }
+    try {
+      const allIds = (openTabsState?.openThreadIds ?? []).filter((id) =>
+        visibleOpenThreads.some((t) => t.id === id),
+      );
+      const nextAll = [
+        ...next.map((t) => t.id),
+        ...allIds.filter((id) => !next.some((t) => t.id === id)),
+      ];
+      const result = await window.omni.tabs.reorder(nextAll);
+      queryClient.setQueryData(OPEN_TABS_QUERY_KEY, result);
+    } catch (err) {
+      toast({
+        icon: <WarningIcon className="size-5 text-red-500" />,
+        title: "Could not reorder tabs",
+        description: err instanceof Error ? err.message : "The tab order was not saved.",
+      });
+    } finally {
+      setDragOrder(null);
+    }
+  };
+
   const handleTabChangeRef = useRef<(value: string) => void>(() => {});
   const handleNewThreadRef = useRef(handleNewThread);
   handleNewThreadRef.current = handleNewThread;
@@ -737,104 +852,125 @@ export function GlobalTabBar() {
         className="flex w-full max-w-[1000px] min-w-0 items-center gap-1"
         data-pipper-id="global-tab-bar"
       >
-        <TabsList
-          data-pipper-id="global-tabs"
-          className="min-w-0 max-w-full flex-[0_1_auto] gap-1 overflow-x-auto p-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/40"
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragOver={handleDragOver}
+          onDragEnd={handleDragEnd}
+          onDragCancel={() => setDragOrder(null)}
         >
-          {visibleOpenThreads.map((thread, idx) => {
-            const project = projectsList.find((item) => item.id === thread.project_id);
-            const isThreadWorking = runningThreadIds.includes(thread.id);
-            const Icon = isThreadWorking
-              ? TabWorkingIcon
-              : project
-                ? getProjectIconComponent(project)
-                : undefined;
-            const isEditing = editingThreadId === thread.id;
-            const tabTitle = thread.title ?? "New thread";
-            return (
-              <TabItem
-                key={thread.id}
-                index={idx}
-                value={thread.id}
-                label={tabTitle}
-                scrollLabelOnHover
-                icon={Icon}
-                attention={threadsWaitingOnUser.has(thread.id)}
-                title={threadsWaitingOnUser.has(thread.id) ? "A subthread needs you" : undefined}
-                onClose={() => handleCloseThreadTab(thread.id)}
-                editing={isEditing}
-                editValue={isEditing ? editingThreadTitle : tabTitle}
-                onEditValueChange={setEditingThreadTitle}
-                onEditCommit={commitRenameThread}
-                onEditCancel={cancelRenameThread}
-                onDoubleClick={() => startRenameThread(thread.id, tabTitle)}
-                onContextMenu={(event) => {
-                  if (!project) return;
-                  event.preventDefault();
-                  setThreadMenu({ thread, position: { x: event.clientX, y: event.clientY } });
-                }}
-                data-pipper-id={`thread-tab-${thread.id}`}
-              />
-            );
-          })}
-          {terminalTabs.map((session, idx) => (
-            <TabItem
-              key={session.id}
-              index={visibleOpenThreads.length + idx}
-              value={`${TERMINAL_TAB_PREFIX}${session.id}`}
-              label={session.title}
-              scrollLabelOnHover
-              icon={
-                session.status === "exited" || session.status === "error"
-                  ? WarningIcon
-                  : TerminalWindowIcon
-              }
-              onClose={() => handleCloseTerminal(session.id)}
-              title={
-                session.status === "exited"
-                  ? "Terminal process exited"
-                  : session.status === "error"
-                    ? "Terminal failed to start"
-                    : undefined
-              }
-              className={
-                session.status === "exited" || session.status === "error"
-                  ? "[&_svg]:!text-red-500"
-                  : undefined
-              }
-              data-pipper-id={`terminal-tab-${session.id}`}
-            />
-          ))}
-          {previewPath && (
-            <TabItem
-              key={PREVIEW_TAB_VALUE}
-              index={visibleOpenThreads.length + terminalTabs.length}
-              value={PREVIEW_TAB_VALUE}
-              label={previewPath.slice(previewPath.lastIndexOf("/") + 1)}
-              scrollLabelOnHover
-              icon={previewTabIcon(previewPath)}
-              onClose={handleClosePreview}
-              title={previewPath}
-              data-pipper-id="preview-tab"
-            />
-          )}
-          {showDiffTab && (
-            <TabItem
-              key={DIFF_TAB_VALUE}
-              index={visibleOpenThreads.length + terminalTabs.length + (previewPath ? 1 : 0)}
-              value={DIFF_TAB_VALUE}
-              label="Changes"
-              icon={PlusMinusIcon}
-              onClose={handleCloseDiff}
-              title={
-                diffFileCount > 0
-                  ? `${diffFileCount} changed ${diffFileCount === 1 ? "file" : "files"}`
-                  : "Changes"
-              }
-              data-pipper-id="diff-tab"
-            />
-          )}
-        </TabsList>
+          <SortableContext
+            items={displayedThreads.map((t) => t.id)}
+            strategy={horizontalListSortingStrategy}
+          >
+            <TabsList
+              data-pipper-id="global-tabs"
+              className="min-w-0 max-w-full flex-[0_1_auto] gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            >
+              {displayedThreads.map((thread, idx) => {
+                const project = projectsList.find((item) => item.id === thread.project_id);
+                const isThreadWorking = runningThreadIds.includes(thread.id);
+                const Icon = isThreadWorking
+                  ? TabWorkingIcon
+                  : project
+                    ? getProjectIconComponent(project)
+                    : undefined;
+                const isEditing = editingThreadId === thread.id;
+                const tabTitle = thread.title ?? "New thread";
+                return (
+                  <SortableThreadTab
+                    key={thread.id}
+                    id={thread.id}
+                    value={thread.id}
+                    disabled={isEditing}
+                  >
+                    <TabItem
+                      index={idx}
+                      value={thread.id}
+                      label={tabTitle}
+                      scrollLabelOnHover
+                      icon={Icon}
+                      attention={threadsWaitingOnUser.has(thread.id)}
+                      title={
+                        threadsWaitingOnUser.has(thread.id) ? "A subthread needs you" : undefined
+                      }
+                      onClose={() => handleCloseThreadTab(thread.id)}
+                      editing={isEditing}
+                      editValue={isEditing ? editingThreadTitle : tabTitle}
+                      onEditValueChange={setEditingThreadTitle}
+                      onEditCommit={commitRenameThread}
+                      onEditCancel={cancelRenameThread}
+                      onDoubleClick={() => startRenameThread(thread.id, tabTitle)}
+                      onContextMenu={(event) => {
+                        if (!project) return;
+                        event.preventDefault();
+                        setThreadMenu({ thread, position: { x: event.clientX, y: event.clientY } });
+                      }}
+                      data-pipper-id={`thread-tab-${thread.id}`}
+                    />
+                  </SortableThreadTab>
+                );
+              })}
+              {terminalTabs.map((session, idx) => (
+                <TabItem
+                  key={session.id}
+                  index={visibleOpenThreads.length + idx}
+                  value={`${TERMINAL_TAB_PREFIX}${session.id}`}
+                  label={session.title}
+                  scrollLabelOnHover
+                  icon={
+                    session.status === "exited" || session.status === "error"
+                      ? WarningIcon
+                      : TerminalWindowIcon
+                  }
+                  onClose={() => handleCloseTerminal(session.id)}
+                  title={
+                    session.status === "exited"
+                      ? "Terminal process exited"
+                      : session.status === "error"
+                        ? "Terminal failed to start"
+                        : undefined
+                  }
+                  className={
+                    session.status === "exited" || session.status === "error"
+                      ? "[&_svg]:!text-red-500"
+                      : undefined
+                  }
+                  data-pipper-id={`terminal-tab-${session.id}`}
+                />
+              ))}
+              {previewPath && (
+                <TabItem
+                  key={PREVIEW_TAB_VALUE}
+                  index={visibleOpenThreads.length + terminalTabs.length}
+                  value={PREVIEW_TAB_VALUE}
+                  label={previewPath.slice(previewPath.lastIndexOf("/") + 1)}
+                  scrollLabelOnHover
+                  icon={previewTabIcon(previewPath)}
+                  onClose={handleClosePreview}
+                  title={previewPath}
+                  data-pipper-id="preview-tab"
+                />
+              )}
+              {showDiffTab && (
+                <TabItem
+                  key={DIFF_TAB_VALUE}
+                  index={visibleOpenThreads.length + terminalTabs.length + (previewPath ? 1 : 0)}
+                  value={DIFF_TAB_VALUE}
+                  label="Changes"
+                  icon={PlusMinusIcon}
+                  onClose={handleCloseDiff}
+                  title={
+                    diffFileCount > 0
+                      ? `${diffFileCount} changed ${diffFileCount === 1 ? "file" : "files"}`
+                      : "Changes"
+                  }
+                  data-pipper-id="diff-tab"
+                />
+              )}
+            </TabsList>
+          </SortableContext>
+        </DndContext>
 
         <div className="relative shrink-0" style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>
           <Button
