@@ -1,16 +1,20 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
+  ArrowClockwiseIcon,
   ArrowSquareOut,
-  CaretDown,
   CheckCircleIcon,
   CircleNotch,
+  InfoIcon,
   Plus,
+  SignOutIcon,
+  TrashIcon,
   WarningCircle,
   X,
 } from "@phosphor-icons/react";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Elevated } from "@/lib/elevated";
+import { Tooltip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { CONNECTOR_LOGOS } from "@/lib/connector-logos";
 import {
@@ -503,12 +507,7 @@ function StatusLine({
   }
   switch (connector.status) {
     case "connected":
-      return (
-        <span className={cn(base, "text-foreground")}>
-          <CheckCircleIcon size={14} weight="fill" />
-          Connected · {connector.tools.length} {connector.tools.length === 1 ? "tool" : "tools"}
-        </span>
-      );
+      return <span className={cn(base, "text-foreground")} aria-label="Connected" />;
     case "needs_sign_in":
       return (
         <span className={cn(base, "text-amber-500")}>
@@ -520,13 +519,15 @@ function StatusLine({
       );
     case "error":
       return (
-        <span
-          className={cn(base, "max-w-full text-amber-500")}
-          title={connector.lastError ?? undefined}
-        >
-          <WarningCircle size={14} weight="fill" className="shrink-0" />
-          <span className="truncate">{connector.lastError ?? "Couldn't connect"}</span>
-        </span>
+        <Tooltip content={connector.lastError ?? "Couldn't connect"} side="top">
+          <button
+            type="button"
+            aria-label={connector.lastError ?? "Couldn't connect"}
+            className="inline-flex shrink-0 items-center justify-center rounded-full text-amber-500 outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+          >
+            <InfoIcon size={14} weight="fill" />
+          </button>
+        </Tooltip>
       );
     default:
       return <span className={cn(base, "text-muted-foreground")}>Not connected yet</span>;
@@ -575,110 +576,88 @@ function ConnectorRow({
 }) {
   const omni = window.omni!;
   const entry = connectorCatalogEntry(connector.catalogId);
-  const [mode, setMode] = useState<"idle" | "tools" | "edit" | "remove">("idle");
+  const [mode, setMode] = useState<"idle" | "edit" | "remove">("idle");
   const remote = connector.transport !== "stdio";
   const idle = !busy && !connector.signingIn;
   const signsIn = remote && entry?.auth.kind !== "key" && entry?.auth.kind !== "none";
   const editable = !entry || entry.auth.kind === "key";
 
-  const subtitle = remote
-    ? entry
-      ? hostOf(connector.url)
-      : (connector.url ?? "")
-    : [connector.command, ...connector.args].join(" ");
-
   return (
     <div data-pipper-id={`settings-connector-${connector.id}`}>
-      <div className="flex min-h-[76px] items-center gap-4 px-4 py-3">
+      <div className="group flex min-h-[76px] items-center gap-4 px-4 py-3">
         <ConnectorTile name={connector.name} catalogId={connector.catalogId} />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="text-[13px] font-medium text-foreground">{connector.name}</span>
-            <span
-              className="truncate font-mono text-[10.5px] text-muted-foreground/80"
-              title={subtitle}
-            >
-              {subtitle}
-            </span>
-          </div>
-          <div className="mt-1 flex min-w-0">
+        <div className="flex min-w-0 flex-1 flex-col justify-center">
+          <div className="flex items-center gap-2">
             <StatusLine
               connector={connector}
               busy={busy}
               onCancelSignIn={() => void omni.connectors.cancelSignIn(connector.id)}
             />
-          </div>
-          {idle && mode !== "edit" && mode !== "remove" && (
-            <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
-              {connector.enabled && signsIn && connector.status === "needs_sign_in" && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="tertiary"
-                  onClick={() => run("Connecting…", () => omni.connectors.connect(connector.id))}
-                >
-                  {connector.signedIn ? "Sign in again" : "Sign in"}
-                </Button>
-              )}
-              {connector.enabled &&
-                remote &&
-                (connector.status === "error" || connector.status === "unknown") && (
-                  <Button
+            <span className="text-[15px] font-semibold leading-none text-foreground">
+              {connector.name}
+            </span>
+            {idle && mode !== "edit" && mode !== "remove" && (
+              <div className="flex flex-wrap items-center gap-x-1 gap-y-1">
+                {connector.enabled &&
+                  remote &&
+                  (connector.status === "error" || connector.status === "unknown") && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="tertiary"
+                      onClick={() => run("Connecting…", () => connectConnector(connector))}
+                    >
+                      {connector.status === "error" ? "Try again" : "Connect"}
+                    </Button>
+                  )}
+                {connector.enabled && remote && connector.status === "connected" && (
+                  <button
                     type="button"
-                    size="sm"
-                    variant="tertiary"
-                    onClick={() => run("Connecting…", () => connectConnector(connector))}
+                    aria-label="Check again"
+                    title="Check again"
+                    onClick={() => run("Checking…", () => omni.connectors.check(connector.id))}
+                    className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
                   >
-                    {connector.status === "error" ? "Try again" : "Connect"}
-                  </Button>
+                    <ArrowClockwiseIcon size={14} />
+                  </button>
                 )}
-              {connector.tools.length > 0 && (
+                {signsIn && connector.signedIn && (
+                  <button
+                    type="button"
+                    aria-label="Sign out"
+                    title="Sign out"
+                    onClick={() => run("Signing out…", () => omni.connectors.signOut(connector.id))}
+                    className="inline-flex items-center justify-center rounded-md p-1 text-muted-foreground opacity-0 outline-none transition-opacity hover:text-foreground focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
+                  >
+                    <SignOutIcon size={14} />
+                  </button>
+                )}
+                {editable && (
+                  <LinkButton onClick={() => setMode("edit")}>
+                    {entry
+                      ? `Replace ${entry.auth.kind === "key" ? entry.auth.label.toLowerCase() : "key"}`
+                      : "Edit"}
+                  </LinkButton>
+                )}
                 <button
                   type="button"
-                  aria-expanded={mode === "tools"}
-                  onClick={() => setMode(mode === "tools" ? "idle" : "tools")}
-                  className="inline-flex items-center gap-0.5 text-[11px] text-muted-foreground outline-none hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring"
+                  aria-label="Remove"
+                  title="Remove"
+                  onClick={() => setMode("remove")}
+                  className="inline-flex items-center justify-center rounded-md p-1 text-destructive opacity-0 outline-none transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:ring-1 focus-visible:ring-ring group-hover:opacity-100"
                 >
-                  Tools
-                  <CaretDown
-                    size={11}
-                    className={cn("transition-transform", mode === "tools" && "rotate-180")}
-                  />
+                  <TrashIcon size={14} />
                 </button>
-              )}
-              {connector.enabled && remote && connector.status === "connected" && (
-                <LinkButton
-                  onClick={() => run("Checking…", () => omni.connectors.check(connector.id))}
-                >
-                  Check again
-                </LinkButton>
-              )}
-              {signsIn && connector.signedIn && (
-                <LinkButton
-                  onClick={() => run("Signing out…", () => omni.connectors.signOut(connector.id))}
-                >
-                  Sign out
-                </LinkButton>
-              )}
-              {editable && (
-                <LinkButton onClick={() => setMode("edit")}>
-                  {entry
-                    ? `Replace ${entry.auth.kind === "key" ? entry.auth.label.toLowerCase() : "key"}`
-                    : "Edit"}
-                </LinkButton>
-              )}
-              <LinkButton danger onClick={() => setMode("remove")}>
-                Remove
-              </LinkButton>
-            </div>
-          )}
+              </div>
+            )}
+          </div>
           {error && idle && (
             <p className="mt-1 text-[11px] leading-4 text-destructive" role="alert">
               {error}
             </p>
           )}
         </div>
-        <div className="flex shrink-0 items-center self-start pt-1.5">
+        <div className="flex shrink-0 items-center">
           <Switch
             label={connector.enabled ? `Turn off ${connector.name}` : `Turn on ${connector.name}`}
             checked={connector.enabled}
@@ -696,19 +675,6 @@ function ConnectorRow({
           />
         </div>
       </div>
-
-      {mode === "tools" && (
-        <ul className="mx-4 mb-3 flex max-h-[220px] flex-col gap-1.5 overflow-y-auto rounded-lg bg-surface-2 px-3 py-2.5">
-          {connector.tools.map((tool) => (
-            <li key={tool.name} className="text-[11px] leading-4">
-              <span className="font-mono text-foreground">{tool.name}</span>
-              {tool.description && (
-                <span className="line-clamp-2 text-muted-foreground">{tool.description}</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
 
       {mode === "remove" && (
         <div className="mx-4 mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-surface-2 px-3 py-2.5">
@@ -934,10 +900,6 @@ export function ConnectorSettings() {
             </div>
           </Elevated>
         )}
-        <p className="px-1 text-[11px] leading-4 text-muted-foreground">
-          Threads get a connector when their session starts; ones already running keep what they
-          had. Your agent still asks before running its tools, as for any MCP tool.
-        </p>
       </section>
 
       {CONNECTOR_CATEGORIES.map((category) => {

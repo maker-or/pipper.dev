@@ -58,7 +58,7 @@ export function ShapeIcon({
   const gradientId = `shape-gloss-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const level = Math.min(useSurface() + SHAPE_ELEVATION, 8);
   const toned = tone !== null;
-  const fill = toned ? HEADER_TONE_FILL[tone] : `var(--surface-${level})`;
+  const fill = toned ? HEADER_TONE_FILL[tone] : `var(--shape-fill, var(--surface-${level}))`;
   return (
     <svg
       viewBox="0 0 100 100"
@@ -67,7 +67,7 @@ export function ShapeIcon({
       className={cn("overflow-visible", className)}
       style={
         {
-          "--shape-fill": fill,
+          ...(toned ? { "--shape-fill": fill } : {}),
           filter:
             "drop-shadow(0 1px 1px var(--dm-drop, var(--shadow-color))) drop-shadow(0 3px 3px var(--dm-drop, var(--shadow-color)))",
         } as CSSProperties
@@ -91,7 +91,7 @@ export function ShapeIcon({
       ) : null}
       <path
         d={projectShapePath(shape)}
-        fill={toned ? `url(#${gradientId})` : "var(--shape-fill)"}
+        fill={toned ? `url(#${gradientId})` : fill}
         // The stroke sits under the fill, so only a 1px ring shows outside it.
         stroke="var(--dm-ring-high, var(--shadow-color))"
         strokeWidth={2}
@@ -163,7 +163,7 @@ export function ShapePicker({
       role="radiogroup"
       aria-label="Shape"
       onKeyDown={onKeyDown}
-      className={cn("grid grid-cols-7 gap-2 p-0.5", className)}
+      className={cn("grid grid-cols-9 gap-2 p-0.5", className)}
     >
       {PROJECT_SHAPES.map((shape, index) => {
         const selected = shape === value;
@@ -182,13 +182,20 @@ export function ShapePicker({
             disabled={disabled}
             onClick={() => onValueChange(shape)}
             className={cn(
-              "grid aspect-square place-items-center rounded-xl outline-none",
+              "group grid aspect-square place-items-center rounded-xl outline-none",
               "transition-colors duration-80 focus-visible:ring-2 focus-visible:ring-ring",
               "disabled:pointer-events-none disabled:opacity-50",
               selected ? "bg-accent ring-1 ring-border" : "hover:bg-hover",
             )}
           >
-            <ShapeIcon shape={shape} className="size-3/5" />
+            <ShapeIcon
+              shape={shape}
+              className={cn(
+                "size-3/5",
+                !selected && "group-hover:[--shape-fill:var(--foreground)]",
+                selected && "[&>path]:!fill-white [&>path]:!stroke-white",
+              )}
+            />
           </button>
         );
       })}

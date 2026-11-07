@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { spring } from "@/lib/springs";
 import { fontWeights } from "@/lib/font-weight";
 import { useShape } from "@/lib/shape-context";
+import { useSurface } from "@/lib/surface-context";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -1092,6 +1093,8 @@ const SliderComfortable = forwardRef<HTMLDivElement, SliderComfortableProps>(
     const [showHoverTooltip, setShowHoverTooltip] = useState(false);
     const hoverDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const shape = useShape();
+    const surface = useSurface();
+    const surfaceVar = `var(--surface-${surface})`;
 
     // Show hover tooltip after 100ms delay
     useEffect(() => {
@@ -1387,6 +1390,10 @@ const SliderComfortable = forwardRef<HTMLDivElement, SliderComfortableProps>(
             disabled && "opacity-50 pointer-events-none",
             className,
           )}
+          style={{
+            backgroundColor: surfaceVar,
+            ...props.style,
+          }}
           initial={false}
           animate={{
             outline: isFocused ? "1px solid var(--focus-ring, #6B97FF)" : "1px solid transparent",
@@ -1479,13 +1486,19 @@ const SliderComfortable = forwardRef<HTMLDivElement, SliderComfortableProps>(
               aria-hidden
             >
               {label && (
-                <span className="text-[13px] px-2 bg-background text-transparent select-none">
+                <span
+                  className="text-[13px] px-2 text-transparent select-none h-full flex items-center"
+                  style={{ backgroundColor: surfaceVar }}
+                >
                   {label}
                 </span>
               )}
               <span
-                className="text-[13px] tabular-nums ml-auto px-2 bg-background text-transparent select-none"
-                style={{ minWidth: `${String(formatValue(max)).length}ch` }}
+                className="text-[13px] tabular-nums ml-auto px-2 text-transparent select-none h-full flex items-center justify-end"
+                style={{
+                  minWidth: `${String(formatValue(max)).length}ch`,
+                  backgroundColor: surfaceVar,
+                }}
               >
                 {formatValue(value)}
               </span>

@@ -26,10 +26,11 @@ export function createProject(input: { name: string; path: string; icon: string 
   };
 
   try {
-    // A new project goes to the end of the rail.
+    // A new project goes to the top of the rail.
+    db.exec("UPDATE projects SET sort_order = sort_order + 1");
     const stmt = db.prepare(
       `INSERT INTO projects (id, name, path, icon, sort_order)
-       VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM projects))`,
+       VALUES (?, ?, ?, ?, 0)`,
     );
     stmt.run(row.id, row.name, row.path, row.icon);
   } catch (err) {

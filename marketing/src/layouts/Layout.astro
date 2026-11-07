@@ -2,10 +2,6 @@
 import Analytics from "@vercel/analytics/astro";
 import "../styles/global.css";
 import AgentTile from "../components/AgentTile.astro";
-import { projectShapePath } from "../../../src/lib/project-shapes.ts";
-
-// The footer's brand mark: the flower from the app's project shapes.
-const brandMark = projectShapePath("flower");
 
 // The "@agent" tiles, sprinkled along the footer's bottom edge: `x` is a
 // percentage across, `y` how far the tile's bottom sits above the edge (rem,
@@ -166,9 +162,6 @@ const isCanvasPage = [
                     <footer class="site-footer">
                         <div class="site-footer-inner">
                             <a href="/" class="site-footer-brand">
-                                <svg viewBox="0 0 100 100" aria-hidden="true" focusable="false">
-                                    <path d={brandMark} />
-                                </svg>
                                 pipper
                             </a>
                             <nav class="site-footer-links" aria-label="Footer">

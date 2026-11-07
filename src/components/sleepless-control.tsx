@@ -115,7 +115,7 @@ function PreferenceControls({
               window.omni.sleepless.setPreferences({ batteryFloor: Number(event.target.value) }),
             )
           }
-          className="rounded-md border border-border bg-surface-2 px-2 py-1 text-[11px] outline-none disabled:opacity-50"
+          className="rounded-lg border border-border bg-surface-2 px-2 py-1 text-[11px] outline-none disabled:opacity-50"
         >
           {[15, 20, 25, 30].map((value) => (
             <option key={value} value={value}>
@@ -137,7 +137,7 @@ function PreferenceControls({
               }),
             )
           }
-          className="rounded-md border border-border bg-surface-2 px-2 py-1 text-[11px] outline-none disabled:opacity-50"
+          className="rounded-lg border border-border bg-surface-2 px-2 py-1 text-[11px] outline-none disabled:opacity-50"
         >
           <option value={60}>1 hour</option>
           <option value={120}>2 hours</option>

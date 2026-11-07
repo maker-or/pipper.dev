@@ -363,3 +363,16 @@ describe("activateTabAfterClose", () => {
     expect(manager.clearActiveThread).not.toHaveBeenCalled();
   });
 });
+
+describe("reorderThreadTabs", () => {
+  test("reorders persisted ids, keeps unknown open tabs after, ignores unknown/repeated ids", async () => {
+    const { openThreadTab, reorderThreadTabs } = await import("./open-tabs.ts");
+    await openThreadTab("a");
+    await openThreadTab("b");
+    await openThreadTab("c");
+    // Persisted order is [c, b, a] (front-insert).
+    const state = await reorderThreadTabs(["a", "c", "gone", "a"]);
+    expect(state.openThreadIds).toEqual(["a", "c", "b"]);
+    expect(state.activeThreadId).toBe("c");
+  });
+});
