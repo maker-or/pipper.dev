@@ -37,10 +37,17 @@ final class OverlayController: NSObject, MTKViewDelegate {
   private var dismissing = false
 
   private let backdropSource: Backdrop.Source?
+  private let sound: IntroSound?
+  private let haptics: Bool
+  private var lastTime: Double?
 
-  init(config: IntroConfig, screen: NSScreen, backdrop: Backdrop?, startAt: Double) throws {
+  init(
+    config: IntroConfig, screen: NSScreen, backdrop: Backdrop?, score: StereoAudio?, haptics: Bool, startAt: Double
+  ) throws {
     self.config = config
     self.startAt = startAt
+    self.haptics = haptics
+    sound = score.flatMap(IntroSound.init)
     let frame = screen.frame
     let pixels = Self.pixelSize(of: screen)
     renderer = try IntroRenderer(config: config, width: pixels.width, height: pixels.height)
@@ -93,6 +100,11 @@ final class OverlayController: NSObject, MTKViewDelegate {
     window.makeKeyAndOrderFront(nil)
     window.makeFirstResponder(view)
     NSApp.activate(ignoringOtherApps: true)
+    // One start time for picture and sound, a little ahead so the audio
+    // engine can be scheduled for it. Frames before it draw time 0.
+    let start = CACurrentMediaTime() + 0.1
+    startTime = start
+    sound?.play(atSeconds: start, offset: startAt)
     view.isPaused = false
     emit("started", ["stage": renderer.backdrop == nil ? "none" : backdropSource?.rawValue ?? "none"])
   }
@@ -116,6 +128,7 @@ final class OverlayController: NSObject, MTKViewDelegate {
   func dismiss(duration: TimeInterval = 0.35) {
     guard !dismissing else { return }
     dismissing = true
+    sound?.fadeOut(over: duration)
     NSAnimationContext.runAnimationGroup({ context in
       context.duration = duration
       context.timingFunction = CAMediaTimingFunction(name: .easeOut)
@@ -128,11 +141,24 @@ final class OverlayController: NSObject, MTKViewDelegate {
 
   func mtkView(_: MTKView, drawableSizeWillChange _: CGSize) {}
 
+  /// Pulses for any front that reached the pointer since the last frame.
+  private func feelFronts(until time: Double) {
+    defer { lastTime = time }
+    guard let last = lastTime, let screen = window.screen else { return }
+    let mouse = NSEvent.mouseLocation
+    let scale = screen.backingScaleFactor
+    let pointer = SIMD2((mouse.x - screen.frame.minX) * scale, (mouse.y - screen.frame.minY) * scale)
+    for pulse in hapticPulses(at: pointer, from: last, to: time, geometry: renderer.geometry, config: config) {
+      IntroHaptics.perform(pulse)
+    }
+  }
+
   func draw(in view: MTKView) {
     let now = CACurrentMediaTime()
     let start = startTime ?? now
     startTime = start
-    let time = min(startAt + now - start, config.end)
+    let time = min(startAt + max(0, now - start), config.end)
+    if haptics { feelFronts(until: time) }
     guard let drawable = view.currentDrawable, let commandBuffer = renderer.queue.makeCommandBuffer() else { return }
     renderer.encode(commandBuffer, target: drawable.texture, time: time)
     commandBuffer.present(drawable)

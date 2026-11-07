@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "intro-playground",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4791", "--directory", "native/launch-intro/playground"],
+      "port": 4791
+    }
+  ]
+}

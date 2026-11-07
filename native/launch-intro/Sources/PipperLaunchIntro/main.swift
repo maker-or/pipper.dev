@@ -3,8 +3,11 @@ import Foundation
 import ImageIO
 import LaunchIntroCore
 
-/// pipper-launch-intro [--text <line>] [--font-size <units>] [--start-at <s>]
+/// pipper-launch-intro [--text <line>] [--font-size <units>] [--start-at <s>] [--silent] [--no-haptics]
 ///   Plays the intro over the main display and reports on stdout.
+///
+/// pipper-launch-intro --render-audio <file.wav>
+///   Writes the score, to listen to it without the overlay.
 ///
 /// pipper-launch-intro --render-frames <dir> --times 0,1.5,3 [--size 2880x1800]
 ///                     [--background <image>] [--screen <image>]
@@ -19,12 +22,21 @@ struct Options {
   var size: (Int, Int) = (2880, 1800)
   var background: String?
   var screen: String?
+  var silent = false
+  var haptics = true
+  var audioPath: String?
 
   init(_ arguments: [String]) {
     var iterator = arguments.dropFirst().makeIterator()
     while let flag = iterator.next() {
+      switch flag {
+      case "--silent": silent = true; continue
+      case "--no-haptics": haptics = false; continue
+      default: break
+      }
       let value = iterator.next() ?? ""
       switch flag {
+      case "--render-audio": audioPath = value
       case "--text": config.text = value
       case "--font-size": config.fontSize = Double(value) ?? config.fontSize
       case "--start-at": startAt = Double(value) ?? 0
@@ -79,6 +91,16 @@ let options = Options(CommandLine.arguments)
 if let directory = options.renderDirectory {
   exit(renderFrames(options, to: directory))
 }
+if let path = options.audioPath {
+  do {
+    try writeWAV(renderScore(options.config), to: URL(fileURLWithPath: path))
+    print(path)
+    exit(0)
+  } catch {
+    FileHandle.standardError.write(Data("\(error)\n".utf8))
+    exit(1)
+  }
+}
 
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
@@ -108,6 +130,9 @@ Task { @MainActor in
     exit(1)
   }
   let scale = screen.backingScaleFactor
+  // Rendered alongside the backdrop, so neither delays the other.
+  let config = options.config
+  let score = options.silent ? nil : Task.detached(priority: .userInitiated) { renderScore(config) }
   let backdrop = await loadBackdrop(
     screen: screen,
     displayID: displayID,
@@ -116,7 +141,8 @@ Task { @MainActor in
   )
   do {
     let overlay = try OverlayController(
-      config: options.config, screen: screen, backdrop: backdrop, startAt: options.startAt
+      config: options.config, screen: screen, backdrop: backdrop, score: await score?.value,
+      haptics: options.haptics, startAt: options.startAt
     )
     controller = overlay
     overlay.start()

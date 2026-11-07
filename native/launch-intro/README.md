@@ -32,6 +32,40 @@ swift build -c release
   --times 0,1,2,3,4.267 --size 1440x900 --background wallpaper.heic --screen desktop.png
 ```
 
+## Sound and haptics
+
+`Score.swift` renders the music from the same `IntroConfig`, so it moves with
+any retiming. Each ripple leaving the stone is a water drop and a sub thump
+scaled by its strength (the first carries the unseen splash); each front's
+crossing is a wash that brightens as it climbs and flutters at the rings' rate
+(speed ÷ wavelength); the pad swells with the text's opacity and brightens as it
+sharpens. It is rendered while the
+backdrop loads and started on the same host time as the first frame.
+
+`Haptics.swift` pulses the trackpad as each front passes under the pointer
+(read live): three firm taps for the 1.5 opener, one light tap for the 0.65
+followers, and one as the text settles. macOS only plays these on a Force Touch
+trackpad with a finger on it.
+
+```sh
+.build/release/pipper-launch-intro --render-audio /tmp/intro.wav   # just the score
+.build/release/pipper-launch-intro --silent --no-haptics           # picture only
+```
+
+## Playground
+
+`playground/index.html` runs the same shader in WebGL with a slider for every
+setting, ten presets (Ripple, Single swell, Bloom, Lens, Tide, Two stones,
+Shockwave, Ink drop, Rain, Breath), playback, and your own screenshot or
+wallpaper (drop it on the preview). "Copy Swift" gives the `IntroConfig` values
+to paste into `Timeline.swift`; sources other than one stone, wobble, lens and
+breath exist only in the playground until they are ported to `Shaders.swift`.
+`?preset=tide&t=1.2` opens a preset paused at a moment.
+
+```sh
+python3 -m http.server 4791 --directory native/launch-intro/playground
+```
+
 `scripts/build.js` builds it into `dist/`, and electron-builder ships it as
 `Contents/MacOS/pipper-launch-intro`. Set `PIPPER_LAUNCH_INTRO=always` to replay
 it on every launch, or `never` to turn it off.

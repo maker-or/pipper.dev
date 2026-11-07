@@ -84,7 +84,6 @@ import {
   tabIndexFromShortcutEvent,
   tabValueAfterSwipe,
   tabValueAtShortcutIndex,
-  tabValuesInBarOrder,
 } from "@/lib/tab-shortcuts";
 
 const TERMINAL_TAB_PREFIX = "terminal:";
@@ -220,9 +219,13 @@ export function GlobalTabBar() {
   const terminalTabsRevision = useTerminalStore((state) => state.tabsRevision);
   const terminalTabs = useMemo(
     () =>
-      useTerminalStore
-        .getState()
-        .sessions.map(({ id, title, status, cwd }) => ({ id, title, status, cwd })),
+      useTerminalStore.getState().sessions.map(({ id, title, status, cwd, anchorThreadId }) => ({
+        id,
+        title,
+        status,
+        cwd,
+        anchorThreadId: anchorThreadId ?? null,
+      })),
     [terminalTabsRevision],
   );
   const activeTerminalId = useWorkspaceViewStore((state) => state.activeTerminalId);
@@ -545,7 +548,12 @@ export function GlobalTabBar() {
     if (workspace) {
       terminals.setWorkspace(makeWorkspaceKey(workspace.projectId, workspace.cwd), workspace.cwd);
     }
-    const id = useTerminalStore.getState().createSession(workspace?.cwd);
+    // Anchor to the thread on screen so the terminal tab renders left of it
+    // (screen left) instead of in the terminal section at the far end.
+    const anchorThreadId = useWorkspaceViewStore.getState().draft
+      ? null
+      : (useAgentStore.getState().snapshot?.threadId ?? null);
+    const id = useTerminalStore.getState().createSession(workspace?.cwd, anchorThreadId);
     showTerminal(id);
   };
 
@@ -615,18 +623,45 @@ export function GlobalTabBar() {
             ? "__draft__"
             : selectedThreadId;
 
-  const orderedTabValues = useMemo(
-    () => [
-      ...tabValuesInBarOrder(
-        visibleOpenThreads.map((thread) => thread.id),
-        terminalTabs.map((session) => session.id),
-        TERMINAL_TAB_PREFIX,
-      ),
-      ...(previewPath ? [PREVIEW_TAB_VALUE] : []),
-      ...(showDiffTab ? [DIFF_TAB_VALUE] : []),
-    ],
-    [visibleOpenThreads, terminalTabs, previewPath, showDiffTab],
+  // Bar order: anchored terminals sit left of their thread; unanchored ones
+  // (or anchors not visible here) fall back to the end of the thread row.
+  const visibleThreadIds = useMemo(
+    () => new Set(visibleOpenThreads.map((thread) => thread.id)),
+    [visibleOpenThreads],
   );
+  const terminalsByAnchor = useMemo(() => {
+    const map = new Map<string, typeof terminalTabs>();
+    for (const session of terminalTabs) {
+      if (!session.anchorThreadId || !visibleThreadIds.has(session.anchorThreadId)) continue;
+      const list = map.get(session.anchorThreadId) ?? [];
+      list.push(session);
+      map.set(session.anchorThreadId, list);
+    }
+    return map;
+  }, [terminalTabs, visibleThreadIds]);
+  const unanchoredTerminals = useMemo(
+    () =>
+      terminalTabs.filter(
+        (session) => !session.anchorThreadId || !visibleThreadIds.has(session.anchorThreadId),
+      ),
+    [terminalTabs, visibleThreadIds],
+  );
+
+  const orderedTabValues = useMemo(() => {
+    const values: string[] = [];
+    for (const thread of visibleOpenThreads) {
+      for (const session of terminalsByAnchor.get(thread.id) ?? []) {
+        values.push(`${TERMINAL_TAB_PREFIX}${session.id}`);
+      }
+      values.push(thread.id);
+    }
+    for (const session of unanchoredTerminals) {
+      values.push(`${TERMINAL_TAB_PREFIX}${session.id}`);
+    }
+    if (previewPath) values.push(PREVIEW_TAB_VALUE);
+    if (showDiffTab) values.push(DIFF_TAB_VALUE);
+    return values;
+  }, [visibleOpenThreads, terminalsByAnchor, unanchoredTerminals, previewPath, showDiffTab]);
 
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }));
   const [dragOrder, setDragOrder] = useState<Thread[] | null>(null);
@@ -836,6 +871,33 @@ export function GlobalTabBar() {
     };
   }, [orderedTabValues]);
 
+  const renderTerminalTab = (session: (typeof terminalTabs)[number], index: number) => (
+    <TabItem
+      key={session.id}
+      index={index}
+      value={`${TERMINAL_TAB_PREFIX}${session.id}`}
+      label={session.title}
+      scrollLabelOnHover
+      icon={
+        session.status === "exited" || session.status === "error" ? WarningIcon : TerminalWindowIcon
+      }
+      onClose={() => handleCloseTerminal(session.id)}
+      title={
+        session.status === "exited"
+          ? "Terminal process exited"
+          : session.status === "error"
+            ? "Terminal failed to start"
+            : undefined
+      }
+      className={
+        session.status === "exited" || session.status === "error"
+          ? "[&_svg]:!text-red-500"
+          : undefined
+      }
+      data-pipper-id={`terminal-tab-${session.id}`}
+    />
+  );
+
   return (
     <Tabs className="w-full min-w-0" value={selectedTabValue} onValueChange={handleTabChange}>
       {threadMenu && (
@@ -877,7 +939,9 @@ export function GlobalTabBar() {
                     : undefined;
                 const isEditing = editingThreadId === thread.id;
                 const tabTitle = thread.title ?? "New thread";
-                return (
+                const anchored = terminalsByAnchor.get(thread.id) ?? [];
+                return [
+                  ...anchored.map((session, i) => renderTerminalTab(session, idx + i)),
                   <SortableThreadTab
                     key={thread.id}
                     id={thread.id}
@@ -908,37 +972,12 @@ export function GlobalTabBar() {
                       }}
                       data-pipper-id={`thread-tab-${thread.id}`}
                     />
-                  </SortableThreadTab>
-                );
+                  </SortableThreadTab>,
+                ];
               })}
-              {terminalTabs.map((session, idx) => (
-                <TabItem
-                  key={session.id}
-                  index={visibleOpenThreads.length + idx}
-                  value={`${TERMINAL_TAB_PREFIX}${session.id}`}
-                  label={session.title}
-                  scrollLabelOnHover
-                  icon={
-                    session.status === "exited" || session.status === "error"
-                      ? WarningIcon
-                      : TerminalWindowIcon
-                  }
-                  onClose={() => handleCloseTerminal(session.id)}
-                  title={
-                    session.status === "exited"
-                      ? "Terminal process exited"
-                      : session.status === "error"
-                        ? "Terminal failed to start"
-                        : undefined
-                  }
-                  className={
-                    session.status === "exited" || session.status === "error"
-                      ? "[&_svg]:!text-red-500"
-                      : undefined
-                  }
-                  data-pipper-id={`terminal-tab-${session.id}`}
-                />
-              ))}
+              {unanchoredTerminals.map((session, idx) =>
+                renderTerminalTab(session, visibleOpenThreads.length + idx),
+              )}
               {previewPath && (
                 <TabItem
                   key={PREVIEW_TAB_VALUE}

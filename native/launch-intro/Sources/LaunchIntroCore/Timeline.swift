@@ -17,7 +17,7 @@ public struct IntroConfig: Sendable {
   /// Sent back to back, close enough to read as one train of three rings.
   /// At most four are drawn.
   public var rippleStarts: [Double] = [0, 0.3, 0.6]
-  public var rippleStrengths: [Float] = [1, 0.65, 0.65]
+  public var rippleStrengths: [Float] = [1.5, 0.65, 0.65]
   /// Time for a ripple's dark edge to clear the farthest top corner.
   public var travel: Double = 8.0 / 3.0
 
