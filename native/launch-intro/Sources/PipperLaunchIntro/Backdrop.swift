@@ -9,6 +9,7 @@ struct Backdrop {
   enum Source: String {
     case screen
     case wallpaper
+    case plain
   }
 
   let source: Source
@@ -16,8 +17,9 @@ struct Backdrop {
 }
 
 /// The whole screen when Screen Recording is already granted; otherwise the
-/// desktop picture. Never prompts: a permission dialog must not be the first
-/// thing a new user sees.
+/// desktop picture, or a plain stage in its fill colour when its file is gone.
+/// Never prompts: a permission dialog must not be the first thing a new user
+/// sees.
 ///
 /// The wallpaper needn't match the screen exactly: the first front washes the
 /// screen over to it, so an aerial's still or a dynamic picture's frame reads
@@ -26,11 +28,16 @@ func loadBackdrop(screen: NSScreen, displayID: CGDirectDisplayID, pixelWidth: In
   if let capture = await captureDisplay(displayID, pixelWidth: pixelWidth, pixelHeight: pixelHeight) {
     return Backdrop(source: .screen, image: capture)
   }
-  guard let wallpaper = wallpaperImage(screen: screen, pixelWidth: pixelWidth, pixelHeight: pixelHeight) else {
+  let layout = DesktopLayout(screen: screen)
+  if let wallpaper = wallpaperImage(screen: screen, layout: layout, pixelWidth: pixelWidth, pixelHeight: pixelHeight) {
+    return Backdrop(source: .wallpaper, image: wallpaper)
+  }
+  guard let plain = plainStage(width: pixelWidth, height: pixelHeight, fill: layout.fill) else {
     emit("no-stage", ["message": "Desktop picture unavailable"])
     return nil
   }
-  return Backdrop(source: .wallpaper, image: wallpaper)
+  emit("plain-stage", ["message": "Desktop picture unavailable; using its fill colour"])
+  return Backdrop(source: .plain, image: plain)
 }
 
 private func captureDisplay(_ displayID: CGDirectDisplayID, pixelWidth: Int, pixelHeight: Int) async -> CGImage? {
@@ -53,20 +60,30 @@ private func captureDisplay(_ displayID: CGDirectDisplayID, pixelWidth: Int, pix
   }
 }
 
-private func wallpaperImage(screen: NSScreen, pixelWidth: Int, pixelHeight: Int) -> CGImage? {
-  let workspace = NSWorkspace.shared
-  guard let url = workspace.desktopImageURL(for: screen),
+/// How the desktop picture is laid out on a screen, as System Settings has it.
+private struct DesktopLayout {
+  let scaling: WallpaperScaling
+  let allowClipping: Bool
+  let fill: CGColor
+
+  init(screen: NSScreen) {
+    let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
+    scaling = (options[.imageScaling] as? NSNumber).flatMap { WallpaperScaling(rawValue: $0.intValue) }
+      ?? .proportionallyUpOrDown
+    allowClipping = (options[.allowClipping] as? NSNumber)?.boolValue ?? true
+    fill = (options[.fillColor] as? NSColor)?.usingColorSpace(.sRGB)?.cgColor ?? CGColor(gray: 0, alpha: 1)
+  }
+}
+
+private func wallpaperImage(screen: NSScreen, layout: DesktopLayout, pixelWidth: Int, pixelHeight: Int) -> CGImage? {
+  guard let url = NSWorkspace.shared.desktopImageURL(for: screen),
         let source = CGImageSourceCreateWithURL(url as CFURL, nil),
         CGImageSourceGetCount(source) > 0,
         let image = CGImageSourceCreateImageAtIndex(source, wallpaperFrame(source), nil)
   else { return nil }
-  let options = workspace.desktopImageOptions(for: screen) ?? [:]
-  let scaling = (options[.imageScaling] as? NSNumber).flatMap { WallpaperScaling(rawValue: $0.intValue) }
-    ?? .proportionallyUpOrDown
-  let allowClipping = (options[.allowClipping] as? NSNumber)?.boolValue ?? true
-  let fill = (options[.fillColor] as? NSColor)?.usingColorSpace(.sRGB)?.cgColor ?? CGColor(gray: 0, alpha: 1)
   return composeWallpaper(
-    image, width: pixelWidth, height: pixelHeight, scaling: scaling, allowClipping: allowClipping, fill: fill
+    image, width: pixelWidth, height: pixelHeight,
+    scaling: layout.scaling, allowClipping: layout.allowClipping, fill: layout.fill
   )
 }
 

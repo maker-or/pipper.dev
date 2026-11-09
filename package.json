@@ -14,7 +14,7 @@
     "build": "node scripts/build.js",
     "build:remote-web": "bunx --bun vite build --config vite.remote-web.config.ts",
     "sourcemaps:upload": "node scripts/upload-sourcemaps.mjs",
-    "dist": "bun run build && electron-builder --mac --arm64 --publish never",
+    "dist": "bun run build && electron-builder --mac --arm64 --publish never -c.electronDist=node_modules/electron/dist",
     "dist:win": "bun run build && electron-builder --win --x64 --publish never",
     "package:mac": "electron-builder --mac --arm64 --publish never",
     "preview:dmg": "node scripts/preview-dmg.mjs",

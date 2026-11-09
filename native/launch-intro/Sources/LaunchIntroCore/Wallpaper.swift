@@ -36,13 +36,7 @@ public func wallpaperPlacement(
 public func composeWallpaper(
   _ image: CGImage, width: Int, height: Int, scaling: WallpaperScaling, allowClipping: Bool, fill: CGColor
 ) -> CGImage? {
-  let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
-  guard let context = CGContext(
-    data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
-    space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: info
-  ) else { return nil }
-  context.setFillColor(fill)
-  context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+  guard let context = filledContext(width: width, height: height, fill: fill) else { return nil }
   context.interpolationQuality = .high
   let rect = wallpaperPlacement(
     image: CGSize(width: image.width, height: image.height),
@@ -50,4 +44,22 @@ public func composeWallpaper(
   )
   context.draw(image, in: rect)
   return context.makeImage()
+}
+
+/// A stage of one colour, for when the desktop picture can't be read: its
+/// file was deleted after it was set, so the desktop shows it from memory that
+/// only Screen Recording could reach. It still washes every window away.
+public func plainStage(width: Int, height: Int, fill: CGColor) -> CGImage? {
+  filledContext(width: width, height: height, fill: fill)?.makeImage()
+}
+
+private func filledContext(width: Int, height: Int, fill: CGColor) -> CGContext? {
+  let info = CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue
+  guard let context = CGContext(
+    data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+    space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: info
+  ) else { return nil }
+  context.setFillColor(fill)
+  context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+  return context
 }

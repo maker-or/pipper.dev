@@ -1,31 +1,9 @@
 "use client";
 
-import {
-  cloneElement,
-  isValidElement,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-  type ReactElement,
-} from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { createPortal } from "react-dom";
-import {
-  DndContext,
-  PointerSensor,
-  closestCenter,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  SortableContext,
-  horizontalListSortingStrategy,
-  useSortable,
-  arrayMove,
-} from "@dnd-kit/sortable";
-import { motion } from "framer-motion";
+import { DndContext, DragOverlay, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   ChatCircleIcon,
@@ -45,6 +23,18 @@ import { Dropdown, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
 import { ThreadTabMenu } from "@/components/thread-tab-menu";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
+import {
+  HeldTab,
+  LayoutTab,
+  SortableTab,
+  TAB_DRAG_ACTIVATION,
+  TAB_DROP_ANIMATION,
+  noCollisions,
+  resistVertical,
+  sortableTabSelector,
+  useTabDragReorder,
+  type TabGroupMeasure,
+} from "@/components/sortable-tabs";
 import { threadsNeedingUser } from "@/lib/agent-task-tree";
 import { ProjectMark } from "@/components/project-shape";
 import { PixelGridLoader } from "@/components/ui/pixel-grid-loader";
@@ -125,52 +115,6 @@ function getProjectIconComponent(project: { id: string; icon: string | null }) {
     projectIconComponentCache.set(key, Component);
   }
   return Component;
-}
-
-/** Draggable wrapper for a thread tab (DND-Kit sortable + Framer layout). */
-function SortableThreadTab({
-  id,
-  value,
-  _index,
-  children,
-  disabled,
-}: {
-  id: string;
-  value?: string;
-  _index?: number;
-  children: React.ReactNode;
-  disabled?: boolean;
-}) {
-  void value;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id,
-    disabled,
-  });
-  return (
-    <motion.div
-      ref={setNodeRef}
-      layout={!isDragging}
-      animate={isDragging ? { scale: 0.94 } : { scale: 1 }}
-      transition={{ type: "spring", stiffness: 500, damping: 30, mass: 0.6 }}
-      style={{
-        transform: transform ? `translate3d(${transform.x}px, ${transform.y}px, 0)` : undefined,
-        transition,
-        touchAction: "none",
-      }}
-      className={
-        isDragging
-          ? "z-30 cursor-grabbing opacity-95 shadow-[0_12px_32px_rgba(0,0,0,0.45)] rounded-full bg-surface-3 [&_*]:!text-foreground"
-          : "cursor-grab"
-      }
-      {...attributes}
-      {...listeners}
-      data-pipper-id={`sortable-thread-tab-${id}`}
-    >
-      {isValidElement(children)
-        ? cloneElement(children as React.ReactElement, { _index } as Record<string, unknown>)
-        : children}
-    </motion.div>
-  );
 }
 
 /**
@@ -663,49 +607,60 @@ export function GlobalTabBar() {
     return values;
   }, [visibleOpenThreads, terminalsByAnchor, unanchoredTerminals, previewPath, showDiffTab]);
 
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 3 } }));
-  const [dragOrder, setDragOrder] = useState<Thread[] | null>(null);
-  const displayedThreads = dragOrder ?? visibleOpenThreads;
-
-  // Live-reorder while dragging so neighbours shift to make room for the
-  // drop (position 5 -> 3 pushes 3/4 aside). DOM order only changed on
-  // drag end before, so nothing ever created that space.
-  const handleDragOver = (event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over || active.id === over.id) return;
-    const current = dragOrder ?? visibleOpenThreads;
-    const oldIndex = current.findIndex((t) => t.id === active.id);
-    const newIndex = current.findIndex((t) => t.id === over.id);
-    if (oldIndex < 0 || newIndex < 0 || oldIndex === newIndex) return;
-    setDragOrder(arrayMove(current, oldIndex, newIndex));
-  };
-
-  const handleDragEnd = async (event: DragEndEvent) => {
-    const { active } = event;
-    const next = dragOrder ?? visibleOpenThreads;
-    if (next === visibleOpenThreads || !next.some((t) => t.id === active.id)) {
-      setDragOrder(null);
-      return;
-    }
-    try {
-      const allIds = (openTabsState?.openThreadIds ?? []).filter((id) =>
-        visibleOpenThreads.some((t) => t.id === id),
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: TAB_DRAG_ACTIVATION }),
+  );
+  const tabsListRef = useRef<HTMLDivElement>(null);
+  const threadOrder = useMemo(
+    () => visibleOpenThreads.map((thread) => thread.id),
+    [visibleOpenThreads],
+  );
+  // A terminal tied to a thread sits before it and moves with it as one.
+  const measureThreadGroup: TabGroupMeasure = (list, threadId, gap) => {
+    const lead = (terminalsByAnchor.get(threadId) ?? []).reduce((sum, session) => {
+      const terminal = list.querySelector<HTMLElement>(
+        `[data-pipper-id="anchored-${TERMINAL_TAB_PREFIX}${session.id}"]`,
       );
-      const nextAll = [
-        ...next.map((t) => t.id),
-        ...allIds.filter((id) => !next.some((t) => t.id === id)),
-      ];
-      const result = await window.omni.tabs.reorder(nextAll);
-      queryClient.setQueryData(OPEN_TABS_QUERY_KEY, result);
-    } catch (err) {
-      toast({
-        icon: <WarningIcon className="size-5 text-red-500" />,
-        title: "Could not reorder tabs",
-        description: err instanceof Error ? err.message : "The tab order was not saved.",
-      });
-    } finally {
-      setDragOrder(null);
-    }
+      return sum + (terminal?.offsetWidth ?? 0) + gap;
+    }, 0);
+    const tab = list.querySelector<HTMLElement>(sortableTabSelector(threadId));
+    return { lead, width: lead + (tab?.offsetWidth ?? 0) };
+  };
+  const reorder = useTabDragReorder({
+    ids: threadOrder,
+    listRef: tabsListRef,
+    measure: measureThreadGroup,
+    onCommit: async (order) => {
+      try {
+        const allIds = (openTabsState?.openThreadIds ?? []).filter((id) =>
+          threadOrder.includes(id),
+        );
+        const result = await window.omni.tabs.reorder([
+          ...order,
+          ...allIds.filter((id) => !order.includes(id)),
+        ]);
+        queryClient.setQueryData(OPEN_TABS_QUERY_KEY, result);
+      } catch (err) {
+        toast({
+          icon: <WarningIcon className="size-5 text-red-500" />,
+          title: "Could not reorder tabs",
+          description: err instanceof Error ? err.message : "The tab order was not saved.",
+        });
+      }
+    },
+  });
+  const displayedThreads = useMemo(() => {
+    const byId = new Map(visibleOpenThreads.map((thread) => [thread.id, thread]));
+    return reorder.order.flatMap((id) => byId.get(id) ?? []);
+  }, [reorder.order, visibleOpenThreads]);
+  const heldThread = reorder.heldId
+    ? (displayedThreads.find((thread) => thread.id === reorder.heldId) ?? null)
+    : null;
+
+  const threadTabIcon = (thread: Thread) => {
+    if (runningThreadIds.includes(thread.id)) return TabWorkingIcon;
+    const project = projectsList.find((item) => item.id === thread.project_id);
+    return project ? getProjectIconComponent(project) : undefined;
   };
 
   const handleTabChangeRef = useRef<(value: string) => void>(() => {});
@@ -914,39 +869,39 @@ export function GlobalTabBar() {
         className="flex w-full max-w-[1000px] min-w-0 items-center gap-1"
         data-pipper-id="global-tab-bar"
       >
-        <DndContext
-          sensors={sensors}
-          collisionDetection={closestCenter}
-          onDragOver={handleDragOver}
-          onDragEnd={handleDragEnd}
-          onDragCancel={() => setDragOrder(null)}
-        >
+        <DndContext sensors={sensors} collisionDetection={noCollisions} {...reorder.handlers}>
           <SortableContext
             items={displayedThreads.map((t) => t.id)}
             strategy={horizontalListSortingStrategy}
           >
             <TabsList
+              ref={tabsListRef}
+              heldValue={reorder.heldId}
               data-pipper-id="global-tabs"
               className="min-w-0 max-w-full flex-[0_1_auto] gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
             >
               {displayedThreads.map((thread, idx) => {
                 const project = projectsList.find((item) => item.id === thread.project_id);
-                const isThreadWorking = runningThreadIds.includes(thread.id);
-                const Icon = isThreadWorking
-                  ? TabWorkingIcon
-                  : project
-                    ? getProjectIconComponent(project)
-                    : undefined;
+                const Icon = threadTabIcon(thread);
                 const isEditing = editingThreadId === thread.id;
                 const tabTitle = thread.title ?? "New thread";
                 const anchored = terminalsByAnchor.get(thread.id) ?? [];
                 return [
-                  ...anchored.map((session, i) => renderTerminalTab(session, idx + i)),
-                  <SortableThreadTab
+                  ...anchored.map((session, i) => (
+                    <LayoutTab
+                      key={session.id}
+                      value={`${TERMINAL_TAB_PREFIX}${session.id}`}
+                      data-pipper-id={`anchored-${TERMINAL_TAB_PREFIX}${session.id}`}
+                    >
+                      {renderTerminalTab(session, idx + i)}
+                    </LayoutTab>
+                  )),
+                  <SortableTab
                     key={thread.id}
                     id={thread.id}
                     value={thread.id}
                     disabled={isEditing}
+                    data-pipper-id={`sortable-thread-tab-${thread.id}`}
                   >
                     <TabItem
                       index={idx}
@@ -972,7 +927,7 @@ export function GlobalTabBar() {
                       }}
                       data-pipper-id={`thread-tab-${thread.id}`}
                     />
-                  </SortableThreadTab>,
+                  </SortableTab>,
                 ];
               })}
               {unanchoredTerminals.map((session, idx) =>
@@ -1009,6 +964,19 @@ export function GlobalTabBar() {
               )}
             </TabsList>
           </SortableContext>
+          {createPortal(
+            <DragOverlay modifiers={[resistVertical]} dropAnimation={TAB_DROP_ANIMATION}>
+              {heldThread ? (
+                <HeldTab
+                  icon={threadTabIcon(heldThread)}
+                  label={heldThread.title ?? "New thread"}
+                  selected={heldThread.id === selectedTabValue}
+                  attention={threadsWaitingOnUser.has(heldThread.id)}
+                />
+              ) : null}
+            </DragOverlay>,
+            document.body,
+          )}
         </DndContext>
 
         <div className="relative shrink-0" style={{ WebkitAppRegion: "no-drag" } as CSSProperties}>

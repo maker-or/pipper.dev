@@ -242,7 +242,7 @@ export function AuthenticatedStage({
             {stage === "list" && (
               <header>
                 <h1 className="truncate text-2xl font-bold tracking-tight text-foreground">
-                  👋🏻 {authUser.name ?? authUser.email ?? "User"}
+                  👋🏻 {authUser.name ?? authUser.email ?? "Welcome"}
                 </h1>
               </header>
             )}

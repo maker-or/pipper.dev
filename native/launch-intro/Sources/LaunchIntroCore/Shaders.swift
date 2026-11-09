@@ -36,6 +36,21 @@ struct RippleUniforms {
   float stageWash;
 };
 
+// The surfacing @: two neighbouring blur levels of its shape, each in a box
+// centred on the glyph, sized in surfaced device pixels.
+struct MarkUniforms {
+  float2 sizeA;
+  float2 sizeB;
+  float2 centre;
+  float scale;
+  float levelMix;
+  float relief;
+  float bend;
+  float shade;
+  float shine;
+  float shadow;
+};
+
 struct TextUniforms {
   float4 rect;
   float4 color;
@@ -102,6 +117,16 @@ float2 pushField(float2 p, constant RippleUniforms& u) {
   return delta / max(d, 1e-3) * (amount * u.push);
 }
 
+float markLevel(texture2d<float> level, float2 local, float2 size) {
+  return level.sample(textSampler, float2(local.x / size.x + 0.5, 0.5 - local.y / size.y)).r;
+}
+
+// How much of the @'s shadow covers a pixel, 0 to 1.
+float markShadow(float2 p, constant MarkUniforms& m, texture2d<float> a, texture2d<float> b) {
+  float2 local = (p - m.centre) / m.scale;
+  return mix(markLevel(a, local, m.sizeA), markLevel(b, local, m.sizeB), m.levelMix);
+}
+
 fragment float4 ripple_fragment(
   VOut in [[stage_in]],
   constant RippleUniforms& u [[buffer(0)]],
@@ -145,6 +170,247 @@ fragment float4 ripple_fragment(
   float3 rgb = (1 - alpha) * r * behind + alpha * tint + extra;
   // Shading darker than what's drawn here can't subtract from the screen;
   // deepen the ink by the same amount instead.
+  float deficit = max(0.0, -min(rgb.r, min(rgb.g, rgb.b)));
+  rgb = max(rgb, 0.0);
+  a += deficit * (1 - a);
+  return float4(rgb, a);
+}
+
+// Once the line is sharp: the same water and stage as ripple_fragment, with
+// the @ rising under the dark surface. It is never drawn: its rounded body
+// bends the stage and catches the light, as the ripples did. The water settles
+// through its uniforms (each ripple's strength eases to 0), so ripple_fragment
+// stays as it was and frames up to the sharp line are unchanged to the byte.
+// Mirrors surfaceFrame() in Timeline.swift.
+fragment float4 surface_fragment(
+  VOut in [[stage_in]],
+  constant RippleUniforms& u [[buffer(0)]],
+  constant MarkUniforms& m [[buffer(1)]],
+  texture2d<float> backdrop [[texture(0)]],
+  texture2d<float> markA [[texture(1)]],
+  texture2d<float> markB [[texture(2)]]
+) {
+  float2 pix = in.position.xy;
+  float2 p = float2(pix.x, u.resolution.y - pix.y);
+  Field f = rippleField(p, u);
+  float2 g = float2(
+    rippleField(p + float2(1, 0), u).height - f.height,
+    rippleField(p + float2(0, 1), u).height - f.height
+  );
+
+  // The body's surface: its form, blurred to how rounded it is at this depth,
+  // raised by `relief`. Its slope tilts the surface the light falls on.
+  const float e = 2;
+  float2 body = float2(
+    markShadow(p + float2(e, 0), m, markA, markB) - markShadow(p - float2(e, 0), m, markA, markB),
+    markShadow(p + float2(0, e), m, markA, markB) - markShadow(p - float2(0, e), m, markA, markB)
+  ) / (2 * e) * m.relief;
+
+  float y01 = clamp(p.y / u.resolution.y, 0.0, 1.0);
+  float alpha = mix(u.darkBottom, u.darkTop, y01) * clamp(f.fill, 0.0, 1.0);
+  // The darkness was its shadow: under its body the light is held back more.
+  alpha += (1 - alpha) * m.shadow * markShadow(p, m, markA, markB);
+  const float3 tint = float3(5, 5, 7) / 255;
+  const float3 cool = float3(0x8F, 0xA8, 0xFF) / 255;
+  const float3 L = normalize(float3(-0.4, 0.65, 0.8));
+  float3 n = normalize(float3(-g * 1.6, 1));
+  float light = (dot(n, L) - L.z) * 0.30;
+  float glint = max(pow(max(dot(reflect(-L, n), float3(0, 0, 1)), 0.0), 60.0) - pow(L.z, 60.0), 0.0) * 0.55;
+  float3 extra = light + glint + cool * f.rim * 0.30;
+
+  float3 nb = normalize(float3(-body, 1));
+  // Its faces turned from the light darken half as much as the lit ones
+  // brighten, so its edges read as a rounded form, not as rings.
+  float lit = (dot(nb, L) - L.z) * m.shade;
+  extra += lit > 0 ? lit : lit * 0.5;
+  float sheen = max(pow(max(dot(reflect(-L, nb), float3(0, 0, 1)), 0.0), 14.0) - pow(L.z, 14.0), 0.0);
+  extra += cool * sheen * m.shine;
+
+  float r = 0;
+  float3 behind = 0;
+  if (u.hasBackdrop > 0.5 && u.time >= u.stageStart) {
+    float x = distance(p, u.stone) - (u.time - u.stageStart) * u.speed;
+    r = 1 - smoothstep(-u.stageWash, 0.0, x);
+    if (r > 0) {
+      float2 offset = g * u.refraction - pushField(p, u) + body * m.bend;
+      float2 samplePix = float2(pix.x + offset.x, pix.y - offset.y);
+      behind = backdrop.sample(backdropSampler, samplePix / u.resolution).rgb;
+    }
+  }
+
+  float a = 1 - (1 - alpha) * (1 - r);
+  float3 rgb = (1 - alpha) * r * behind + alpha * tint + extra;
+  float deficit = max(0.0, -min(rgb.r, min(rgb.g, rgb.b)));
+  rgb = max(rgb, 0.0);
+  a += deficit * (1 - a);
+  return float4(rgb, a);
+}
+
+struct WaterLook {
+  float shade;
+  float sheen;
+  float sheenPower;
+  float rim;
+  float plane;
+  float planeDarkness;
+};
+
+// The backlit ending: the line cut through a dark plane, a light behind it.
+// Positions are device pixels, y down, as the text pass uses.
+struct LightUniforms {
+  float4 rect;
+  float4 hot;
+  float4 warm;
+  float4 far;
+  float2 light;
+  float near;
+  float span;
+  float intensity;
+  float spread;
+  float reach;
+  float shafts;
+  float glow;
+  float source;
+  float falloff;
+  float bloom;
+  float shaftFalloff;
+  float shaftWarmth;
+  float exposure;
+};
+
+float lightMask(texture2d<float> mask, float2 pix, constant LightUniforms& l) {
+  return mask.sample(textSampler, (pix - l.rect.xy) / l.rect.zw).r;
+}
+
+// The light's colour by distance from it: hot at the source, amber along the
+// line, deep red-orange at its far end.
+float3 lightColour(float d, constant LightUniforms& l) {
+  float k = clamp((d - l.near) / max(l.span, 1.0), 0.0, 1.0);
+  return k < 0.5 ? mix(l.hot.rgb, l.warm.rgb, k * 2) : mix(l.warm.rgb, l.far.rgb, k * 2 - 1);
+}
+
+// How lit a point is as the light spreads along the line from its first
+// letter, and dimmer the farther it is from the light.
+float lightReached(float d, constant LightUniforms& l) {
+  float edge = l.near + l.spread * (l.span * 1.15);
+  float k = clamp((d - l.near) / max(l.span, 1.0), 0.0, 1.0);
+  return (1 - smoothstep(edge - l.span * 0.25, edge, d)) / (1 + k * l.falloff);
+}
+
+fragment float4 backlight_fragment(
+  VOut in [[stage_in]],
+  constant LightUniforms& l [[buffer(0)]],
+  texture2d<float> mask [[texture(0)]],
+  texture2d<float> soft [[texture(1)]]
+) {
+  float2 pix = in.position.xy;
+  float2 toLight = l.light - pix;
+  float dHere = length(toLight);
+
+  // The letters themselves, lit through, with a soft bloom around them.
+  float m = lightMask(mask, pix, l);
+  float halo = lightMask(soft, pix, l);
+  float3 rgb = lightColour(dHere, l) * lightReached(dHere, l) * (m * l.glow + halo * l.bloom);
+
+  // The shafts: march back toward the light, up to `reach` pixels, gathering
+  // what comes through the letters on the way. Every letter's shaft is as
+  // long, so those nearest the light, whose directions spread widest, fan out
+  // into the wedge. Each eases in past its letter so it doesn't paint over
+  // the next one. Only the stretch of the ray that crosses the line's box is
+  // marched; most rays never cross it and cost nothing. Interleaved noise
+  // breaks up the steps.
+  const int steps = 48;
+  float2 back = toLight / max(dHere, 1e-3);
+  float reach = min(l.reach, dHere);
+  float2 inv = 1 / select(back, float2(1e-6), abs(back) < 1e-6);
+  float2 t0 = (l.rect.xy - pix) * inv;
+  float2 t1 = (l.rect.xy + l.rect.zw - pix) * inv;
+  float enter = max(max(min(t0.x, t1.x), min(t0.y, t1.y)), 0.0) / max(reach, 1e-3);
+  float leave = min(min(max(t0.x, t1.x), max(t0.y, t1.y)), reach) / max(reach, 1e-3);
+  float3 shaft = 0;
+  if (leave > enter) {
+    float noise = fract(52.9829189 * fract(dot(pix, float2(0.06711056, 0.00583715))));
+    for (int i = 0; i < steps; i++) {
+      float t = enter + (float(i) + noise) / float(steps) * (leave - enter);
+      float2 q = pix + back * (t * reach);
+      // Beams with a soft body and fine streaks: traced from the softened
+      // line and its sharp strokes together.
+      float mq = 0.75 * lightMask(soft, q, l) + 0.25 * lightMask(mask, q, l);
+      if (mq <= 0) continue;
+      float dq = dHere - t * reach;
+      float fall = (1 - t) * smoothstep(0.0, 0.05, t);
+      // Only the letters nearest the light throw much of a beam, so the rest
+      // of the line stays crisp while the fan opens from its start.
+      float near = exp(-l.shaftFalloff * clamp((dq - l.near) / max(l.span, 1.0), 0.0, 1.0));
+      // Beams run warmer than the letters they come through: the core stays
+      // white, the light around it amber and red.
+      shaft += lightColour(dq + l.span * l.shaftWarmth, l) * mq * lightReached(dq, l) * fall * near;
+    }
+    shaft *= (leave - enter) / float(steps);
+  }
+  // Beams pass behind the letters, not over them, so the line stays readable.
+  rgb += shaft * l.shafts * (1 - m);
+
+  // A soft glow where the light is.
+  rgb += l.hot.rgb * l.source * exp(-dHere * dHere / (2 * l.near * l.near * 0.08));
+
+  // Roll the highlights off softly: the hottest letters reach white but keep
+  // their shape instead of burning into a blob.
+  rgb = 1 - exp(-rgb * l.intensity * l.exposure);
+  return float4(rgb, 0);
+}
+
+
+
+// Version 2's water, start to end: the same timeline, but the ripples are seen
+// by how they bend the stage, a soft light on their slopes and the darkness
+// they bring in, never by bands, rims or glints. Once the line is sharp the
+// dark closes into the plane the backlit line is cut from. Version 1 keeps
+// ripple_fragment and surface_fragment.
+fragment float4 water_v2_fragment(
+  VOut in [[stage_in]],
+  constant RippleUniforms& u [[buffer(0)]],
+  constant WaterLook& w [[buffer(2)]],
+  texture2d<float> backdrop [[texture(0)]]
+) {
+  float2 pix = in.position.xy;
+  float2 p = float2(pix.x, u.resolution.y - pix.y);
+  Field f = rippleField(p, u);
+  float2 g = float2(
+    rippleField(p + float2(1, 0), u).height - f.height,
+    rippleField(p + float2(0, 1), u).height - f.height
+  );
+
+  float y01 = clamp(p.y / u.resolution.y, 0.0, 1.0);
+  float alpha = mix(u.darkBottom, u.darkTop, y01) * clamp(f.fill, 0.0, 1.0);
+  // The backlit ending: the dark closes into a solid plane.
+  alpha = mix(alpha, max(alpha, w.planeDarkness), w.plane);
+  const float3 tint = float3(5, 5, 7) / 255;
+  const float3 cool = float3(0x8F, 0xA8, 0xFF) / 255;
+  const float3 L = normalize(float3(-0.4, 0.65, 0.8));
+
+  // Slopes turned from the light darken half as much as lit ones brighten,
+  // so a swell reads as a rounded form, not a dark band.
+  float3 n = normalize(float3(-g * 1.6, 1));
+  float lit = (dot(n, L) - L.z) * w.shade;
+  float3 extra = lit > 0 ? lit : lit * 0.5;
+  float sheen = max(pow(max(dot(reflect(-L, n), float3(0, 0, 1)), 0.0), w.sheenPower) - pow(L.z, w.sheenPower), 0.0);
+  extra += cool * (sheen * w.sheen + f.rim * w.rim);
+
+  float r = 0;
+  float3 behind = 0;
+  if (u.hasBackdrop > 0.5 && u.time >= u.stageStart) {
+    float x = distance(p, u.stone) - (u.time - u.stageStart) * u.speed;
+    r = 1 - smoothstep(-u.stageWash, 0.0, x);
+    if (r > 0) {
+      float2 offset = g * u.refraction - pushField(p, u);
+      float2 samplePix = float2(pix.x + offset.x, pix.y - offset.y);
+      behind = backdrop.sample(backdropSampler, samplePix / u.resolution).rgb;
+    }
+  }
+
+  float a = 1 - (1 - alpha) * (1 - r);
+  float3 rgb = (1 - alpha) * r * behind + alpha * tint + extra;
   float deficit = max(0.0, -min(rgb.r, min(rgb.g, rgb.b)));
   rgb = max(rgb, 0.0);
   a += deficit * (1 - a);

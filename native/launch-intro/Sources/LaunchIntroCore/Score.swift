@@ -9,7 +9,9 @@ import Foundation
 /// - Each front crossing the display: a wash that brightens as it climbs and
 ///   flutters at the rings' own rate (speed ÷ wavelength).
 /// - The text: a pad that swells with its opacity and brightens as it
-///   sharpens.
+///   sharpens, then holds while the @ surfaces.
+/// - The surfacing: a low open fifth that swells as the @ rises and opens up
+///   as it comes into focus. Nothing that sounds like water.
 public struct SoundConfig: Sendable {
   public var sampleRate: Double = 48_000
   /// Seconds rendered past the held frame so the reverb can ring out.
@@ -19,6 +21,8 @@ public struct SoundConfig: Sendable {
   public var dropNotes: [Double] = [659.26, 493.88, 440.0]
   /// D3 A3 E4 F♯4: open and unresolved.
   public var padNotes: [Double] = [146.83, 220.0, 329.63, 369.99]
+  /// D2 A2: the depth the @ rises from, under the pad's D.
+  public var surfaceNotes: [Double] = [73.42, 110.0]
   public var reverbMix: Double = 0.3
 
   public init() {}
@@ -68,12 +72,23 @@ public func renderScore(_ c: IntroConfig, sound s: SoundConfig = SoundConfig()) 
   for (index, note) in s.padNotes.enumerated() {
     let pan = -0.4 + 0.8 * Double(index) / Double(max(1, s.padNotes.count - 1))
     mix.add(at: c.textFadeStart, for: padLength, pan: pan) { t in
-      let absolute = c.textFadeStart + t
+      // Follows the line in, then holds once it is sharp.
+      let absolute = min(c.textFadeStart + t, c.textFadeEnd)
       let text = textFrame(time: absolute, q: 1, config: c)
-      let release = exp(-max(0, absolute - c.end - 0.3) / 0.9)
+      let release = exp(-max(0, c.textFadeStart + t - c.end - 0.3) / 0.9)
       let sharpness = 1 - text.blur / c.maxTextBlur
       let breathe = 1 + 0.15 * sin(2 * .pi * (0.2 + 0.05 * Double(index)) * t)
       return pad(t, frequency: note, brightness: sharpness) * text.opacity * release * breathe * 0.045
+    }
+  }
+
+  let surfaceLength = c.end + s.tail - c.surfaceStart
+  for (index, note) in s.surfaceNotes.enumerated() {
+    mix.add(at: c.surfaceStart, for: surfaceLength, pan: index == 0 ? -0.15 : 0.15) { t in
+      let absolute = c.surfaceStart + t
+      let frame = surfaceFrame(time: absolute, config: c)
+      let release = exp(-max(0, absolute - c.end - 0.3) / 1.2)
+      return pad(t, frequency: note, brightness: frame.focus) * frame.presence * release * 0.06
     }
   }
 

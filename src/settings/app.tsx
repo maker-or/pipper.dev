@@ -18,6 +18,7 @@ import type { IconComponent } from "@/lib/icon-context";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useTabGestureStore } from "@/store/tab-gesture-store";
 import type { AcpAgentDescriptor, BrowserConfig } from "../../contracts/acp.ts";
+import { REMOTE_ENABLED } from "../../contracts/features.ts";
 import type { WorkspaceDiskUsageReport } from "../../contracts/storage.ts";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -76,7 +77,8 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string; hidden?: boolean }> = [
   { id: "keyboard", label: "Keyboard & trackpad" },
   { id: "power", label: "Power" },
   { id: "storage", label: "Storage" },
-  { id: "remote", label: "Remote" },
+  // Held back from release builds; see contracts/features.ts.
+  { id: "remote", label: "Remote", hidden: !REMOTE_ENABLED },
 ];
 
 const VISIBLE_NAV_ITEMS = NAV_ITEMS.filter((item) => !item.hidden);

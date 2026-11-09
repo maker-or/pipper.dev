@@ -3,6 +3,8 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  LAUNCH_INTRO_VERSIONS,
+  launchIntroArgs,
   resolveLaunchIntroHelperPath,
   shouldPlayLaunchIntro,
   startFirstLaunchIntro,
@@ -125,6 +127,28 @@ describe("a running intro", () => {
     session.dismiss();
     await waitFor(() => existsSync(dismissFile));
     expect(readFileSync(dismissFile, "utf8")).toBe("dismissed");
+  });
+
+  test("plays the version it was asked for", async () => {
+    expect(LAUNCH_INTRO_VERSIONS).toEqual([1, 2]);
+    for (const version of LAUNCH_INTRO_VERSIONS) {
+      const argsFile = join(root, `args-${version}`);
+      const session = startLaunchIntro({
+        helperPath: fakeHelper(`
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+emit({ type: "complete" });
+setInterval(() => {}, 1000);
+`),
+        args: launchIntroArgs(version),
+        log: () => {},
+      });
+      expect(await session.finished).toBe("complete");
+      session.kill();
+      expect(JSON.parse(readFileSync(argsFile, "utf8"))).toEqual([
+        "--intro-version",
+        String(version),
+      ]);
+    }
   });
 
   test("finishes when the user skips it", async () => {

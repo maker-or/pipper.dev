@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
@@ -20,6 +20,27 @@ function run(args) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+/**
+ * Features held back from release builds; see contracts/features.ts, which
+ * reads the same variables in the app. Off unless set to "1" here or in .env.
+ * Resolved values are passed on to electron-vite so the app and this script
+ * always agree.
+ */
+const FEATURE_ENV = {
+  remote: "VITE_PIPPER_REMOTE",
+  siri: "VITE_PIPPER_SIRI",
+  clerk: "VITE_PIPPER_CLERK",
+};
+const features = Object.fromEntries(
+  Object.entries(FEATURE_ENV).map(([name, key]) => [
+    name,
+    firstNonEmpty(process.env[key], loadedEnv[key]) === "1",
+  ]),
+);
+for (const [name, key] of Object.entries(FEATURE_ENV)) {
+  process.env[key] = features[name] ? "1" : "0";
 }
 
 function runCommand(command, args) {
@@ -103,6 +124,13 @@ function buildLaunchIntro() {
 function buildPipperIntents() {
   if (process.platform !== "darwin") return;
   const intentsDir = join(root, "native", "pipper-intents");
+  if (!features.siri) {
+    // electron-builder packages whatever extension is in dist/, so a stale
+    // one from an earlier build must go too.
+    rmSync(join(intentsDir, "dist", "PipperIntents.appex"), { recursive: true, force: true });
+    console.log("[build] Siri is off; the App Intents extension is not built or packaged.");
+    return;
+  }
   const project = join(intentsDir, "PreviewApp", "PipperIntentsPreview.xcodeproj");
   if (!existsSync(project)) return;
   const output = join(intentsDir, "dist");
@@ -148,6 +176,11 @@ function buildPipperIntents() {
   }
 }
 
+console.log(
+  `[build] Features: ${Object.entries(features)
+    .map(([name, on]) => `${name}=${on ? "on" : "off"}`)
+    .join(", ")}`,
+);
 preparePtyHelpers();
 buildMacSleeplessHelpers();
 buildLaunchIntro();
@@ -188,3 +221,41 @@ if (posthogKey) process.env.VITE_POSTHOG_KEY = posthogKey;
 process.env.VITE_POSTHOG_HOST = posthogHost;
 console.log(`[build] PostHog host: ${posthogHost}`);
 run(["electron-vite", "build"]);
+pruneUnreferencedMainChunks();
+
+/**
+ * The bundler still writes a dynamically imported chunk after the import is
+ * removed as dead code (e.g. Remote with VITE_PIPPER_REMOTE off). Nothing
+ * loads such a chunk, so drop it rather than ship it. Repeats until stable,
+ * since an orphan may be the only thing referencing another chunk.
+ */
+function pruneUnreferencedMainChunks() {
+  const mainDir = join(root, "out", "main");
+  const chunksDir = join(mainDir, "chunks");
+  if (!existsSync(chunksDir)) return;
+  const sources = () => [
+    ...readdirSync(mainDir)
+      .filter((name) => name.endsWith(".js"))
+      .map((name) => join(mainDir, name)),
+    ...readdirSync(chunksDir)
+      .filter((name) => name.endsWith(".js"))
+      .map((name) => join(chunksDir, name)),
+  ];
+  const pruned = [];
+  for (;;) {
+    const files = sources();
+    const orphans = readdirSync(chunksDir)
+      .filter((name) => name.endsWith(".js"))
+      .filter((name) => {
+        const own = join(chunksDir, name);
+        return !files.some((file) => file !== own && readFileSync(file, "utf8").includes(name));
+      });
+    if (orphans.length === 0) break;
+    for (const name of orphans) {
+      rmSync(join(chunksDir, name), { force: true });
+      rmSync(join(chunksDir, `${name}.map`), { force: true });
+      pruned.push(name);
+    }
+  }
+  if (pruned.length > 0) console.log(`[build] Dropped unused main chunks: ${pruned.join(", ")}`);
+}

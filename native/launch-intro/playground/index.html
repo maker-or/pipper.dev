@@ -425,6 +425,8 @@
         Pick a starting point, then tune. Double-click a setting's name to reset it.
       </p>
       <div class="presets" id="presets"></div>
+      <p class="sub" style="margin: 4px 0 6px">What happens after the line</p>
+      <div class="presets" id="nexts"></div>
       <div class="row-actions">
         <button id="reset">Reset to preset</button>
         <button id="copySwift">Copy Swift</button>
@@ -539,7 +541,56 @@
         fontWeight: 400,
         textColor: "#f2f2f7",
         maxTextBlur: 14,
+        // What happens after the line is sharp (act 2). "none" ends as before.
+        next: "none",
+        nextDelay: 0.4,
+        nextLength: 3.2,
+        nextHold: 0.8,
+        agents: 7,
+        winW: 960,
+        winH: 720,
       };
+
+      /** Act 2 settings follow the viewer across presets instead of resetting. */
+      const NEXT_KEYS = ["next", "nextDelay", "nextLength", "nextHold", "agents", "winW", "winH"];
+      const NEXTS = [
+        { id: "none", name: "Stop here", desc: "Hold on the line, as today." },
+        {
+          id: "drops",
+          name: "Every agent is a drop",
+          desc: "Drops land, rings converge, the window surfaces.",
+        },
+        {
+          id: "rise",
+          name: "Window rises",
+          desc: "The centre goes still; the window rises out of it.",
+        },
+        {
+          id: "tide",
+          name: "Tide goes out",
+          desc: "Ripples run back into the stone; the screen returns.",
+        },
+        {
+          id: "names",
+          name: "Names bubble up",
+          desc: "Agent names rise, pop, and merge into pipper.",
+        },
+        {
+          id: "rain",
+          name: "Rain to calm",
+          desc: "Rain everywhere, one ring calms it, the window appears.",
+        },
+      ];
+      const AGENT_NAMES = [
+        "Claude Code",
+        "Codex",
+        "Cursor",
+        "Gemini CLI",
+        "OpenCode",
+        "Goose",
+        "Amp",
+        "Copilot",
+      ];
 
       const PRESETS = [
         {
@@ -888,6 +939,36 @@
           ],
         },
         {
+          title: "What happens next",
+          params: [
+            {
+              k: "next",
+              label: "After the line",
+              type: "select",
+              options: NEXTS.map((n) => [n.id, n.name]),
+            },
+            {
+              k: "nextDelay",
+              label: "Starts after the line is sharp (s)",
+              min: 0,
+              max: 2,
+              step: 0.05,
+            },
+            {
+              k: "nextLength",
+              label: "Speed (length, s)",
+              min: 1.5,
+              max: 6,
+              step: 0.05,
+              hint: "Every beat of act 2 scales with this.",
+            },
+            { k: "nextHold", label: "Hold on the window (s)", min: 0, max: 3, step: 0.1 },
+            { k: "agents", label: "Agents (drops / names)", min: 3, max: 8, step: 1 },
+            { k: "winW", label: "Window width (pt)", min: 400, max: 1400, step: 10 },
+            { k: "winH", label: "Window height (pt)", min: 300, max: 880, step: 10 },
+          ],
+        },
+        {
           title: "Text",
           params: [
             { k: "text", label: "Line", type: "text" },
@@ -930,7 +1011,9 @@
       // ---------------------------------------------------------------------------
       // WebGL
       // ---------------------------------------------------------------------------
-      const MAX_DROPS = 16;
+      const MAX_DROPS = 32;
+      /** Act 1 may use up to this many; act 2 adds its own drops after them. */
+      const ACT1_DROPS = 16;
       const glCanvas = document.getElementById("gl");
       const textCanvas = document.getElementById("text");
       const gl = glCanvas.getContext("webgl2", { premultipliedAlpha: false, antialias: false });
@@ -955,7 +1038,21 @@ uniform float uStrength[${MAX_DROPS}];
 uniform int uLine;
 uniform vec2 uLineDir;
 uniform float uLineC0;
-uniform float uSpeed, uWavelength, uPack, uSoft, uAmp, uDecay, uRefraction, uBump, uWeight;
+uniform float uSpeed, uWavelength, uPack, uSoft, uAmp, uDecay, uRefraction, uBump;
+// Share of the darkness each drop brings; 0 marks an act 2 drop, which only
+// ripples (its own speed, decay and band size) and can be calmed.
+uniform float uFillW[${MAX_DROPS}];
+uniform float uSpeed2, uDecay2, uWavelength2, uPack2;
+// Act 2: one ring that can morph from a circle (0) to the window's rounded
+// rect (1); a calm mask that flattens act 2 water; a stilled window area;
+// and a drain that hands pixels back to the live screen.
+uniform float uRingS, uRingR, uRingMorph, uRingW;
+uniform vec2 uRingC, uWinC, uWinHalf;
+uniform float uWinRadius;
+uniform int uCalmMode;
+uniform float uCalmAmt, uCalmSoft, uStill;
+uniform float uDrainOn, uDrainR;
+uniform vec2 uDrainC;
 uniform float uWobble, uWobbleK, uWobbleSpeed;
 uniform vec3 uL;
 uniform float uLight, uGlint, uGlintPow;
@@ -1000,30 +1097,60 @@ float frontDistance(int i, vec2 p, out vec2 dir) {
 
 struct Field { float fill; float height; float rim; vec2 push; vec2 lens; float cover; };
 
+float sdRoundRect(vec2 q, vec2 b, float r) {
+  vec2 d = abs(q) - b + r;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+
+float ringDistance(vec2 p) {
+  vec2 q = p - uRingC;
+  return mix(length(q), sdRoundRect(q, uWinHalf, uWinRadius), uRingMorph);
+}
+
+// How flat act 2's water is at p: 1 where the calm has passed.
+float calmAt(vec2 p) {
+  if (uCalmMode == 1) return uCalmAmt * smoothstep(uRingR - uCalmSoft, uRingR + uCalmSoft, ringDistance(p));
+  if (uCalmMode == 2) return uCalmAmt * (1.0 - smoothstep(uRingR - uCalmSoft, uRingR, length(p - uRingC)));
+  if (uCalmMode == 3) return uCalmAmt * (1.0 - smoothstep(-uCalmSoft, 0.0, sdRoundRect(p - uWinC, uWinHalf, uWinRadius)));
+  return 0.0;
+}
+
 Field field(vec2 p, bool full) {
   Field f = Field(0.0, 0.0, 0.0, vec2(0), vec2(0), 0.0);
+  float still = 1.0 - calmAt(p);
   for (int i = 0; i < ${MAX_DROPS}; i++) {
     if (i >= uCount) break;
     float age = uTime - uStart[i];
     if (age < 0.0) continue;
-    float strength = uStrength[i];
+    bool act2 = uFillW[i] <= 0.0;
+    float speed = act2 ? uSpeed2 : uSpeed;
+    float wavelength = act2 ? uWavelength2 : uWavelength;
+    float k = act2 ? still : 1.0;
+    float strength = uStrength[i] * k;
     vec2 dir;
     float d = frontDistance(i, p, dir);
-    float x = d - age * uSpeed;
-    float s = x > 0.0 ? uWavelength * 0.6 : uPack;
-    float fade = exp(-age * uDecay);
-    f.height += strength * uAmp * fade * exp(-(x * x) / (s * s)) * sin(x * TAU / uWavelength);
+    float x = d - age * speed;
+    float s = x > 0.0 ? wavelength * 0.6 : (act2 ? uPack2 : uPack);
+    float fade = exp(-age * (act2 ? uDecay2 : uDecay));
+    f.height += strength * uAmp * fade * exp(-(x * x) / (s * s)) * sin(x * TAU / wavelength);
     if (!full) continue;
-    f.fill += uWeight * (1.0 - smoothstep(-uSoft, 0.0, x));
-    f.rim += strength * fade * exp(-(x * x) / (uRimSoft * uRimSoft));
-    f.cover = max(f.cover, 1.0 - smoothstep(-uStageWash, 0.0, x));
-    float tau = -x / uSpeed;
+    float rimSoft = act2 ? uRimSoft * 0.3 : uRimSoft;
+    f.rim += strength * fade * exp(-(x * x) / (rimSoft * rimSoft));
+    float tau = -x / speed;
     if (tau > 0.0) {
-      f.push += dir * strength * uPushNorm * smoothstep(0.0, uPushOnset, tau)
+      f.push += dir * strength * (act2 ? 0.5 : 1.0) * uPushNorm * smoothstep(0.0, uPushOnset, tau)
         * exp(-uPushDecay * tau) * sin(uPushOmega * tau) * uPush;
     }
+    if (act2) continue;
+    f.fill += uFillW[i] * (1.0 - smoothstep(-uSoft, 0.0, x));
+    f.cover = max(f.cover, 1.0 - smoothstep(-uStageWash, 0.0, x));
     float lx = x / uLensWidth;
     f.lens -= dir * strength * uLens * lx * exp(-lx * lx);
+  }
+  if (uRingS > 0.0) {
+    float x = ringDistance(p) - uRingR;
+    f.height += uRingS * uAmp * exp(-(x * x) / (uRingW * uRingW)) * sin(x * TAU / uWavelength2);
+    if (full) f.rim += uRingS * exp(-(x * x) / (uRingW * uRingW * 0.25));
   }
   return f;
 }
@@ -1035,6 +1162,11 @@ void main() {
 
   float y01 = clamp(p.y / uRes.y, 0.0, 1.0);
   float alpha = mix(uDarkBottom, uDarkTop, y01) * clamp(f.fill, 0.0, 1.0);
+  // A still pool where the window will rise: a shade deeper than around it.
+  if (uStill > 0.0) {
+    float inside = 1.0 - smoothstep(-uCalmSoft, 0.0, sdRoundRect(p - uWinC, uWinHalf, uWinRadius));
+    alpha = min(1.0, alpha + uStill * 0.05 * inside);
+  }
   vec3 n = normalize(vec3(-g * uBump, 1));
   float light = (dot(n, uL) - uL.z) * uLight;
   float glint = max(pow(max(dot(reflect(-uL, n), vec3(0, 0, 1)), 0.0), uGlintPow) - pow(uL.z, uGlintPow), 0.0) * uGlint;
@@ -1049,6 +1181,14 @@ void main() {
       vec2 offset = g * uRefraction - f.push + f.lens + (centre - p) * uBreathAmt;
       behind = texture(uStage, (p + offset) / uRes).rgb;
     }
+  }
+
+  // The tide going out: past the drain front, pixels go back to the live screen.
+  if (uDrainOn > 0.5) {
+    float back = smoothstep(uDrainR, uDrainR + uSoft * 0.5, distance(p, uDrainC));
+    alpha *= 1.0 - back;
+    r *= 1.0 - back;
+    extra *= 1.0 - back * 0.7;
   }
 
   // Overlay, premultiplied, exactly as the helper draws it.
@@ -1314,7 +1454,7 @@ void main() {
         const q = W / 1440;
         const drops = [];
         const pair = c.source === "pair";
-        const count = Math.min(c.count, pair ? MAX_DROPS / 2 : MAX_DROPS);
+        const count = Math.min(c.count, pair ? ACT1_DROPS / 2 : ACT1_DROPS);
         const r = rng(c.rainSeed * 7919);
         for (let i = 0; i < count; i++) {
           const strength = i === 0 ? c.firstStrength : c.otherStrength;
@@ -1356,8 +1496,11 @@ void main() {
         const last = Math.max(0, ...starts);
         const textStart = Math.max(0, last + c.textDelay);
         const textEnd = textStart + c.textDuration;
-        const end = Math.max(textEnd, last + c.travel) + c.hold;
+        const act1End = Math.max(textEnd, last + c.travel);
+        const actStart = c.next === "none" ? Infinity : act1End + c.nextDelay;
+        const end = c.next === "none" ? act1End + c.hold : actStart + c.nextLength + c.nextHold;
         return {
+          actStart,
           q,
           drops,
           speed,
@@ -1374,6 +1517,154 @@ void main() {
       }
 
       // ---------------------------------------------------------------------------
+      // Act 2: what happens after the line. Beats are written for a 3.2 s act at
+      // 1440 wide and scale with nextLength and the display. Pure in (c, T, time).
+      // ---------------------------------------------------------------------------
+      const ease = (x) => x * x * (3 - 2 * x);
+      const clamp01 = (x) => Math.min(1, Math.max(0, x));
+
+      function act2(c, T, W, H) {
+        const q = T.q;
+        const k = c.nextLength / 3.2;
+        const a = (time - T.actStart) / k; // act time on the 3.2 s score
+        const at = (beat) => T.actStart + beat * k; // absolute time of a beat
+        const centre = [W / 2, H / 2];
+        const stone = T.drops[0] ? [T.drops[0].x, T.drops[0].y] : [W / 2, -0.2 * H];
+        const far = (pt) =>
+          Math.max(
+            ...[
+              [0, 0],
+              [W, 0],
+              [0, H],
+              [W, H],
+            ].map(([x, y]) => Math.hypot(x - pt[0], y - pt[1])),
+          );
+        const out = {
+          drops: [],
+          ring: { s: 0, r: 0, morph: 0, w: 50 * q, c: centre },
+          calm: { mode: 0, amt: 0, soft: 80 * q },
+          still: 0,
+          drain: { on: 0, r: 0, c: stone },
+          textOut: 0,
+          window: 0,
+          names: [],
+          wordmark: 0,
+        };
+        if (c.next === "none" || !(a > -1)) return out;
+        const r = rng(c.rainSeed * 31 + 5);
+        if (c.next !== "names") out.textOut = ease(clamp01(a / 0.6));
+
+        if (c.next === "drops") {
+          // One drop per agent, scattered around the centre.
+          for (let i = 0; i < c.agents; i++) {
+            const angle = (i / c.agents) * Math.PI * 2 + r() * 0.6;
+            const radius = (0.22 + r() * 0.2) * H;
+            out.drops.push({
+              x: centre[0] + Math.cos(angle) * radius * 1.25,
+              y: centre[1] + Math.sin(angle) * radius,
+              start: at(0.15 + i * 0.16),
+              strength: 0.6,
+            });
+          }
+          // Then one ring closes in from the edges, squares off into the
+          // window's outline and flattens everything it has passed.
+          const u = clamp01((a - 1.35) / 1.0);
+          out.ring = {
+            s:
+              a < 1.35
+                ? 0
+                : a < 2.35
+                  ? 1.1 * ease(clamp01(u / 0.15))
+                  : 1.1 * Math.exp(-(a - 2.35) * 2.5),
+            r: far(centre) * (1 - u * u),
+            morph: ease(clamp01((u - 0.55) / 0.45)),
+            w: 60 * q,
+            c: centre,
+          };
+          out.calm = { mode: 1, amt: a >= 1.35 ? 1 : 0, soft: 80 * q };
+          out.window = ease(clamp01((a - 2.2) / 0.6));
+        } else if (c.next === "rise") {
+          // The window's footprint goes still, then its outline breaks the
+          // surface and water sheets off the edges.
+          out.still = ease(clamp01((a - 0.3) / 0.8));
+          out.calm = { mode: 3, amt: out.still, soft: 120 * q };
+          out.ring = {
+            s:
+              a < 0.95
+                ? 0
+                : 0.9 * ease(clamp01((a - 0.95) / 0.15)) * Math.exp(-Math.max(0, a - 1.1) * 1.6),
+            r: 60 * q * ease(clamp01((a - 1.0) / 1.2)),
+            morph: 1,
+            w: 40 * q,
+            c: centre,
+          };
+          out.window = ease(clamp01((a - 1.0) / 0.7));
+        } else if (c.next === "tide") {
+          // The rings run in reverse back into the stone and take the
+          // darkness with them; the window is already there underneath.
+          const reach = far(stone) + T.soft;
+          const u = ease(clamp01((a - 0.2) / 2.1));
+          out.drain = { on: a > 0.2 ? 1 : 0, r: reach * (1 - u), c: stone };
+          out.ring = {
+            s:
+              a < 0.2
+                ? 0
+                : 0.9 * ease(clamp01((a - 0.2) / 0.2)) * (1 - ease(clamp01((u - 0.8) / 0.2))),
+            r: reach * (1 - u),
+            morph: 0,
+            w: 50 * q,
+            c: stone,
+          };
+          const toCentre = Math.hypot(centre[0] - stone[0], centre[1] - stone[1]);
+          out.window = 1 - ease(clamp01((out.drain.r - (toCentre - 0.2 * H)) / (0.5 * H)));
+          if (a <= 0.2) out.window = 0;
+        } else if (c.next === "names") {
+          // Names rise from below like bubbles, pop into small rings under the
+          // line, then gather into one word.
+          const n = Math.min(c.agents, AGENT_NAMES.length);
+          const row = H / 2 + 70 * q; // y down, for the text canvas
+          const gather = ease(clamp01((a - 2.1) / 0.5));
+          for (let i = 0; i < n; i++) {
+            const t0 = 0.1 + i * 0.18;
+            const p = clamp01((a - t0) / 0.9);
+            const x = W / 2 + (i - (n - 1) / 2) * 150 * q;
+            const rise = 1 - Math.pow(1 - p, 3);
+            out.names.push({
+              text: AGENT_NAMES[i],
+              x: x + (W / 2 - x) * gather,
+              y: H + 30 * q + (row - H - 30 * q) * rise,
+              blur: (1 - p) * 8 * q,
+              opacity: ease(clamp01(p / 0.2)) * (1 - gather),
+            });
+            out.drops.push({ x, y: H - row, start: at(t0 + 0.9), strength: 0.35 });
+          }
+          out.wordmark = ease(clamp01((a - 2.4) / 0.5));
+          out.wordmarkY = row;
+        } else if (c.next === "rain") {
+          // Busy rain everywhere, then one ring from the stone calms it.
+          for (let i = 0; i < 14; i++) {
+            out.drops.push({
+              x: (0.05 + r() * 0.9) * W,
+              y: (0.05 + r() * 0.9) * H,
+              start: at(0.05 + r() * 1.25),
+              strength: 0.5 + r() * 0.4,
+            });
+          }
+          const u = clamp01((a - 1.45) / 1.0);
+          out.ring = {
+            s: a < 1.45 ? 0 : 1.4 * Math.exp(-(a - 1.45) * 0.9),
+            r: (far(stone) + T.soft) * u,
+            morph: 0,
+            w: 70 * q,
+            c: stone,
+          };
+          out.calm = { mode: 2, amt: a >= 1.45 ? 1 : 0, soft: 120 * q };
+          out.window = ease(clamp01((a - 2.35) / 0.6));
+        }
+        return out;
+      }
+
+      // ---------------------------------------------------------------------------
       // Rendering
       // ---------------------------------------------------------------------------
       let time = 0;
@@ -1381,6 +1672,7 @@ void main() {
       let rate = 1;
       let loop = true;
       let T = null;
+      let A = null;
 
       function render() {
         const W = glCanvas.width,
@@ -1389,22 +1681,47 @@ void main() {
         const c = state;
         T = timeline(c, W, H);
         const q = T.q;
+        A = act2(c, T, W, H);
         gl.viewport(0, 0, W, H);
         const pos = new Float32Array(MAX_DROPS * 2);
         const start = new Float32Array(MAX_DROPS);
         const strength = new Float32Array(MAX_DROPS);
-        T.drops.forEach((d, i) => {
+        const fillW = new Float32Array(MAX_DROPS);
+        const all = [...T.drops, ...A.drops].slice(0, MAX_DROPS);
+        all.forEach((d, i) => {
           pos[i * 2] = d.x;
           pos[i * 2 + 1] = d.y;
           start[i] = d.start;
           strength[i] = d.strength;
+          // Each act 1 drop leaves an equal share of the darkness; act 2 none.
+          fillW[i] = i < T.drops.length ? 1 / Math.max(1, T.drops.length) : 0;
         });
         gl.uniform2f(U.uRes, W, H);
         gl.uniform1f(U.uTime, time);
-        gl.uniform1i(U.uCount, T.drops.length);
+        gl.uniform1i(U.uCount, all.length);
         gl.uniform2fv(U.uPos, pos);
         gl.uniform1fv(U.uStart, start);
         gl.uniform1fv(U.uStrength, strength);
+        gl.uniform1fv(U.uFillW, fillW);
+        gl.uniform1f(U.uSpeed2, 160 * q);
+        gl.uniform1f(U.uDecay2, 1.4);
+        gl.uniform1f(U.uWavelength2, 26 * q);
+        gl.uniform1f(U.uPack2, 70 * q);
+        gl.uniform1f(U.uRingS, A.ring.s);
+        gl.uniform1f(U.uRingR, A.ring.r);
+        gl.uniform1f(U.uRingMorph, A.ring.morph);
+        gl.uniform1f(U.uRingW, A.ring.w);
+        gl.uniform2f(U.uRingC, A.ring.c[0], A.ring.c[1]);
+        gl.uniform2f(U.uWinC, W / 2, H / 2);
+        gl.uniform2f(U.uWinHalf, (c.winW / 2) * q, (c.winH / 2) * q);
+        gl.uniform1f(U.uWinRadius, 12 * q);
+        gl.uniform1i(U.uCalmMode, A.calm.mode);
+        gl.uniform1f(U.uCalmAmt, A.calm.amt);
+        gl.uniform1f(U.uCalmSoft, A.calm.soft);
+        gl.uniform1f(U.uStill, A.still);
+        gl.uniform1f(U.uDrainOn, A.drain.on);
+        gl.uniform1f(U.uDrainR, A.drain.r);
+        gl.uniform2f(U.uDrainC, A.drain.c[0], A.drain.c[1]);
         gl.uniform1i(U.uLine, c.source === "line" ? 1 : 0);
         gl.uniform2f(U.uLineDir, T.lineDir[0], T.lineDir[1]);
         gl.uniform1f(U.uLineC0, T.lineC0);
@@ -1416,8 +1733,6 @@ void main() {
         gl.uniform1f(U.uDecay, c.decay);
         gl.uniform1f(U.uRefraction, c.refraction);
         gl.uniform1f(U.uBump, c.bump);
-        // Each drop leaves an equal share of the darkness.
-        gl.uniform1f(U.uWeight, 1 / Math.max(1, T.drops.length));
         gl.uniform1f(U.uWobble, T.wobble);
         gl.uniform1f(U.uWobbleK, Math.round(c.wobbleScale));
         gl.uniform1f(U.uWobbleSpeed, c.wobbleSpeed);
@@ -1463,17 +1778,98 @@ void main() {
           1,
           Math.max(0, (time - T.textStart) / Math.max(1e-3, T.textEnd - T.textStart)),
         );
-        const opacity = p * p * (3 - 2 * p);
-        if (opacity <= 0 || !c.text) return;
-        const blur = (1 - p) * c.maxTextBlur * q;
+        // In act 2 the line sinks back the way it came: blurring out.
+        const sink = A ? A.textOut : 0;
+        const opacity = p * p * (3 - 2 * p) * (1 - sink);
+        if (opacity > 0 && c.text) {
+          const blur = (1 - p + sink) * c.maxTextBlur * q;
+          tctx.save();
+          tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
+          tctx.globalAlpha = opacity;
+          tctx.fillStyle = c.textColor;
+          tctx.font = `${c.fontWeight} ${c.fontSize * q}px -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif`;
+          tctx.textAlign = "center";
+          tctx.textBaseline = "middle";
+          tctx.fillText(c.text, W / 2, H / 2);
+          tctx.restore();
+        }
+        if (A) drawAct2(c, q, W, H);
+      }
+
+      const FONT = `-apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif`;
+      function drawAct2(c, q, W, H) {
         tctx.save();
-        tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
-        tctx.globalAlpha = opacity;
-        tctx.fillStyle = c.textColor;
-        tctx.font = `${c.fontWeight} ${c.fontSize * q}px -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif`;
         tctx.textAlign = "center";
         tctx.textBaseline = "middle";
-        tctx.fillText(c.text, W / 2, H / 2);
+        for (const n of A.names) {
+          if (n.opacity <= 0) continue;
+          tctx.filter = n.blur > 0.3 ? `blur(${n.blur}px)` : "none";
+          tctx.globalAlpha = n.opacity;
+          tctx.fillStyle = c.textColor;
+          tctx.font = `400 ${18 * q}px ${FONT}`;
+          tctx.fillText(n.text, n.x, n.y);
+        }
+        if (A.wordmark > 0) {
+          const blur = (1 - A.wordmark) * 10 * q;
+          tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
+          tctx.globalAlpha = A.wordmark;
+          tctx.fillStyle = c.textColor;
+          tctx.font = `600 ${46 * q}px ${FONT}`;
+          tctx.letterSpacing = `${-0.04 * 46 * q}px`;
+          tctx.fillText("pipper", W / 2, A.wordmarkY);
+        }
+        tctx.restore();
+        if (A.window > 0) drawLaunchWindow(c, q, W, H, A.window);
+      }
+
+      /** A stand-in for the real launch window (src/launch/unauthenticated-stage.tsx). */
+      function drawLaunchWindow(c, q, W, H, t) {
+        const w = c.winW * q,
+          h = c.winH * q;
+        const x = (W - w) / 2,
+          y = (H - h) / 2;
+        tctx.save();
+        tctx.globalAlpha = t;
+        const blur = (1 - t) * 10 * q;
+        tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
+        tctx.translate(W / 2, H / 2);
+        tctx.scale(0.97 + 0.03 * t, 0.97 + 0.03 * t);
+        tctx.translate(-W / 2, -H / 2);
+        tctx.shadowColor = "rgba(0,0,0,0.5)";
+        tctx.shadowBlur = 50 * q;
+        tctx.shadowOffsetY = 18 * q;
+        tctx.fillStyle = "#171717";
+        roundRect(tctx, x, y, w, h, 12 * q);
+        tctx.fill();
+        tctx.shadowColor = "transparent";
+        tctx.strokeStyle = "rgba(255,255,255,0.08)";
+        tctx.lineWidth = Math.max(1, q);
+        tctx.stroke();
+        ["#ff5f57", "#febc2e", "#28c840"].forEach((col, i) => {
+          tctx.fillStyle = col;
+          tctx.beginPath();
+          tctx.arc(x + (20 + i * 20) * q, y + 20 * q, 6 * q, 0, Math.PI * 2);
+          tctx.fill();
+        });
+        const left = x + 36 * q;
+        const size = Math.min(84, c.winW * 0.075) * q;
+        tctx.textBaseline = "alphabetic";
+        tctx.font = `300 ${size}px ${FONT}`;
+        tctx.letterSpacing = `${-0.085 * size}px`;
+        tctx.fillStyle = "#ffffff";
+        tctx.fillText("Welcome", left, y + 70 * q + size);
+        tctx.fillStyle = "#777777";
+        tctx.fillText("Pipper code", left, y + 70 * q + size * 2.16);
+        tctx.letterSpacing = "0px";
+        const by = y + 70 * q + size * 2.16 + 70 * q;
+        tctx.fillStyle = "#f2f2f7";
+        roundRect(tctx, left, by, 140 * q, 44 * q, 22 * q);
+        tctx.fill();
+        tctx.fillStyle = "#171717";
+        tctx.font = `500 ${15 * q}px ${FONT}`;
+        tctx.textAlign = "center";
+        tctx.textBaseline = "middle";
+        tctx.fillText("Sign in", left + 70 * q, by + 22 * q);
         tctx.restore();
       }
 
@@ -1558,6 +1954,13 @@ void main() {
         tx.style.left = (t.textStart / t.end) * 100 + "%";
         tx.title = `Text starts at ${t.textStart.toFixed(2)} s`;
         marks.append(tx);
+        if (isFinite(t.actStart)) {
+          const act = document.createElement("i");
+          act.className = "text";
+          act.style.left = (t.actStart / t.end) * 100 + "%";
+          act.title = `What happens next starts at ${t.actStart.toFixed(2)} s`;
+          marks.append(act);
+        }
       }
 
       let last = performance.now();
@@ -1601,6 +2004,25 @@ void main() {
           b.querySelector("b").textContent = p.name;
           b.querySelector("span").textContent = p.desc;
           b.onclick = () => applyPreset(p.id);
+          box.append(b);
+        }
+      }
+
+      function buildNexts() {
+        const box = document.getElementById("nexts");
+        box.innerHTML = "";
+        for (const n of NEXTS) {
+          const b = document.createElement("button");
+          b.className = "preset next" + (n.id === state.next ? " active" : "");
+          b.dataset.id = n.id;
+          b.innerHTML = `<b></b><span></span>`;
+          b.querySelector("b").textContent = n.name;
+          b.querySelector("span").textContent = n.desc;
+          b.onclick = () => {
+            set("next", n.id);
+            time = 0;
+            setPlaying(true);
+          };
           box.append(b);
         }
       }
@@ -1685,9 +2107,12 @@ void main() {
           if (num && document.activeElement !== num) num.value = (+v).toFixed(decimals(p.step));
           const changed = v !== pv[p.k];
           name.classList.toggle("changed", changed);
-          modified ||= changed;
+          if (!NEXT_KEYS.includes(p.k)) modified ||= changed;
         }
-        document.querySelectorAll(".preset").forEach((b, i) => {
+        document
+          .querySelectorAll(".preset.next")
+          .forEach((b) => b.classList.toggle("active", b.dataset.id === state.next));
+        document.querySelectorAll("#presets .preset").forEach((b, i) => {
           b.classList.toggle("active", PRESETS[i].id === presetId);
           const old = b.querySelector(".modified");
           if (old) old.remove();
@@ -1714,7 +2139,8 @@ void main() {
 
       function applyPreset(id) {
         presetId = id;
-        state = presetValues();
+        const keep = Object.fromEntries(NEXT_KEYS.map((key) => [key, state[key]]));
+        state = { ...presetValues(), ...keep };
         time = 0;
         setPlaying(true);
         syncInputs();
@@ -1761,6 +2187,7 @@ void main() {
         if (c.breath) extras.push(`breath ${f(c.breath)}`);
         if (Math.abs(c.textDuration - c.travel) > 1e-3 || c.textDelay) extras.push("text timing");
         if (c.hold !== 1) extras.push(`hold ${f(c.hold)}`);
+        if (c.next !== "none") extras.push(`continuation "${c.next}"`);
         const lines = [
           `// IntroConfig in native/launch-intro/Sources/LaunchIntroCore/Timeline.swift`,
           `public var text = ${JSON.stringify(c.text)}`,
@@ -1894,10 +2321,12 @@ void main() {
       });
 
       buildPresets();
+      buildNexts();
       buildGroups();
       // ?preset=tide&t=1.2 opens a preset paused at a moment, for sharing a frame.
       const query = new URLSearchParams(location.search);
       if (PRESETS.some((p) => p.id === query.get("preset"))) applyPreset(query.get("preset"));
+      if (NEXTS.some((n) => n.id === query.get("next"))) state.next = query.get("next");
       if (query.has("t")) {
         time = Math.max(0, +query.get("t") || 0);
         setPlaying(false);

@@ -1,12 +1,14 @@
 /// The intro's haptics: each ripple is felt as its front passes under the
-/// pointer, with more taps for a stronger ripple, and once more when the text
-/// is sharp. The pointer is read live, so moving it moves where the wave is felt.
+/// pointer, with more taps for a stronger ripple, once more when the text is
+/// sharp, and once, softly, when the @ has surfaced. The pointer is read live, so moving it moves where the wave is felt.
 public struct HapticPulse: Sendable, Equatable {
   public enum Kind: Sendable {
     /// A ripple front reached the pointer.
     case front
     /// The line of text finished sharpening.
     case settle
+    /// The @ finished surfacing.
+    case surfaced
   }
 
   public var kind: Kind
@@ -35,6 +37,9 @@ public func hapticPulses(
   }
   if c.textFadeEnd > t0, c.textFadeEnd <= t1 {
     pulses.append(HapticPulse(kind: .settle, taps: 1, firm: false))
+  }
+  if c.surfaceEnd > t0, c.surfaceEnd <= t1 {
+    pulses.append(HapticPulse(kind: .surfaced, taps: 1, firm: false))
   }
   return pulses
 }

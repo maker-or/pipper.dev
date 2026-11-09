@@ -14,12 +14,24 @@ import { join, posix } from "node:path";
 
 const HELPER_NAME = "pipper-launch-intro";
 const MARKER_FILE = "launch-intro.json";
-/** The intro runs about 4.3s; past this the helper is treated as stuck. */
-const DEFAULT_TIMEOUT_MS = 15_000;
+/** The intro runs about 9.3s; past this the helper is treated as stuck. */
+const DEFAULT_TIMEOUT_MS = 20_000;
 /** Time the helper gets to fade out before it is killed. */
 const DISMISS_GRACE_MS = 2_000;
 
 export type LaunchIntroOutcome = "complete" | "skipped" | "failed";
+
+/**
+ * Version 1's ripples are bold; version 2's are subtle, seen the way the
+ * surfacing @ is. Both share the timeline and the ending.
+ */
+export type LaunchIntroVersion = 1 | 2;
+export const LAUNCH_INTRO_VERSIONS: readonly LaunchIntroVersion[] = [1, 2];
+
+/** Helper arguments that play `version`. */
+export function launchIntroArgs(version: LaunchIntroVersion): string[] {
+  return ["--intro-version", String(version)];
+}
 
 export interface LaunchIntroSession {
   /** Settles once; never rejects. */
@@ -147,6 +159,7 @@ export function startLaunchIntro(input: {
     if (event.type === "complete" || event.type === "skipped") settle(event.type);
     else if (event.type === "error") log(`helper error: ${String(event.message)}`);
     else if (event.type === "started") log(`started (stage ${String(event.stage)})`);
+    else if (typeof event.message === "string") log(`${String(event.type)}: ${event.message}`);
   }
 
   return {

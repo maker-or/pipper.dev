@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreText
 import Foundation
 import Metal
+import MetalPerformanceShaders
 
 struct RippleUniforms {
   var resolution: SIMD2<Float>
@@ -27,6 +28,58 @@ struct RippleUniforms {
   var pushOnset: Float
   var stageStart: Float
   var stageWash: Float
+}
+
+struct MarkUniforms {
+  var sizeA: SIMD2<Float>
+  var sizeB: SIMD2<Float>
+  var centre: SIMD2<Float>
+  var scale: Float
+  var levelMix: Float
+  var relief: Float
+  var bend: Float
+  var shade: Float
+  var shine: Float
+  var shadow: Float
+}
+
+struct WaterLook {
+  var shade: Float
+  var sheen: Float
+  var sheenPower: Float
+  var rim: Float
+  var plane: Float
+  var planeDarkness: Float
+}
+
+struct LightUniforms {
+  var rect: SIMD4<Float>
+  var hot: SIMD4<Float>
+  var warm: SIMD4<Float>
+  var far: SIMD4<Float>
+  var light: SIMD2<Float>
+  var near: Float
+  var span: Float
+  var intensity: Float
+  var spread: Float
+  var reach: Float
+  var shafts: Float
+  var glow: Float
+  var source: Float
+  var falloff: Float
+  var bloom: Float
+  var shaftFalloff: Float
+  var shaftWarmth: Float
+  var exposure: Float
+}
+
+/// The @ blurred by one amount, in a box centred on the glyph and padded so
+/// the blur never clips. `size` is in surfaced device pixels; the texture may
+/// be smaller, since a wide blur needs few texels.
+struct MarkLevel {
+  let sigma: Double
+  let size: SIMD2<Float>
+  let texture: MTLTexture
 }
 
 struct TextUniforms {
@@ -64,11 +117,20 @@ public final class IntroRenderer {
   public var backdrop: MTLTexture?
 
   private let ripplePipeline: MTLRenderPipelineState
+  private let surfacePipeline: MTLRenderPipelineState
+  private let waterV2Pipeline: MTLRenderPipelineState
+  private let backlightPipeline: MTLRenderPipelineState
   private let blurPipeline: MTLRenderPipelineState
   private let textPipeline: MTLRenderPipelineState
   private let copyPipeline: MTLRenderPipelineState
   private let emptyTexture: MTLTexture
   private var text: (mask: MTLTexture, blurred: MTLTexture, rect: SIMD4<Float>)?
+  /// Padding around the line's ink inside `text.rect`, in device pixels.
+  private var textPad: Double = 0
+  /// The line softened, for the backlit ending's beams and bloom.
+  private var softText: MTLTexture?
+  /// Sharp first, each later level blurred twice as much as the one before.
+  private var markLevels: [MarkLevel] = []
 
   public init(device: MTLDevice? = MTLCreateSystemDefaultDevice(), config: IntroConfig, width: Int, height: Int) throws {
     guard let device else { throw IntroRendererError.noDevice }
@@ -96,6 +158,9 @@ public final class IntroRenderer {
       return try device.makeRenderPipelineState(descriptor: descriptor)
     }
     ripplePipeline = try pipeline("fullscreen_vertex", "ripple_fragment", Self.pixelFormat, blended: true)
+    surfacePipeline = try pipeline("fullscreen_vertex", "surface_fragment", Self.pixelFormat, blended: true)
+    waterV2Pipeline = try pipeline("fullscreen_vertex", "water_v2_fragment", Self.pixelFormat, blended: true)
+    backlightPipeline = try pipeline("fullscreen_vertex", "backlight_fragment", Self.pixelFormat, blended: true)
     blurPipeline = try pipeline("fullscreen_vertex", "text_blur_horizontal", .r16Float, blended: false)
     textPipeline = try pipeline("text_vertex", "text_fragment", Self.pixelFormat, blended: true)
     copyPipeline = try pipeline("fullscreen_vertex", "copy_fragment", Self.pixelFormat, blended: false)
@@ -104,12 +169,14 @@ public final class IntroRenderer {
     guard let emptyTexture = device.makeTexture(descriptor: empty) else { throw IntroRendererError.resource("texture") }
     self.emptyTexture = emptyTexture
     try layoutText()
+    try layoutMark()
   }
 
   public func resize(width: Int, height: Int) throws {
     guard Double(width) != geometry.width || Double(height) != geometry.height else { return }
     geometry = IntroGeometry(width: Double(width), height: Double(height), config: config)
     try layoutText()
+    try layoutMark()
   }
 
   /// Encodes the frame at `time` into `target`. With `background`, the frame
@@ -153,10 +220,36 @@ public final class IntroRenderer {
     }
 
     var uniforms = rippleUniforms(time: time)
-    encoder.setRenderPipelineState(ripplePipeline)
+    let surfacing = markFrame(time: time)
+    var mark = surfacing?.0 ?? MarkUniforms(
+      sizeA: [1, 1], sizeB: [1, 1], centre: .zero, scale: 1, levelMix: 0, relief: 0, bend: 0, shade: 0, shine: 0, shadow: 0
+    )
+    let levels = surfacing?.1
+    var look = WaterLook(
+      shade: Float(config.waterShade), sheen: Float(config.waterSheen),
+      sheenPower: Float(config.waterSheenPower), rim: Float(config.waterRim),
+      plane: config.ending == .backlit ? Float(surfaceFrame(time: time, config: config).presence) : 0,
+      planeDarkness: Float(config.planeDarkness)
+    )
+    switch config.version {
+    case .one: encoder.setRenderPipelineState(time > config.surfaceStart ? surfacePipeline : ripplePipeline)
+    case .two: encoder.setRenderPipelineState(waterV2Pipeline)
+    }
+    encoder.setFragmentBytes(&look, length: MemoryLayout<WaterLook>.stride, index: 2)
     encoder.setFragmentBytes(&uniforms, length: MemoryLayout<RippleUniforms>.stride, index: 0)
+    encoder.setFragmentBytes(&mark, length: MemoryLayout<MarkUniforms>.stride, index: 1)
     encoder.setFragmentTexture(backdrop ?? emptyTexture, index: 0)
+    encoder.setFragmentTexture(levels?.a ?? emptyTexture, index: 1)
+    encoder.setFragmentTexture(levels?.b ?? emptyTexture, index: 2)
     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+
+    if var light = lightUniforms(time: time), let text {
+      encoder.setRenderPipelineState(backlightPipeline)
+      encoder.setFragmentBytes(&light, length: MemoryLayout<LightUniforms>.stride, index: 0)
+      encoder.setFragmentTexture(text.mask, index: 0)
+      encoder.setFragmentTexture(softText ?? text.mask, index: 1)
+      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
 
     if drawsText, let text {
       encoder.setRenderPipelineState(textPipeline)
@@ -177,11 +270,15 @@ public final class IntroRenderer {
       for (i, value) in values.prefix(4).enumerated() { lane[i] = Float(value) }
       return lane
     }
+    // Once the line is sharp the water settles: easing every ripple's strength
+    // to 0 stills its shading, rims and shove together, but not its darkness.
+    let calm = surfaceFrame(time: time, config: c).calm
+    let strengths = calm < 1 ? c.rippleStrengths.map { Double($0) * calm } : c.rippleStrengths.map(Double.init)
     return RippleUniforms(
       resolution: [Float(g.width), Float(g.height)],
       stone: [Float(g.stone.x), Float(g.stone.y)],
       rippleStart: lane(c.rippleStarts, .infinity),
-      rippleStrength: lane(c.rippleStrengths.map(Double.init), 0),
+      rippleStrength: lane(strengths, 0),
       time: Float(time),
       rippleCount: Float(min(4, c.rippleStarts.count)),
       speed: Float(g.speed),
@@ -202,6 +299,193 @@ public final class IntroRenderer {
       stageStart: Float(c.rippleStarts.min() ?? 0),
       stageWash: Float(c.soft * c.stageWash * g.q)
     )
+  }
+
+  /// The backlit ending at `time`, or nil when nothing is lit.
+  private func lightUniforms(time: Double) -> LightUniforms? {
+    let c = config
+    guard c.ending == .backlit, time > c.surfaceStart, let text else { return nil }
+    let frame = surfaceFrame(time: time, config: c)
+    guard frame.presence > 0 else { return nil }
+    let q = geometry.q
+    // The first letter's left edge and the line's middle, y down.
+    let inkLeft = Double(text.rect.x) + textPad
+    let middle = Double(text.rect.y + text.rect.w / 2)
+    let light = SIMD2(inkLeft + c.lightOffset.x * q, middle - c.lightOffset.y * q)
+    let inkRight = Double(text.rect.x + text.rect.z) - textPad
+    let near = simd_distance_d(light, [inkLeft, middle])
+    let far = simd_distance_d(light, [inkRight, middle])
+    return LightUniforms(
+      rect: text.rect,
+      hot: SIMD4(c.lightHot, 1), warm: SIMD4(c.lightWarm, 1), far: SIMD4(c.lightFar, 1),
+      light: [Float(light.x), Float(light.y)],
+      near: Float(near), span: Float(far - near),
+      intensity: Float(frame.presence), spread: Float(frame.rise),
+      reach: Float(c.shaftLength * geometry.height * frame.focus), shafts: Float(c.shaftStrength),
+      glow: Float(c.letterGlow), source: Float(c.sourceGlow), falloff: Float(c.lightFalloff),
+      bloom: Float(c.letterBloom), shaftFalloff: Float(c.shaftFalloff),
+      shaftWarmth: Float(c.shaftWarmth), exposure: Float(c.lightExposure)
+    )
+  }
+
+  /// The surfacing's uniforms, and the two blur levels either side of how
+  /// rounded the @'s body is at `time`. Nil until the line is sharp.
+  private func markFrame(time: Double) -> (MarkUniforms, (a: MTLTexture, b: MTLTexture))? {
+    let g = geometry
+    let c = config
+    guard time > c.surfaceStart, let first = markLevels.first, let last = markLevels.last else { return nil }
+    let frame = surfaceFrame(time: time, config: c)
+    let scale = frame.scale(c)
+    let blur = frame.blur(g, c)
+    // The levels are blurred at surfaced size; a smaller @ needs more of it.
+    let sigma = blur / scale
+    var lower = first
+    var upper = first
+    var mix = 0.0
+    if sigma >= last.sigma {
+      lower = last
+      upper = last
+    } else if let index = markLevels.firstIndex(where: { $0.sigma > sigma }), index > 0 {
+      lower = markLevels[index - 1]
+      upper = markLevels[index]
+      // Between sharp and the first blur, linear; above it, by doublings.
+      mix = lower.sigma == 0
+        ? sigma / upper.sigma
+        : log2(sigma / lower.sigma) / log2(upper.sigma / lower.sigma)
+    }
+    let centre = frame.centre(g)
+    // A blurred edge is steepest at 1 / (σ√2π); raise the form so that slope
+    // is the relief it has reached, whatever its depth.
+    let relief = c.markRelief * frame.presence * blur * (2 * Double.pi).squareRoot()
+    let uniforms = MarkUniforms(
+      sizeA: lower.size, sizeB: upper.size,
+      centre: [Float(centre.x), Float(centre.y)],
+      scale: Float(scale), levelMix: Float(min(1, max(0, mix))),
+      relief: Float(relief), bend: Float(c.markBend * g.height),
+      shade: Float(c.markShade), shine: Float(c.markShine),
+      shadow: Float(c.markShadow * frame.presence)
+    )
+    return (uniforms, (lower.texture, upper.texture))
+  }
+
+  /// Rasterises the @ once per display size at every blur level the
+  /// surfacing passes through, doubling from its surfaced roundness to its
+  /// depth blur. Each is drawn small and blurred by a few texels, so every
+  /// level is cheap to make and to sample.
+  private func layoutMark() throws {
+    markLevels = []
+    guard let drawing = markDrawing() else { return }
+    let bounds = drawing.bounds
+    let glyph = SIMD2(Double(bounds.width), Double(bounds.height))
+
+    let surfaced = max(1, config.markSurfacedBlur * geometry.height)
+    let deepest = max(surfaced, config.markDepthBlur * geometry.height) / config.markDepthScale
+    var sigmas = [pow(2, floor(log2(surfaced)))]
+    while sigmas.last! < deepest {
+      sigmas.append(sigmas.last! * 2)
+    }
+
+    guard let commandBuffer = queue.makeCommandBuffer() else { throw IntroRendererError.resource("mark commands") }
+    var levels: [MarkLevel] = []
+    for sigma in sigmas {
+      // Texels per surfaced pixel: full detail up to a 4 px blur, then four
+      // texels of blur at most.
+      let texel = max(1, sigma / 4)
+      let pad = ceil(sigma * 3) + 2
+      let size = glyph + 2 * pad
+      let width = max(4, Int(ceil(size.x / texel)))
+      let height = max(4, Int(ceil(size.y / texel)))
+      let mask = try rasterise(drawing, texel: texel, width: width, height: height)
+      let texture: MTLTexture
+      if sigma == 0 {
+        texture = mask
+      } else {
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+          pixelFormat: .r16Float, width: width, height: height, mipmapped: false
+        )
+        descriptor.usage = [.shaderRead, .shaderWrite]
+        descriptor.storageMode = .private
+        guard let blurred = device.makeTexture(descriptor: descriptor) else { throw IntroRendererError.resource("mark blur") }
+        let blur = MPSImageGaussianBlur(device: device, sigma: Float(sigma / texel))
+        blur.edgeMode = .zero
+        blur.encode(commandBuffer: commandBuffer, sourceTexture: mask, destinationTexture: blurred)
+        texture = blurred
+      }
+      levels.append(MarkLevel(
+        sigma: sigma,
+        size: [Float(Double(width) * texel), Float(Double(height) * texel)],
+        texture: texture
+      ))
+    }
+    commandBuffer.commit()
+    commandBuffer.waitUntilCompleted()
+    if let error = commandBuffer.error { throw error }
+    markLevels = levels
+  }
+
+  /// The mark at its surfaced size: its outline's bounds in device pixels,
+  /// and how to draw it `1 / texel` that size with its outline centred on a
+  /// point.
+  private struct MarkDrawing {
+    let bounds: CGRect
+    let draw: (_ context: CGContext, _ texel: Double, _ centre: CGPoint) -> Void
+  }
+
+  private func markDrawing() -> MarkDrawing? {
+    let targetHeight = config.markHeight * geometry.height
+    guard !config.mark.isEmpty else { return nil }
+    let probeBounds = glyphBounds(config.mark, font: markFont(size: 100))
+    guard probeBounds.height > 0 else { return nil }
+    let fontSize = 100 * targetHeight / probeBounds.height
+    let bounds = glyphBounds(config.mark, font: markFont(size: fontSize))
+    return MarkDrawing(bounds: bounds) { context, texel, centre in
+      // Centre the outline, not the line box.
+      context.textPosition = CGPoint(x: centre.x - bounds.midX / texel, y: centre.y - bounds.midY / texel)
+      CTLineDraw(self.markLine(self.config.mark, font: self.markFont(size: fontSize / texel)), context)
+    }
+  }
+
+  private func markFont(size: Double) -> CTFont {
+    let base = CTFontCreateUIFontForLanguage(.system, CGFloat(size), nil)
+      ?? CTFontCreateWithName("Helvetica Neue" as CFString, CGFloat(size), nil)
+    let traits = [kCTFontWeightTrait: config.markWeight] as CFDictionary
+    let descriptor = CTFontDescriptorCreateCopyWithAttributes(
+      CTFontCopyFontDescriptor(base), [kCTFontTraitsAttribute: traits] as CFDictionary
+    )
+    return CTFontCreateWithFontDescriptor(descriptor, CGFloat(size), nil)
+  }
+
+  private func glyphBounds(_ string: String, font: CTFont) -> CGRect {
+    let line = markLine(string, font: font)
+    return CTLineGetBoundsWithOptions(line, .useGlyphPathBounds)
+  }
+
+  private func markLine(_ string: String, font: CTFont) -> CTLine {
+    CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
+      NSAttributedString.Key(kCTFontAttributeName as String): font,
+      NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+    ]))
+  }
+
+  /// The glyph's coverage with its outline centred in a `width × height`
+  /// texture, `texel` surfaced pixels per texel.
+  private func rasterise(_ drawing: MarkDrawing, texel: Double, width: Int, height: Int) throws -> MTLTexture {
+    var pixels = [UInt8](repeating: 0, count: width * height)
+    try pixels.withUnsafeMutableBytes { buffer in
+      guard let context = CGContext(
+        data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+        bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+      ) else { throw IntroRendererError.resource("mark bitmap") }
+      context.setFillColor(gray: 1, alpha: 1)
+      context.setAllowsFontSmoothing(false)
+      context.setShouldAntialias(true)
+      drawing.draw(context, texel, CGPoint(x: Double(width) / 2, y: Double(height) / 2))
+    }
+    let descriptor = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: width, height: height, mipmapped: false)
+    descriptor.usage = [.shaderRead]
+    guard let mask = device.makeTexture(descriptor: descriptor) else { throw IntroRendererError.resource("mark mask") }
+    mask.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: width)
+    return mask
   }
 
   /// Rasterises the line once per display size as a coverage mask, padded so
@@ -253,5 +537,21 @@ public final class IntroRenderer {
       Float(((geometry.height - Double(height)) / 2).rounded())
     )
     text = (mask, blurred, [origin.x, origin.y, Float(width), Float(height)])
+    textPad = pad
+    softText = nil
+    if config.ending == .backlit {
+      let soft = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r16Float, width: width, height: height, mipmapped: false)
+      soft.usage = [.shaderRead, .shaderWrite]
+      soft.storageMode = .private
+      guard let texture = device.makeTexture(descriptor: soft), let commandBuffer = queue.makeCommandBuffer() else {
+        throw IntroRendererError.resource("soft text")
+      }
+      let blur = MPSImageGaussianBlur(device: device, sigma: Float(config.beamSoftness * q))
+      blur.edgeMode = .zero
+      blur.encode(commandBuffer: commandBuffer, sourceTexture: mask, destinationTexture: texture)
+      commandBuffer.commit()
+      commandBuffer.waitUntilCompleted()
+      softText = texture
+    }
   }
 }

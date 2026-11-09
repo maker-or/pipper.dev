@@ -19,6 +19,15 @@ private func rms(_ audio: StereoAudio, from a: Double, to b: Double) -> Double {
   #expect(rms(audio, from: audio.duration - 0.05, to: audio.duration) < rms(audio, from: config.end - 0.2, to: config.end) / 4)
 }
 
+@Test func theMusicHoldsThroughTheSurfacingAndSwellsWithIt() {
+  let config = IntroConfig()
+  let audio = renderScore(config)
+  let early = rms(audio, from: config.surfaceStart + 0.3, to: config.surfaceStart + 0.8)
+  let surfaced = rms(audio, from: config.surfaceEnd - 0.5, to: config.surfaceEnd)
+  #expect(early > 0.01)
+  #expect(surfaced > early)
+}
+
 @Test func theScoreNeverClipsAndIsTheSameEveryTime() {
   let first = renderScore(IntroConfig())
   #expect(first.left.allSatisfy { abs($0) <= 1 } && first.right.allSatisfy { abs($0) <= 1 })
@@ -57,6 +66,11 @@ private func rms(_ audio: StereoAudio, from a: Double, to b: Double) -> Double {
   #expect(fronts.map(\.pulse.firm) == [true, false, false])
   #expect(fronts.map(\.time) == fronts.map(\.time).sorted())
   #expect(felt.filter { $0.pulse.kind == .settle }.count == 1)
+  // Once, softly, when the @ has surfaced, after everything else.
+  let surfaced = felt.filter { $0.pulse.kind == .surfaced }
+  #expect(surfaced.count == 1)
+  #expect(surfaced.first?.pulse.firm == false)
+  #expect(surfaced.first!.time >= felt.map(\.time).max()!)
 
   // Farther from the stone, the same front arrives later.
   let near = hapticPulses(at: [720, 50], from: 0, to: 0.5, geometry: g, config: config)

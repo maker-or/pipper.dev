@@ -76,6 +76,8 @@ import type { ProjectFileGitStatus, ProjectFileTreeSnapshot } from "../contracts
 import { getActiveProjectId, setActiveProjectId } from "./session";
 import { ProjectFileLister } from "./project-file-list.ts";
 import { AUTH_CALLBACK_SUCCESS_HTML } from "./auth-callback-success";
+import { CLERK_ENABLED, REMOTE_ENABLED, SIRI_ENABLED } from "../contracts/features.ts";
+import { isIdentifiableUser, resolveLaunchUser } from "./launch-user.ts";
 import {
   isAllowedClerkAuthUrl,
   resolveClerkSignInUrl,
@@ -184,14 +186,16 @@ import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
 import {
+  LAUNCH_INTRO_VERSIONS,
+  launchIntroArgs,
   resolveLaunchIntroHelperPath,
   startFirstLaunchIntro,
   startLaunchIntro,
   type LaunchIntroSession,
+  type LaunchIntroVersion,
 } from "./launch-intro.ts";
-import { RemoteAccessController } from "./remote-access.ts";
+import type { RemoteAccessController } from "./remote-access.ts";
 import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
-import { RemoteDeviceStore } from "./remote-devices.ts";
 import type { RemoteScope, RemoteTransport } from "../contracts/remote.ts";
 import { ThreadBenchmarkController } from "./thread-benchmark.ts";
 import type {
@@ -647,6 +651,7 @@ const inFlightSiriRequests = new Map<string, Promise<unknown>>();
 /** Staged requests are durably claimed before creating a session. Retried
  * activations reopen the same thread; uncertain prompt delivery is never replayed. */
 async function consumeSiriRequest(requestId: string, preferredDir?: string): Promise<unknown> {
+  if (!SIRI_ENABLED) return null;
   if (typeof requestId !== "string" || !/^[A-Za-z0-9-]{1,123}$/.test(requestId)) {
     return null;
   }
@@ -815,7 +820,7 @@ async function openSiriThread(thread: unknown): Promise<void> {
  * Shortcuts. Callers must not block window creation on this.
  */
 async function consumePendingSiriRequests(): Promise<void> {
-  if (!agentManager) return;
+  if (!SIRI_ENABLED || !agentManager) return;
   const { getSiriRequestsDirs } = await import("./siri/siri-catalog.ts");
   // Key by request id, but keep the winning replica's dir so the consume
   // step reads the newest copy rather than whichever dir is listed first.
@@ -858,7 +863,7 @@ async function handlePipperDeepLink(url: string): Promise<boolean> {
   } catch {
     return false;
   }
-  if (parsed.protocol !== "pipper:") return false;
+  if (parsed.protocol !== "pipper:" || !SIRI_ENABLED) return false;
   const match = /^siri\/([A-Za-z0-9-]{1,128})\/?$/.exec(`${parsed.host}${parsed.pathname}`);
   if (!match?.[1]) return false;
   if (!agentManager) {
@@ -874,6 +879,20 @@ async function handlePipperDeepLink(url: string): Promise<boolean> {
   const thread = await consumeSiriRequest(match[1]);
   if (thread) await openSiriThread(thread);
   return true;
+}
+
+/**
+ * Keep the Siri catalog (projects and agents the App Intents can name) in
+ * step with Pipper. Best-effort: Siri must never break the change it follows.
+ */
+async function refreshSiriCatalogAfter(change: string): Promise<void> {
+  if (!SIRI_ENABLED) return;
+  try {
+    const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
+    refreshSiriCatalog();
+  } catch (err) {
+    console.warn(`[Main] Siri catalog refresh failed ${change}:`, err);
+  }
 }
 
 async function drainStartupSiriRequests(): Promise<void> {
@@ -1128,6 +1147,7 @@ function parseAuthCallback(url: string): {
 }
 
 async function handleAuthCallback(url: string): Promise<void> {
+  if (!CLERK_ENABLED) throw new Error("Sign-in is not available in this build.");
   const payload = parseAuthCallback(url);
   if (!payload.providerUserId) {
     throw new Error("Auth callback missing provider user id.");
@@ -1178,9 +1198,7 @@ async function handleAuthCallback(url: string): Promise<void> {
 }
 
 function getAuthenticatedUserForLaunch() {
-  const user = getMostRecentAuthUser();
-  if (!user?.provider_user_id || !user.email) return null;
-  return user;
+  return resolveLaunchUser(CLERK_ENABLED, CLERK_ENABLED ? getMostRecentAuthUser() : null);
 }
 
 function requireAuthenticatedUserForLaunch() {
@@ -1611,7 +1629,7 @@ function initializeMonitorService(): void {
 let launchIntro: LaunchIntroSession | null = null;
 
 /** Replays the native launch intro on demand (dock menu). No first-launch gating. */
-function replayLaunchIntro(): void {
+function replayLaunchIntro(version: LaunchIntroVersion): void {
   const helperPath = resolveLaunchIntroHelperPath({
     isPackaged: app.isPackaged,
     execPath: process.execPath,
@@ -1621,7 +1639,7 @@ function replayLaunchIntro(): void {
     console.warn(`[LaunchIntro] helper missing at ${helperPath}; cannot replay intro`);
     return;
   }
-  const session = startLaunchIntro({ helperPath });
+  const session = startLaunchIntro({ helperPath, args: launchIntroArgs(version) });
   void session.finished.then(() => session.dismiss());
 }
 
@@ -2047,6 +2065,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("siri:getCatalog", async () => {
+    if (!SIRI_ENABLED) return null;
     const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
     return refreshSiriCatalog();
   });
@@ -2145,12 +2164,7 @@ function registerIpc(): void {
     async (_event, input: { name: string; path: string; icon: string }) => {
       requireAuthenticatedUserForLaunch();
       const project = createProject(input);
-      try {
-        const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
-        refreshSiriCatalog();
-      } catch (err) {
-        console.warn("[Main] Siri catalog refresh failed after project create:", err);
-      }
+      await refreshSiriCatalogAfter("after project create");
       captureAnalytics("project_created", {
         windowType: "launch",
         properties: {
@@ -2504,8 +2518,11 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("shell:openExternal", async (_event, url: string) => {
-    await ensureAuthCallbackServer();
-    const resolvedCallbackUrl = getAuthCallbackUrl();
+    const signIn = url === "clerk:sign-up" || url === "clerk:sign-in";
+    if (signIn && !CLERK_ENABLED) throw new Error("Sign-in is not available in this build.");
+    // Only a sign-in needs the loopback listener its callback returns to.
+    if (signIn) await ensureAuthCallbackServer();
+    const resolvedCallbackUrl = signIn ? getAuthCallbackUrl() : "";
     const appendReturnTo = (inputUrl: string): string =>
       withSignInParams(inputUrl, {
         returnTo: resolvedCallbackUrl,
@@ -2983,12 +3000,7 @@ function registerIpc(): void {
   ipcMain.handle("agent:getSelectedAgentIds", () => getSelectedAgentIds());
   ipcMain.handle("agent:setSelectedAgentIds", async (_event, agentIds: string[]) => {
     setSelectedAgentIds(agentIds);
-    try {
-      const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
-      refreshSiriCatalog();
-    } catch (err) {
-      console.warn("[Main] Siri catalog refresh failed after agent selection change:", err);
-    }
+    await refreshSiriCatalogAfter("after agent selection change");
   });
   ipcMain.handle("agent:listInstances", () => listAgentInstancesForRenderer());
   ipcMain.handle("agent:getAccountSchemas", () => listAgentAccountSchemas());
@@ -3553,10 +3565,10 @@ app.whenReady().then(async () => {
     }
     app.dock?.setMenu(
       Menu.buildFromTemplate([
-        {
-          label: "Replay Launch Intro",
-          click: () => replayLaunchIntro(),
-        },
+        ...LAUNCH_INTRO_VERSIONS.map((version) => ({
+          label: `Replay Launch Intro — Version ${version}`,
+          click: () => replayLaunchIntro(version),
+        })),
         {
           label: "Show Onboarding",
           click: () => createLaunchWindow("onboarding"),
@@ -3576,15 +3588,10 @@ app.whenReady().then(async () => {
   // Seed per-driver default instances and wire instance→descriptor resolution
   // into the agent registry before anything spawns an agent.
   installAgentInstanceProvider();
-  try {
-    const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
-    refreshSiriCatalog();
-  } catch (err) {
-    console.warn("[Main] Siri catalog refresh failed at startup:", err);
-  }
+  await refreshSiriCatalogAfter("at startup");
   await prepareBenchmarkLaunchState();
   const authUser = getAuthenticatedUserForLaunch();
-  if (authUser) {
+  if (isIdentifiableUser(authUser)) {
     identifyAnalyticsUser({
       providerUserId: authUser.provider_user_id,
       email: authUser.email,
@@ -3638,7 +3645,13 @@ app.whenReady().then(async () => {
     broadcast: (status) => broadcastToWindows("sleepless:statusChanged", status),
   });
   sleeplessController.setRunningThreadIds(agentManager.getRunningThreadIds());
-  if (process.env.PIPPER_REMOTE_ENABLED !== "0") {
+  // Held back from release builds (REMOTE_ENABLED); loaded only when on, so
+  // a build without it never starts the server or fetches cloudflared.
+  if (REMOTE_ENABLED && process.env.PIPPER_REMOTE_ENABLED !== "0") {
+    const [{ RemoteAccessController }, { RemoteDeviceStore }] = await Promise.all([
+      import("./remote-access.ts"),
+      import("./remote-devices.ts"),
+    ]);
     const cloudflaredExe = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
     remoteAccess = new RemoteAccessController({
       userDataPath: app.getPath("userData"),

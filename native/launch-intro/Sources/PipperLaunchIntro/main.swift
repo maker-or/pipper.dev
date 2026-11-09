@@ -3,7 +3,8 @@ import Foundation
 import ImageIO
 import LaunchIntroCore
 
-/// pipper-launch-intro [--text <line>] [--font-size <units>] [--start-at <s>] [--silent] [--no-haptics]
+/// pipper-launch-intro [--intro-version 1|2] [--text <line>] [--font-size <units>] [--start-at <s>]
+///                     [--silent] [--no-haptics]
 ///   Plays the intro over the main display and reports on stdout.
 ///
 /// pipper-launch-intro --render-audio <file.wav>
@@ -37,6 +38,7 @@ struct Options {
       let value = iterator.next() ?? ""
       switch flag {
       case "--render-audio": audioPath = value
+      case "--intro-version": config.use(IntroConfig.Version(rawValue: Int(value) ?? 1) ?? .one)
       case "--text": config.text = value
       case "--font-size": config.fontSize = Double(value) ?? config.fontSize
       case "--start-at": startAt = Double(value) ?? 0
