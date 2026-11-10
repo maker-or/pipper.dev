@@ -1,6 +1,7 @@
 /// The intro's haptics: each ripple is felt as its front passes under the
 /// pointer, with more taps for a stronger ripple, once more when the text is
-/// sharp, and once, softly, when the @ has surfaced. The pointer is read live, so moving it moves where the wave is felt.
+/// sharp, and once, softly, when the @ has surfaced. The pointer is read live,
+/// so moving it moves where the wave is felt.
 public struct HapticPulse: Sendable, Equatable {
   public enum Kind: Sendable {
     /// A ripple front reached the pointer.

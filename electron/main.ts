@@ -186,12 +186,18 @@ import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
 import {
+  INTRO_LAYOUT_SCRIPT,
   LAUNCH_INTRO_VERSIONS,
   launchIntroArgs,
+  macWindowCornerRadius,
+  introWindowLayout,
+  placeIntroLayout,
   resolveLaunchIntroHelperPath,
   startFirstLaunchIntro,
   startLaunchIntro,
+  type LaunchIntroCloseTarget,
   type LaunchIntroSession,
+  type MeasuredIntroPage,
   type LaunchIntroVersion,
 } from "./launch-intro.ts";
 import type { RemoteAccessController } from "./remote-access.ts";
@@ -1639,8 +1645,95 @@ function replayLaunchIntro(version: LaunchIntroVersion): void {
     console.warn(`[LaunchIntro] helper missing at ${helperPath}; cannot replay intro`);
     return;
   }
+  if (launchIntro) return;
+  // A replay is the whole first launch: a fresh onboarding window loads
+  // hidden behind the intro, which draws it and hands over to it, so it ends
+  // on the first onboarding step whatever was open before.
   const session = startLaunchIntro({ helperPath, args: launchIntroArgs(version) });
-  void session.finished.then(() => session.dismiss());
+  launchIntro = session;
+  if (launchWindow && !launchWindow.isDestroyed()) launchWindow.destroy();
+  createLaunchWindow("onboarding");
+  // If the window never got ready, don't leave the overlay holding its frame.
+  void session.finished.then(() => {
+    if (launchIntro !== session) return;
+    launchIntro = null;
+    session.dismiss();
+    if (launchWindow && !launchWindow.isDestroyed()) launchWindow.show();
+  });
+}
+
+/** Reads the page's background at the top of the window as 0–255 RGB. */
+const PAGE_BACKGROUND_SCRIPT = `(() => {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  let el = document.elementFromPoint(innerWidth / 2, Math.min(24, innerHeight - 1));
+  for (; el && ctx; el = el.parentElement) {
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = getComputedStyle(el).backgroundColor;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    if (a === 255) return [r, g, b];
+  }
+  return null;
+})()`;
+
+/**
+ * Measures the hidden launch window until its onboarding picker has loaded
+ * and holds still, then gives it to the intro to draw. Gives up quietly
+ * after a few seconds: the intro then ends as before.
+ */
+async function sendIntroLayout(
+  intro: LaunchIntroSession,
+  win: BrowserWindow | null,
+  playing: () => boolean,
+): Promise<void> {
+  let previous = "";
+  for (let attempt = 0; attempt < 30 && win && !win.isDestroyed() && playing(); attempt++) {
+    try {
+      const page = (await win.webContents.executeJavaScript(
+        INTRO_LAYOUT_SCRIPT,
+        true,
+      )) as MeasuredIntroPage;
+      const layout = placeIntroLayout({
+        page,
+        windowBounds: win.getBounds(),
+        contentBounds: win.getContentBounds(),
+        zoom: win.webContents.getZoomFactor(),
+        radius: macWindowCornerRadius(os.release()),
+      });
+      const key = layout ? JSON.stringify(layout) : "";
+      if (layout && key === previous) {
+        intro.drawWindow(layout);
+        return;
+      }
+      previous = key;
+    } catch (error) {
+      console.warn("[LaunchIntro] could not measure the launch window:", error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+/** Where the first-launch intro ends: the launch window's frame and colour. */
+async function launchIntroCloseTarget(win: BrowserWindow): Promise<LaunchIntroCloseTarget> {
+  let color: LaunchIntroCloseTarget["color"] = null;
+  try {
+    const read = await Promise.race([
+      win.webContents.executeJavaScript(PAGE_BACKGROUND_SCRIPT, true) as Promise<unknown>,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+    ]);
+    if (
+      Array.isArray(read) &&
+      read.length === 3 &&
+      read.every((value) => typeof value === "number" && value >= 0 && value <= 255)
+    ) {
+      color = read as [number, number, number];
+    }
+  } catch (error) {
+    console.warn("[LaunchIntro] could not read the launch window's colour:", error);
+  }
+  return { ...win.getBounds(), radius: macWindowCornerRadius(os.release()), color };
 }
 
 function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void {
@@ -1654,7 +1747,7 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
   }
 
   console.log("[Main] Creating new launchWindow");
-  launchWindow = new BrowserWindow({
+  const created = new BrowserWindow({
     width: 960,
     height: 720,
     minWidth: 640,
@@ -1672,36 +1765,57 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
     },
   });
 
-  launchWindow.on("ready-to-show", () => {
+  launchWindow = created;
+  // The intro needs this window's frame early; the heading and cards follow
+  // once the page has loaded.
+  launchIntro?.drawWindow(
+    introWindowLayout(
+      created.getBounds(),
+      macWindowCornerRadius(os.release()),
+      created.getBackgroundColor(),
+    ),
+  );
+
+  created.on("ready-to-show", () => {
     console.log("[Main] launchWindow ready-to-show");
     scheduleDeferredStartupWork();
     const intro = launchIntro;
     if (!intro) {
-      launchWindow?.show();
+      created.show();
       return;
     }
-    // Shown under the overlay as it fades, so the intro ends on the window.
-    void intro.finished.then(() => {
+    void sendIntroLayout(intro, created, () => launchIntro === intro);
+    // Shown under the overlay, which then draws its dark in to this
+    // window's frame and colour and hands over to it, so the intro ends as
+    // the window. A skipped or failed intro just fades.
+    void intro.finished.then(async (outcome) => {
       launchIntro = null;
-      if (launchWindow && !launchWindow.isDestroyed()) {
-        launchWindow.show();
+      const win = created;
+      const target =
+        outcome === "complete" && win && !win.isDestroyed()
+          ? await launchIntroCloseTarget(win)
+          : null;
+      if (win && !win.isDestroyed()) {
+        win.show();
         app.focus({ steal: true });
-        launchWindow.focus();
+        win.focus();
       }
-      intro.dismiss();
+      if (target && win && !win.isDestroyed()) intro.closeInto(target);
+      else intro.dismiss();
     });
   });
 
-  launchWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+  created.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     console.log(`[Launch Renderer Console] [Level ${level}] ${message} (${sourceId}:${line})`);
   });
 
-  launchWindow.on("closed", () => {
+  created.on("closed", () => {
     console.log("[Main] launchWindow closed");
-    launchWindow = null;
+    // A replaced window closing must not forget its replacement.
+    if (launchWindow === created) launchWindow = null;
   });
 
-  void loadInto(launchWindow, "launch", stage);
+  void loadInto(created, "launch", stage);
 }
 
 function broadcastToWindows(channel: string, ...args: any[]) {

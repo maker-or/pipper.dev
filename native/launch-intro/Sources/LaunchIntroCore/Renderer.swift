@@ -82,6 +82,50 @@ struct MarkLevel {
   let texture: MTLTexture
 }
 
+struct DrawnElement {
+  var rect: SIMD4<Float>
+  var fill: SIMD4<Float>
+  var radius: Float
+  var kind: Float
+}
+
+struct DrawUniforms {
+  var line: SIMD4<Float>
+  var print: SIMD4<Float>
+  var lineWidth: Float
+  var count: Float
+  var trail: Float
+  var glowOpacity: Float
+}
+
+extension ScanLine {
+  /// For the shaders' `isPrinted`: finite, since the shaders build with fast
+  /// maths.
+  var printUniform: SIMD4<Float> {
+    func finite(_ v: Double) -> Float { Float(min(1e9, max(-1e9, v))) }
+    return [finite(top), finite(y), finite(head), fromLeft ? 1 : -1]
+  }
+}
+
+struct WordUniforms {
+  var rect: SIMD4<Float>
+  var color: SIMD4<Float>
+  var target: SIMD2<Float>
+  var sigma: Float
+  var opacity: Float
+  var shown: SIMD4<Float>
+  var covered: SIMD4<Float>
+}
+
+struct ScanUniforms {
+  var y: Float
+  var left: Float
+  var right: Float
+  var head: Float
+  var opacity: Float
+  var width: Float
+}
+
 struct TextUniforms {
   var rect: SIMD4<Float>
   var color: SIMD4<Float>
@@ -116,6 +160,13 @@ public final class IntroRenderer {
   /// showing under the darkness, unmoved.
   public var backdrop: MTLTexture?
 
+  /// The window the intro ends by drawing (version 2), in device pixels;
+  /// nil ends it as before. Set it before `drawing.start`.
+  public var drawing: WindowDrawing?
+
+  /// The last frame: later when a window is drawn.
+  public var end: Double { drawing?.end ?? config.end }
+
   private let ripplePipeline: MTLRenderPipelineState
   private let surfacePipeline: MTLRenderPipelineState
   private let waterV2Pipeline: MTLRenderPipelineState
@@ -123,6 +174,12 @@ public final class IntroRenderer {
   private let blurPipeline: MTLRenderPipelineState
   private let textPipeline: MTLRenderPipelineState
   private let copyPipeline: MTLRenderPipelineState
+  private let drawingPipeline: MTLRenderPipelineState
+  private let wordPipeline: MTLRenderPipelineState
+  private let scanPipeline: MTLRenderPipelineState
+  /// The carousel's words, "Run" first, each drawn once at full size: its
+  /// mask, its advance, and the padding round it, in device pixels.
+  private var words: [(mask: MTLTexture, width: Double, pad: Double)] = []
   private let emptyTexture: MTLTexture
   private var text: (mask: MTLTexture, blurred: MTLTexture, rect: SIMD4<Float>)?
   /// Padding around the line's ink inside `text.rect`, in device pixels.
@@ -164,12 +221,16 @@ public final class IntroRenderer {
     blurPipeline = try pipeline("fullscreen_vertex", "text_blur_horizontal", .r16Float, blended: false)
     textPipeline = try pipeline("text_vertex", "text_fragment", Self.pixelFormat, blended: true)
     copyPipeline = try pipeline("fullscreen_vertex", "copy_fragment", Self.pixelFormat, blended: false)
+    drawingPipeline = try pipeline("fullscreen_vertex", "drawing_fragment", Self.pixelFormat, blended: true)
+    wordPipeline = try pipeline("text_vertex", "word_fragment", Self.pixelFormat, blended: true)
+    scanPipeline = try pipeline("fullscreen_vertex", "scan_fragment", Self.pixelFormat, blended: true)
 
     let empty = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
     guard let emptyTexture = device.makeTexture(descriptor: empty) else { throw IntroRendererError.resource("texture") }
     self.emptyTexture = emptyTexture
     try layoutText()
     try layoutMark()
+    try layoutWords()
   }
 
   public func resize(width: Int, height: Int) throws {
@@ -177,6 +238,7 @@ public final class IntroRenderer {
     geometry = IntroGeometry(width: Double(width), height: Double(height), config: config)
     try layoutText()
     try layoutMark()
+    try layoutWords()
   }
 
   /// Encodes the frame at `time` into `target`. With `background`, the frame
@@ -251,6 +313,87 @@ public final class IntroRenderer {
       encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
     }
 
+    let windowPrint = drawing?.scan(time: time) ?? .blank
+    if let drawing, time > drawing.start {
+      var elements = drawing.shapes.prefix(WindowDrawing.maxShapes).map { shape -> DrawnElement in
+        let fill = shape.fill ?? .zero
+        return DrawnElement(
+          rect: [Float(shape.rect.minX), Float(shape.rect.minY), Float(shape.rect.width), Float(shape.rect.height)],
+          fill: [Float(fill.x), Float(fill.y), Float(fill.z), Float(fill.w)],
+          radius: Float(shape.radius), kind: shape.kind == .text ? 1 : 0
+        )
+      }
+      var uniforms = DrawUniforms(
+        line: [0.92, 0.92, 0.95, 0.55],
+        print: windowPrint.printUniform,
+        lineWidth: Float(max(1, 1.25 * geometry.q)),
+        count: Float(elements.count),
+        trail: Float(WindowDrawing.trail * Double(drawing.shapes[0].rect.height)),
+        glowOpacity: Float(windowPrint.top.isInfinite && windowPrint.top > 0 ? windowPrint.opacity : 1)
+      )
+      encoder.setRenderPipelineState(drawingPipeline)
+      encoder.setFragmentBytes(&uniforms, length: MemoryLayout<DrawUniforms>.stride, index: 0)
+      encoder.setFragmentBytes(&elements, length: MemoryLayout<DrawnElement>.stride * elements.count, index: 1)
+      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
+    var scans: [ScanLine] = []
+    if windowPrint.opacity > 0 { scans.append(windowPrint) }
+    if !words.isEmpty {
+      encoder.setRenderPipelineState(wordPipeline)
+      // Words the window has been printed over are gone.
+      func draw(_ word: (mask: MTLTexture, width: Double, pad: Double), rect: CGRect, opacity: Double, shown: ScanLine) {
+        var uniforms = WordUniforms(
+          rect: [Float(rect.minX), Float(rect.minY), Float(rect.width), Float(rect.height)],
+          color: config.textColor,
+          target: [Float(geometry.width), Float(geometry.height)],
+          sigma: 0, opacity: Float(opacity),
+          shown: shown.printUniform, covered: windowPrint.printUniform
+        )
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<WordUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WordUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(word.mask, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+      }
+      if config.carousel != nil {
+        let heading = drawing.flatMap { drawing in drawing.heading.map { drawing.shapes[$0].rect } }
+        let placements = carouselPlacements(
+          time: time, config: config, geometry: geometry, widths: words.map(\.width), heading: heading
+        )
+        for placement in placements {
+          let word = words[placement.index]
+          let width = Double(word.mask.width) * placement.scale
+          let height = Double(word.mask.height) * placement.scale
+          let rect = CGRect(
+            x: placement.origin.x - word.pad * placement.scale, y: placement.origin.y - height / 2,
+            width: width, height: height
+          )
+          draw(word, rect: rect, opacity: placement.opacity, shown: .done)
+        }
+      } else if let phrase = config.phrase, time > phrase.appear {
+        // The line, printed in by the laser above its scan line.
+        let word = words[0]
+        let size = (width: Double(word.mask.width), height: Double(word.mask.height))
+        let scan = phraseScan(time: time, config: config, geometry: geometry, width: size.width, height: size.height)
+          ?? .done
+        if scan.opacity > 0 { scans.append(scan) }
+        draw(word, rect: phraseBox(config: config, geometry: geometry, width: size.width, height: size.height),
+             opacity: 1, shown: scan)
+      }
+    }
+
+    if !scans.isEmpty {
+      encoder.setRenderPipelineState(scanPipeline)
+      for scan in scans {
+        var uniforms = ScanUniforms(
+          y: Float(scan.y), left: Float(scan.left), right: Float(scan.right), head: Float(scan.head),
+          opacity: Float(scan.opacity), width: Float(max(1, 1.2 * geometry.q))
+        )
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<ScanUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+      }
+    }
+
     if drawsText, let text {
       encoder.setRenderPipelineState(textPipeline)
       encoder.setVertexBytes(&textUniforms, length: MemoryLayout<TextUniforms>.stride, index: 0)
@@ -306,12 +449,11 @@ public final class IntroRenderer {
     let c = config
     guard c.ending == .backlit, time > c.surfaceStart, let text else { return nil }
     let frame = surfaceFrame(time: time, config: c)
-    guard frame.presence > 0 else { return nil }
-    let q = geometry.q
-    // The first letter's left edge and the line's middle, y down.
+    guard frame.presence > 0, let light = lightPosition() else { return nil }
+    let intensity = frame.presence
+    let focus = frame.focus
     let inkLeft = Double(text.rect.x) + textPad
     let middle = Double(text.rect.y + text.rect.w / 2)
-    let light = SIMD2(inkLeft + c.lightOffset.x * q, middle - c.lightOffset.y * q)
     let inkRight = Double(text.rect.x + text.rect.z) - textPad
     let near = simd_distance_d(light, [inkLeft, middle])
     let far = simd_distance_d(light, [inkRight, middle])
@@ -320,12 +462,78 @@ public final class IntroRenderer {
       hot: SIMD4(c.lightHot, 1), warm: SIMD4(c.lightWarm, 1), far: SIMD4(c.lightFar, 1),
       light: [Float(light.x), Float(light.y)],
       near: Float(near), span: Float(far - near),
-      intensity: Float(frame.presence), spread: Float(frame.rise),
-      reach: Float(c.shaftLength * geometry.height * frame.focus), shafts: Float(c.shaftStrength),
+      intensity: Float(intensity), spread: Float(frame.rise),
+      reach: Float(c.shaftLength * geometry.height * focus), shafts: Float(c.shaftStrength),
       glow: Float(c.letterGlow), source: Float(c.sourceGlow), falloff: Float(c.lightFalloff),
       bloom: Float(c.letterBloom), shaftFalloff: Float(c.shaftFalloff),
       shaftWarmth: Float(c.shaftWarmth), exposure: Float(c.lightExposure)
     )
+  }
+
+  /// Where the backlit line's light sits: up and to the left of the first
+  /// letter. Device pixels, y down.
+  private func lightPosition() -> SIMD2<Double>? {
+    guard let text else { return nil }
+    let q = geometry.q
+    let inkLeft = Double(text.rect.x) + textPad
+    let middle = Double(text.rect.y + text.rect.w / 2)
+    return SIMD2(inkLeft + config.lightOffset.x * q, middle - config.lightOffset.y * q)
+  }
+
+  /// The carousel's words, each drawn once at full size with mipmaps, so it
+  /// stays sharp as it shrinks to the heading.
+  private func layoutWords() throws {
+    words = []
+    let strings: [String]
+    let weights: [Double]
+    if let carousel = config.carousel {
+      strings = [carousel.lead] + carousel.all
+      weights = [carousel.leadWeight] + carousel.all.map { _ in carousel.wordWeight }
+    } else if let phrase = config.phrase {
+      strings = [phrase.text]
+      weights = [phrase.weight]
+    } else {
+      return
+    }
+    let size = config.fontSize * geometry.q
+    let pad = 2.0
+    guard let commandBuffer = queue.makeCommandBuffer(), let blit = commandBuffer.makeBlitCommandEncoder() else {
+      throw IntroRendererError.resource("word commands")
+    }
+    for (index, string) in strings.enumerated() {
+      let font = systemFont(size: size, weight: weights[index])
+      let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
+        NSAttributedString.Key(kCTFontAttributeName as String): font,
+        NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+      ]))
+      var ascent: CGFloat = 0
+      var descent: CGFloat = 0
+      let advance = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+      let width = Int(ceil(advance + pad * 2))
+      let height = Int(ceil(ascent + descent + pad * 2))
+      var pixels = [UInt8](repeating: 0, count: width * height)
+      try pixels.withUnsafeMutableBytes { buffer in
+        guard let context = CGContext(
+          data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+          bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+        ) else { throw IntroRendererError.resource("word bitmap") }
+        context.setFillColor(gray: 1, alpha: 1)
+        context.setAllowsFontSmoothing(false)
+        context.setShouldAntialias(true)
+        context.textPosition = CGPoint(x: pad, y: pad + descent)
+        CTLineDraw(line, context)
+      }
+      let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+        pixelFormat: .r8Unorm, width: width, height: height, mipmapped: true
+      )
+      guard let mask = device.makeTexture(descriptor: descriptor) else { throw IntroRendererError.resource("word mask") }
+      mask.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: width)
+      blit.generateMipmaps(for: mask)
+      words.append((mask, advance, pad))
+    }
+    blit.endEncoding()
+    commandBuffer.commit()
+    commandBuffer.waitUntilCompleted()
   }
 
   /// The surfacing's uniforms, and the two blur levels either side of how
@@ -445,10 +653,13 @@ public final class IntroRenderer {
     }
   }
 
-  private func markFont(size: Double) -> CTFont {
+  private func markFont(size: Double) -> CTFont { systemFont(size: size, weight: config.markWeight) }
+
+  /// The system font at a weight trait, −1 to 1.
+  private func systemFont(size: Double, weight: Double) -> CTFont {
     let base = CTFontCreateUIFontForLanguage(.system, CGFloat(size), nil)
       ?? CTFontCreateWithName("Helvetica Neue" as CFString, CGFloat(size), nil)
-    let traits = [kCTFontWeightTrait: config.markWeight] as CFDictionary
+    let traits = [kCTFontWeightTrait: weight] as CFDictionary
     let descriptor = CTFontDescriptorCreateCopyWithAttributes(
       CTFontCopyFontDescriptor(base), [kCTFontTraitsAttribute: traits] as CFDictionary
     )

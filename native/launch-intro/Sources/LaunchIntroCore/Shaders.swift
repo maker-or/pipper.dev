@@ -438,6 +438,151 @@ fragment float text_blur_horizontal(
   return blur1D(mask, in.uv, float2(1.0 / mask.get_width(), 0), u.sigma);
 }
 
+// The printed window (WindowDrawing.swift): above the laser's scan line the
+// window is printed in its real colours, with a thin outline glowing on the
+// rows just printed. Device pixels, y down.
+struct DrawnElement {
+  float4 rect;
+  float4 fill;
+  float radius;
+  float kind;
+};
+
+struct DrawUniforms {
+  float4 line;
+  float4 print;
+  float lineWidth;
+  float count;
+  float trail;
+  float glowOpacity;
+};
+
+// Whether a point is printed yet by a printer `p`: (top of the band being
+// printed, its bottom where the scan line is, the head, +1 travelling left
+// to right or −1). Above the band everything is printed; in it, only what
+// the head has passed.
+bool isPrinted(float2 pix, float4 p) {
+  return pix.y < p.x || (pix.y < p.y && (p.w > 0 ? pix.x < p.z : pix.x > p.z));
+}
+
+// A carousel word or the printed line: its mask, sharp at any size
+// (mipmapped), shown only where printer `shown` has printed it and printer
+// `covered` hasn't yet printed the window over it.
+struct WordUniforms {
+  float4 rect;
+  float4 color;
+  float2 target;
+  float sigma;
+  float opacity;
+  float4 shown;
+  float4 covered;
+};
+
+// The laser's scan line, y down: a thin blue line with a bright head.
+struct ScanUniforms {
+  float y;
+  float left;
+  float right;
+  float head;
+  float opacity;
+  float width;
+};
+
+float roundedBox(float2 p, float2 half_, float r) {
+  float2 q = abs(p) - half_ + r;
+  return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// How far around a rounded box's outline the point nearest `p` is, 0 to 1,
+// clockwise from the middle of its top edge (y down), and the outline's length.
+float2 aroundBox(float2 p, float2 half_, float r) {
+  float sx = max(half_.x - r, 0.0);
+  float sy = max(half_.y - r, 0.0);
+  float arc = M_PI_F * 0.5 * r;
+  float quarter = sx + arc + sy;
+  float2 a = abs(p);
+  float s;
+  if (a.x <= sx) {
+    s = a.x;
+  } else if (a.y <= sy) {
+    s = sx + arc + (sy - a.y);
+  } else {
+    float angle = atan2(a.y - sy, a.x - sx);
+    s = sx + r * (M_PI_F * 0.5 - angle);
+  }
+  float t;
+  if (p.x >= 0 && p.y < 0) t = s;
+  else if (p.x >= 0) t = 2 * quarter - s;
+  else if (p.y >= 0) t = 2 * quarter + s;
+  else t = 4 * quarter - s;
+  return float2(t / max(4 * quarter, 1e-3), 4 * quarter);
+}
+
+fragment float4 drawing_fragment(
+  VOut in [[stage_in]],
+  constant DrawUniforms& u [[buffer(0)]],
+  constant DrawnElement* elements [[buffer(1)]]
+) {
+  float2 pix = in.position.xy;
+  if (!isPrinted(pix, u.print)) return 0;
+  // Outlines glow just above the scan line and fade further up.
+  float glow = (1 - smoothstep(0.0, u.trail, u.print.y - pix.y)) * u.glowOpacity;
+  float3 rgb = 0;
+  float a = 0;
+  for (int i = 0; i < int(u.count); i++) {
+    DrawnElement e = elements[i];
+    float2 half_ = e.rect.zw * 0.5;
+    float2 p = pix - (e.rect.xy + half_);
+    if (e.kind > 0.5) {
+      // A line of text: a soft bar through its middle that gives way to the
+      // real text when the window takes over.
+      float barHalf = max(half_.y * 0.22, 1.0);
+      float d = roundedBox(p, float2(half_.x, barHalf), barHalf);
+      float k = (1 - smoothstep(-0.5, 0.5, d)) * u.line.a * 0.35;
+      rgb = u.line.rgb * k + rgb * (1 - k);
+      a = k + a * (1 - k);
+      continue;
+    }
+    float d = roundedBox(p, half_, e.radius);
+    float f = (1 - smoothstep(-0.5, 0.5, d)) * e.fill.a;
+    rgb = e.fill.rgb * f + rgb * (1 - f);
+    a = f + a * (1 - f);
+    if (glow <= 0) continue;
+    float band = 1 - smoothstep(u.lineWidth * 0.5 - 0.5, u.lineWidth * 0.5 + 0.5, abs(d));
+    float k = band * u.line.a * glow;
+    rgb = u.line.rgb * k + rgb * (1 - k);
+    a = k + a * (1 - k);
+  }
+  return float4(rgb, a);
+}
+
+fragment float4 scan_fragment(VOut in [[stage_in]], constant ScanUniforms& u [[buffer(0)]]) {
+  float2 pix = in.position.xy;
+  const float3 blue = float3(0.12, 0.48, 1.0);
+  // The line, fading at its ends.
+  float ends = smoothstep(u.left, u.left + u.width * 12, pix.x) * (1 - smoothstep(u.right - u.width * 12, u.right, pix.x));
+  float line = (1 - smoothstep(u.width * 0.5, u.width * 0.5 + 1, abs(pix.y - u.y))) * ends * 0.8;
+  // The head: a small rounded bar on the line, with a soft glow round it.
+  float d = roundedBox(pix - float2(u.head, u.y), float2(u.width * 5, u.width * 2.2), u.width * 2.2);
+  float head = 1 - smoothstep(-0.5, 0.5, d);
+  float glow = exp(-max(d, 0.0) * max(d, 0.0) / (2 * u.width * u.width * 9)) * 0.35;
+  float k = max(max(line, head), glow) * u.opacity;
+  return float4(blue * k, k);
+}
+
+constexpr sampler wordSampler(coord::normalized, address::clamp_to_zero, filter::linear, mip_filter::linear);
+
+fragment float4 word_fragment(
+  VOut in [[stage_in]],
+  constant WordUniforms& u [[buffer(0)]],
+  texture2d<float> mask [[texture(0)]]
+) {
+  float2 pix = in.position.xy;
+  if (!isPrinted(pix, u.shown) || isPrinted(pix, u.covered)) return 0;
+  float a = u.color.a * mask.sample(wordSampler, in.uv).r * u.opacity;
+  return float4(u.color.rgb * a, a);
+}
+
 vertex VOut text_vertex(uint vid [[vertex_id]], constant TextUniforms& u [[buffer(0)]]) {
   float2 corner = float2(vid & 1, vid >> 1);
   float2 pix = u.rect.xy + corner * u.rect.zw;

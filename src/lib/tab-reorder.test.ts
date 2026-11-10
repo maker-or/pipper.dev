@@ -1,10 +1,16 @@
 import { describe, expect, test } from "vitest";
-import { reconcileDragOrder, reorderHeldTab, type TabSwapMemory } from "./tab-reorder";
+import {
+  reconcileDragOrder,
+  releaseVelocity,
+  reorderHeldTab,
+  rubberBand,
+  type TabSwapMemory,
+} from "./tab-reorder";
 
 const GAP = 4;
 
 /** Drags `heldId` through `path` (lefts) and returns the order after each step. */
-function drag(widths: Record<string, number>, heldId: string, path: number[], offsetY = 0) {
+function drag(widths: Record<string, number>, heldId: string, path: number[]) {
   let order = Object.keys(widths);
   let memory: TabSwapMemory = new Map();
   return path.map((heldLeft) => {
@@ -15,7 +21,6 @@ function drag(widths: Record<string, number>, heldId: string, path: number[], of
       origin: 0,
       heldId,
       heldLeft,
-      heldOffsetY: offsetY,
       memory,
     }));
     return order.join("");
@@ -77,13 +82,6 @@ describe("dragging a tab along the strip", () => {
     expect(drag({ A: 100, B: 100 }, "A", [-900])).toEqual(["AB"]);
   });
 
-  test("holds the order still while the tab is pulled away from the strip", () => {
-    expect(drag({ A: 100, B: 100 }, "A", [80], 60)).toEqual(["AB"]);
-    expect(drag({ A: 100, B: 100 }, "A", [80], -60)).toEqual(["AB"]);
-    // Up or down within reach still counts.
-    expect(drag({ A: 100, B: 100 }, "A", [80], 20)).toEqual(["BA"]);
-  });
-
   test("ignores a held tab it can't find, without touching the order", () => {
     expect(drag({ A: 100, B: 100 }, "Z", [500])).toEqual(["AB"]);
   });
@@ -97,5 +95,51 @@ describe("when tabs change during a drag", () => {
 
   test("a newly opened tab joins at the end", () => {
     expect(reconcileDragOrder(["B", "A"], ["A", "B", "D"])).toEqual(["B", "A", "D"]);
+  });
+});
+
+describe("the strip's ends", () => {
+  test("move freely inside the strip", () => {
+    expect(rubberBand(50, 0, 100)).toBe(50);
+  });
+
+  test("push back past either end instead of stopping the tab dead", () => {
+    expect(rubberBand(-50, 0, 100)).toBe(-10);
+    expect(rubberBand(150, 0, 100)).toBe(110);
+  });
+});
+
+describe("release velocity", () => {
+  test("a flick carries its speed into the release", () => {
+    const samples = [
+      { x: 0, t: 0 },
+      { x: 20, t: 16 },
+      { x: 40, t: 32 },
+    ];
+    expect(releaseVelocity(samples, 40)).toBeCloseTo(1250);
+  });
+
+  test("a pointer that paused before lifting lands at rest", () => {
+    const samples = [
+      { x: 0, t: 0 },
+      { x: 40, t: 32 },
+    ];
+    expect(releaseVelocity(samples, 200)).toBe(0);
+  });
+
+  test("only the most recent movement counts", () => {
+    const samples = [
+      { x: 0, t: 0 },
+      { x: 500, t: 100 },
+      { x: 500, t: 300 },
+      { x: 510, t: 316 },
+    ];
+    // The burst 200ms ago is outside the window; only 10px over 16ms is left.
+    expect(releaseVelocity(samples, 320)).toBeCloseTo(625);
+  });
+
+  test("no movement, no velocity", () => {
+    expect(releaseVelocity([], 0)).toBe(0);
+    expect(releaseVelocity([{ x: 5, t: 10 }], 12)).toBe(0);
   });
 });

@@ -343,81 +343,42 @@ private func centreRow(_ frame: FramePixels) -> [Int] {
 
 // Version 2: the same timeline, with ripples as subtle as the surfacing @.
 
-@Test func version2SharesTheTimelineAndLightsTheLineFromBehind() {
+@Test func version2SharesTheRipplesAndHasNoLine() {
   let one = IntroConfig(version: .one)
   let two = IntroConfig(version: .two)
-  #expect(two.version == .two && two.ending == .backlit)
-  #expect(two.text == "One interface to control your agents" && two.mark.isEmpty)
+  #expect(two.version == .two && two.ending == .still)
+  // No line and nothing surfacing: its last ripple becomes the window.
+  #expect(two.text.isEmpty && two.mark.isEmpty && two.phrase != nil && two.carousel == nil && one.phrase == nil)
   #expect(two.rippleStarts == one.rippleStarts && two.travel == one.travel)
-  #expect(two.surfaceStart == one.surfaceStart && two.end == one.end)
-  // The line stays; only its white gives way to the light through it.
-  #expect(textFrame(time: two.end, q: 1, config: two).opacity == 0)
-  #expect(textFrame(time: two.surfaceStart, q: 1, config: two).opacity == 1)
+  #expect(two.end < one.end)
   // Switching back restores version 1's water, line and @ exactly.
   var back = two
   back.use(.one)
   #expect(back.ending == .surfacing && back.text == one.text && back.mark == one.mark)
   #expect(back.wavelength == one.wavelength && back.refraction == one.refraction && back.waterRim == one.waterRim)
+  #expect(back.fontSize == one.fontSize && back.end == one.end && back.carousel == nil && back.phrase == nil)
 }
 
-/// The line's ink box in a frame, y up, from where it is brighter than the plane.
-private func litLine(_ frame: FramePixels) -> (minX: Int, maxX: Int, midY: Int)? {
-  var minX = Int.max, maxX = 0, minY = Int.max, maxY = 0
-  for y in 0 ..< frame.height {
-    for x in 0 ..< frame.width {
-      let p = frame.pixel(x: x, yUp: y)
-      guard Int(p.r) + Int(p.g) > 300 else { continue }
-      minX = min(minX, x); maxX = max(maxX, x); minY = min(minY, y); maxY = max(maxY, y)
-    }
-  }
-  return maxX > minX ? (minX, maxX, (minY + maxY) / 2) : nil
-}
-
-@Test func version2LightsTheLineHottestNearestTheLightWithAWedgeOfBeams() throws {
+@Test func version2NeverTurnsTheScreenFullyDarkAndHoldsStill() throws {
   guard MTLCreateSystemDefaultDevice() != nil else { return }
+  let one = try IntroRenderer(config: IntroConfig(version: .one), width: 720, height: 450)
   let c = IntroConfig(version: .two)
-  let renderer = try IntroRenderer(config: c, width: 720, height: 450)
-  let sharp = try renderer.renderFrame(time: c.surfaceStart)
-  let lit = try renderer.renderFrame(time: c.end)
-  let line = try #require(litLine(lit))
-
-  // The first letters burn near white; the far end of the line is red-orange.
-  func colour(_ x0: Int, _ x1: Int) -> (r: Int, b: Int) {
-    var r = 0, b = 0
-    for x in x0 ..< x1 {
-      for y in line.midY - 8 ... line.midY + 8 {
-        let p = lit.pixel(x: x, yUp: y)
-        if Int(p.r) > r { r = Int(p.r); b = Int(p.b) }
-      }
-    }
-    return (r, b)
-  }
-  let start = colour(line.minX, line.minX + 20)
-  let end = colour(line.maxX - 30, line.maxX)
-  #expect(start.r > 230 && start.b > 150)
-  #expect(end.r > 120 && end.b < end.r / 2)
-
-  // Beams fan out from the start of the line, above and below it, where there
-  // was only dark before; away from the wedge it stays dark.
-  // The light sits a little above the line, so the wedge opens more below it.
-  let below = (x: line.minX + 60, y: line.midY - 30)
-  let above = (x: line.minX + 120, y: line.midY + 24)
-  for p in [below, above] {
-    #expect(Int(lit.pixel(x: p.x, yUp: p.y).r) > Int(sharp.pixel(x: p.x, yUp: p.y).r) + 15)
-  }
-  #expect(lit.pixel(x: line.maxX, yUp: min(lit.height - 1, line.midY + 160)).r < 30)
-}
-
-@Test func version2ClosesTheDarkIntoAPlaneAndHoldsStill() throws {
-  guard MTLCreateSystemDefaultDevice() != nil else { return }
-  let c = IntroConfig(version: .two)
-  let renderer = try IntroRenderer(config: c, width: 720, height: 450)
-  renderer.backdrop = try horizonBackdrop(renderer)
-  let end = try renderer.renderFrame(time: c.end)
-  // Away from the light, almost nothing of the stage shows through.
-  let corner = end.pixel(x: 5, yUp: end.height - 5)
-  #expect(corner.a == 255 && max(corner.r, corner.g, corner.b) < 12)
-  #expect(end.bytes == (try renderer.renderFrame(time: c.surfaceEnd)).bytes)
+  let two = try IntroRenderer(config: c, width: 720, height: 450)
+  one.backdrop = try horizonBackdrop(one)
+  two.backdrop = try horizonBackdrop(two)
+  // Like version 1, the dark stays as the ripples left it, darker at the
+  // bottom than the top: the stage still shows near the top while the line
+  // is held.
+  let held = try two.renderFrame(time: c.phrase!.handoff)
+  let reference = try one.renderFrame(time: IntroConfig(version: .one).textFadeEnd)
+  let top = held.pixel(x: 360, yUp: held.height - 5)
+  let bottom = held.pixel(x: 360, yUp: 5)
+  #expect(Int(top.r) + Int(top.g) + Int(top.b) > Int(bottom.r) + Int(bottom.g) + Int(bottom.b) + 20)
+  let oneTop = reference.pixel(x: 360, yUp: reference.height - 5)
+  #expect(abs(Int(top.b) - Int(oneTop.b)) <= 12)
+  // The line is held still for its last moments.
+  let end = try two.renderFrame(time: c.end)
+  #expect(end.bytes == (try two.renderFrame(time: c.end - 0.3)).bytes)
 }
 
 @Test func version2RipplesAreSubtlerAndStillBringTheDarknessIn() throws {
@@ -441,4 +402,170 @@ private func litLine(_ frame: FramePixels) -> (minX: Int, maxX: Int, midY: Int)?
   let darkOne = try one.renderFrame(time: IntroConfig().darknessComplete)
   let darkTwo = try two.renderFrame(time: IntroConfig().darknessComplete)
   #expect(abs(Int(darkOne.pixel(x: 360, yUp: 5).a) - Int(darkTwo.pixel(x: 360, yUp: 5).a)) <= 3)
+}
+
+@Test func theIntroClosesIntoTheWindowItIsHanded() throws {
+  let target = try #require(CloseTarget(
+    command: #"close {"x":240,"y":90,"width":960,"height":720,"radius":16,"color":[23,23,23]}"#
+  ))
+  #expect(target.cornerRadius == 16)
+  #expect(target.color == SIMD3(repeating: 23.0 / 255))
+  // Electron measures from the top; AppKit draws from the bottom.
+  let frame = try #require(target.frame(in: CGSize(width: 1440, height: 900)))
+  #expect(frame == CGRect(x: 240, y: 90, width: 960, height: 720))
+  let low = try #require(CloseTarget(command: #"close {"x":0,"y":0,"width":100,"height":50,"radius":0,"color":null}"#))
+  #expect(low.frame(in: CGSize(width: 1440, height: 900)) == CGRect(x: 0, y: 850, width: 100, height: 50))
+  #expect(low.color == nil)
+  // A window on another display, or nonsense, falls back to a plain fade.
+  #expect(CloseTarget(command: #"close {"x":2000,"y":0,"width":100,"height":50}"#)?
+    .frame(in: CGSize(width: 1440, height: 900)) == nil)
+  #expect(CloseTarget(command: #"close {"x":0,"y":0,"width":0,"height":50}"#) == nil)
+  #expect(CloseTarget(command: "dismiss") == nil)
+}
+
+// The drawn window: version 2 ends by drawing the window it lands in.
+
+private let drawnLayout = #"""
+layout {"window":{"x":60,"y":45,"width":600,"height":360,"radius":16,"color":[23,23,23]},
+"elements":[
+{"kind":"text","group":0,"x":110,"y":80,"width":100,"height":12,"radius":0,"color":null},
+{"kind":"shape","group":1,"x":110,"y":110,"width":240,"height":50,"radius":25,"color":[38,38,38,255]},
+{"kind":"shape","group":1,"x":300,"y":122,"width":36,"height":26,"radius":13,"color":[107,152,255,255]},
+{"kind":"shape","group":2,"x":370,"y":110,"width":240,"height":50,"radius":25,"color":[38,38,38,255]},
+{"kind":"shape","group":3,"x":500,"y":330,"width":110,"height":30,"radius":15,"color":[250,250,250,255]}]}
+"""#.replacingOccurrences(of: "\n", with: "")
+
+@Test func theWindowIsPrintedTopToBottomOnceTheLineIsHeld() throws {
+  let c = IntroConfig(version: .two)
+  let drawing = try #require(WindowDrawing(command: drawnLayout, origin: .zero, scale: 2, config: c))
+  // Points become device pixels; the window comes first.
+  #expect(drawing.shapes.count == 6)
+  #expect(drawing.shapes[0].rect == CGRect(x: 120, y: 90, width: 1200, height: 720))
+  #expect(drawing.shapes[2].radius == 50 && drawing.shapes[2].fill == SIMD4(38.0 / 255, 38.0 / 255, 38.0 / 255, 1))
+  // It starts once the line has been printed and held.
+  #expect(drawing.start == c.phrase!.handoff && drawing.printed > drawing.start && drawing.end > drawing.printed)
+  #expect(drawing.end > c.end)
+  // Nothing is printed before it starts, everything once it ends.
+  #expect(drawing.scan(time: drawing.start) == .blank)
+  #expect(drawing.scan(time: drawing.printed).isPrinted([700, 800]))
+  let scan = drawing.scan(time: (drawing.start + drawing.printed) / 2)
+  #expect(scan.left < 120 && scan.right > 1320 && scan.head >= scan.left && scan.head <= scan.right)
+  // The window alone is a layout too: it is printed and filled.
+  let alone = try #require(WindowDrawing(
+    command: #"layout {"window":{"x":0,"y":0,"width":10,"height":10},"elements":[]}"#,
+    origin: .zero, scale: 1, config: c
+  ))
+  #expect(alone.shapes.count == 1 && alone.end > alone.start && alone.heading == nil)
+  #expect(WindowDrawing(command: "dismiss", origin: .zero, scale: 1, config: c) == nil)
+}
+
+@Test func thePrinterMovesInJoltsAndPassesLikeARealOne() {
+  let area = CGRect(x: 100, y: 100, width: 800, height: 400)
+  let bands = 4
+  let (start, end) = (0.0, 4.0)
+  func at(_ t: Double) -> ScanLine { scanLine(sweeping: area, bands: bands, from: start, to: end, time: t) }
+  // Band 1 (of 4) runs from 1s to 2s: a feed, then a pass.
+  // The feed jolts the line down a band, overshooting a little before it settles.
+  let feed = (0 ..< 20).map { at(1 + 0.2 * Double($0) / 20).y }
+  #expect(feed.first! < 205 && feed.max()! > 300 && abs(at(1.2).y - 300) < 1)
+  // Then the paper stops dead while the head crosses: the line doesn't move.
+  #expect(at(1.3).y == 300 && at(1.6).y == 300 && at(1.95).y == 300)
+  // The head runs right to left on this pass (left to right on the one
+  // before), slowly at the ends, and prints only behind itself.
+  let early = at(1.3), middle = at(1.6)
+  #expect(!early.fromLeft && at(0.6).fromLeft)
+  #expect(early.head > middle.head && middle.head > at(1.9).head)
+  #expect(middle.isPrinted([middle.head + 20, 250]) && !middle.isPrinted([middle.head - 20, 250]))
+  #expect(middle.isPrinted([150, 150]) && !middle.isPrinted([500, 350]))
+  let endSpeed = abs(at(1.24).head - at(1.25).head)
+  let midSpeed = abs(at(1.6).head - at(1.61).head)
+  #expect(endSpeed < midSpeed / 3)
+  #expect(at(start) == .blank && at(end).isPrinted([800, 499]))
+}
+
+@Test func theLaserPrintsTheLineAtTheMiddleAfterTheRipples() throws {
+  let c = IntroConfig(version: .two)
+  let phrase = try #require(c.phrase)
+  #expect(phrase.text == "One interface to control your agents")
+  #expect(phrase.appear > c.darknessComplete && phrase.handoff > phrase.printed)
+  let g = IntroGeometry(width: 1440, height: 900, config: c)
+  // It sits at the middle of the display, and stays there.
+  let box = phraseBox(config: c, geometry: g, width: 600, height: 60)
+  #expect(box == CGRect(x: 420, y: 420, width: 600, height: 60))
+  // The printer works down over it, band by band, then is done.
+  #expect(phraseScan(time: phrase.appear, config: c, geometry: g, width: 600, height: 60) == .blank)
+  let early = try #require(phraseScan(time: phrase.appear + 0.3, config: c, geometry: g, width: 600, height: 60))
+  let late = try #require(phraseScan(time: phrase.printed - 0.1, config: c, geometry: g, width: 600, height: 60))
+  #expect(early.y < late.y && early.left < 420 && early.right > 1020)
+  let done = try #require(phraseScan(time: phrase.printed + 0.5, config: c, geometry: g, width: 600, height: 60))
+  #expect(done.isPrinted([720, 470]) && done.opacity == 0)
+}
+
+@Test func theCarouselRollsThroughTheAgentsAndLandsOnTheHeading() throws {
+  var c = IntroConfig(version: .two)
+  var rolling = Carousel()
+  rolling.appear = c.darknessComplete + 0.2
+  rolling.firstStep = rolling.appear + rolling.appearDuration
+  c.carousel = rolling
+  c.phrase = nil
+  let carousel = try #require(c.carousel)
+  let g = IntroGeometry(width: 1440, height: 900, config: c)
+  let widths = ([carousel.lead] + carousel.all).map { Double($0.count) * 30 }
+  // Each word in turn is the bright one, slowing down, and it ends on "any agent".
+  #expect(carousel.all.first == "Claude" && carousel.all.last == "any agent")
+  for i in 1 ..< carousel.all.count {
+    #expect(carousel.stepTime(i) - carousel.stepTime(i - 1) > (i > 1 ? carousel.stepTime(i - 1) - carousel.stepTime(i - 2) : 0))
+  }
+  func brightest(_ t: Double) -> Int? {
+    carouselPlacements(time: t, config: c, geometry: g, widths: widths, heading: nil)
+      .filter { $0.index > 0 }.max { $0.opacity < $1.opacity }?.index
+  }
+  // Nothing of it shows until the ripples have crossed the display.
+  #expect(carousel.appear > c.darknessComplete && carousel.firstStep >= carousel.appear)
+  #expect(carouselPlacements(time: c.darknessComplete, config: c, geometry: g, widths: widths, heading: nil).isEmpty)
+  #expect(brightest(carousel.stepTime(2) + carousel.slide) == 3)
+  #expect(brightest(carousel.landed) == carousel.all.count)
+  // Before the hand-off its neighbours show faintly; after it only "Run any agent" is left.
+  let held = carouselPlacements(time: carousel.landed, config: c, geometry: g, widths: widths, heading: nil)
+  #expect(held.count > 2)
+  let heading = CGRect(x: 300, y: 200, width: 200, height: 40)
+  let landed = carouselPlacements(
+    time: carousel.handoff + carousel.landing, config: c, geometry: g, widths: widths, heading: heading
+  )
+  #expect(landed.map(\.index) == [0, carousel.all.count])
+  // "Run" sits on the heading's left edge, at its middle and at its size.
+  let run = landed[0]
+  #expect(abs(run.origin.x - 300) < 0.5 && abs(run.origin.y - 220) < 0.5)
+  #expect(abs(run.scale - 40 / 1.4 / (c.fontSize * g.q)) < 1e-9)
+  #expect(abs(landed[1].origin.y - 220) < 0.5 && landed[1].origin.x > run.origin.x)
+}
+
+@Test func theDrawnWindowEndsInTheRealWindowsColours() throws {
+  guard MTLCreateSystemDefaultDevice() != nil else { return }
+  let c = IntroConfig(version: .two)
+  let renderer = try IntroRenderer(config: c, width: 720, height: 450)
+  renderer.drawing = try #require(WindowDrawing(command: drawnLayout, origin: .zero, scale: 1, config: c))
+  let drawing = try #require(renderer.drawing)
+  #expect(renderer.end == drawing.end)
+
+  // Halfway through, the bands above the one being printed are there and
+  // the window below it isn't yet.
+  let halfway = (drawing.start + drawing.printed) / 2
+  let half = try renderer.renderFrame(time: halfway)
+  let scan = drawing.scan(time: halfway)
+  #expect(half.pixel(x: 90, yUp: 450 - Int(scan.top) + 10).a == 255)
+  #expect(half.pixel(x: 90, yUp: 450 - Int(scan.y) - 20).a < 255)
+
+  // At the end: the window's background, the card's grey, the toggle's blue
+  // and the button's white, each where the real one is.
+  let end = try renderer.renderFrame(time: renderer.end)
+  func near(_ p: (r: UInt8, g: UInt8, b: UInt8, a: UInt8), _ rgb: (Int, Int, Int)) -> Bool {
+    abs(Int(p.r) - rgb.0) <= 3 && abs(Int(p.g) - rgb.1) <= 3 && abs(Int(p.b) - rgb.2) <= 3
+  }
+  #expect(near(end.pixel(x: 90, yUp: 450 - 300), (23, 23, 23)))
+  #expect(near(end.pixel(x: 200, yUp: 450 - 135), (38, 38, 38)))
+  #expect(near(end.pixel(x: 318, yUp: 450 - 135), (107, 152, 255)))
+  #expect(near(end.pixel(x: 555, yUp: 450 - 345), (250, 250, 250)))
+  // Nothing is drawn outside the window.
+  #expect(end.pixel(x: 20, yUp: 20).r < 12)
 }

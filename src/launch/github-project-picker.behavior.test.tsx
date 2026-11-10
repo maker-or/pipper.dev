@@ -46,6 +46,7 @@ beforeEach(() => {
     openExternal,
     onCreated,
     onBusyChange,
+    onUsernameChange,
   ])
     mock.mockReset();
   getStatus.mockResolvedValue(ready);
@@ -70,9 +71,32 @@ const button = (label: string) =>
       ? el.textContent?.includes(label)
       : el.textContent?.trim() === label,
   )!;
-const render = () =>
+const onUsernameChange = vi.fn();
+const render = (props: { isSearchOpen?: boolean } = {}) =>
   act(async () =>
-    root.render(<GitHubProjectPicker onCreated={onCreated} onBusyChange={onBusyChange} />),
+    root.render(
+      <GitHubProjectPicker
+        onCreated={onCreated}
+        onBusyChange={onBusyChange}
+        onUsernameChange={onUsernameChange}
+        {...props}
+      />,
+    ),
+  );
+const renderStage = (authUser = { name: "User", email: null as string | null }) =>
+  act(async () =>
+    root.render(
+      <AuthenticatedStage
+        authUser={authUser}
+        projects={[]}
+        selectedId={null}
+        isOpening={false}
+        isLoading={false}
+        loadError={null}
+        handleOpen={vi.fn()}
+        handleProjectCreated={onCreated}
+      />,
+    ),
   );
 
 test("guides installation, then login, and rechecks without restarting", async () => {
@@ -90,7 +114,7 @@ test("guides installation, then login, and rechecks without restarting", async (
   );
   expect(listRepositories).not.toHaveBeenCalled();
   await act(async () => button("I’ve signed in").click());
-  expect(host.textContent).toContain("Connected as octocat");
+  expect(onUsernameChange).toHaveBeenLastCalledWith("octocat");
   expect(host.textContent).toContain("team/app");
 });
 
@@ -100,11 +124,8 @@ test("loads beyond the first page and filters repositories by organization", asy
     repositories: [{ ...repo, id: 2, fullName: "another/service" }],
     hasMore: false,
   });
-  await render();
+  await render({ isSearchOpen: true });
   expect(listRepositories.mock.calls.map(([page]) => page)).toEqual([1, 2]);
-  await act(async () =>
-    host.querySelector<HTMLButtonElement>('[aria-label="Search repositories"]')!.click(),
-  );
   const input = host.querySelector("input")!;
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
@@ -165,7 +186,6 @@ test("restarts pagination when retrying a failed later repository page", async (
   await act(async () => button("Retry").click());
   expect(listRepositories.mock.calls.map(([page]) => page)).toEqual([1, 2, 1]);
   expect(host.querySelector('[role="alert"]')).toBeNull();
-  expect(host.querySelectorAll('button[aria-label="Search repositories"]')).toHaveLength(1);
 });
 
 test("rechecks when the user returns from terminal login and works in Strict Mode", async () => {
@@ -173,14 +193,20 @@ test("rechecks when the user returns from terminal login and works in Strict Mod
   await act(async () =>
     root.render(
       <StrictMode>
-        <GitHubProjectPicker onCreated={onCreated} onBusyChange={onBusyChange} />
+        <GitHubProjectPicker
+          onCreated={onCreated}
+          onBusyChange={onBusyChange}
+          onUsernameChange={onUsernameChange}
+        />
       </StrictMode>,
     ),
   );
   expect(host.textContent).toContain("Sign in to GitHub");
+  expect(onUsernameChange).toHaveBeenLastCalledWith(null);
   getStatus.mockResolvedValue(ready);
   await act(async () => window.dispatchEvent(new Event("focus")));
-  expect(host.textContent).toContain("Connected as octocat");
+  expect(onUsernameChange).toHaveBeenLastCalledWith("octocat");
+  expect(host.textContent).toContain("team/app");
 });
 
 test("never chooses a folder for a GitHub project", async () => {
@@ -202,7 +228,7 @@ test("never chooses a folder for a GitHub project", async () => {
   expect(host.textContent).toContain("No folder selected");
   expect(getStatus).not.toHaveBeenCalled();
   await act(async () => button("GitHub").click());
-  expect(host.textContent).toContain("Select a repository");
+  expect(host.textContent).toContain("team/app");
   expect(host.textContent).not.toContain("No folder selected");
   await act(async () => button("team/app").click());
   expect(onCreated).toHaveBeenCalledWith(project);
@@ -242,4 +268,44 @@ test("keeps the active source stable and prevents duplicate selections while clo
   await act(async () => finish(project));
   expect(onCreated).toHaveBeenCalledWith(project);
   expect(button("Local").getAttribute("aria-disabled")).not.toBe("true");
+});
+
+test("greets the connected GitHub user and searches from the header", async () => {
+  window.history.replaceState({}, "", "/");
+  sessionStorage.setItem("pipper.launch.agentPicked", "1");
+  sessionStorage.setItem("pipper.launch.sleeplessConfigured", "1");
+  sessionStorage.setItem("pipper.launch.shortcutsShown", "1");
+  listRepositories.mockResolvedValue({
+    repositories: [repo, { ...repo, id: 2, fullName: "another/service" }],
+    hasMore: false,
+  });
+  await renderStage({ name: null, email: null });
+  const heading = () => host.querySelector("h1")!.textContent;
+  expect(heading()).toContain("Welcome");
+  expect(host.querySelector('[aria-label="Search repositories"]')).toBeNull();
+  await act(async () => button("GitHub").click());
+  expect(heading()).toContain("Welcome octocat");
+  expect(host.textContent).not.toContain("Select a repository");
+  expect(host.textContent).not.toContain("Connected as");
+  const search = host.querySelector<HTMLButtonElement>('[aria-label="Search repositories"]')!;
+  expect(host.querySelector("header")!.contains(search)).toBe(true);
+  await act(async () => search.click());
+  const input = host.querySelector("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(
+      input,
+      "another",
+    );
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(host.textContent).not.toContain("team/app");
+  // Closing search clears the filter so every repository is listed again.
+  await act(async () => search.click());
+  expect(host.querySelector("input")).toBeNull();
+  expect(host.textContent).toContain("team/app");
+  // The search toggle belongs to the GitHub source only.
+  await act(async () => button("Local").click());
+  expect(host.querySelector('[aria-label="Search repositories"]')).toBeNull();
+  expect(heading()).toContain("Welcome octocat");
+  sessionStorage.clear();
 });

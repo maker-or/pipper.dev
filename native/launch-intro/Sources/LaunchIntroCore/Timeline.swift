@@ -21,10 +21,14 @@ public struct IntroConfig: Sendable {
   public private(set) var version: Version = .one
 
   /// What happens once the line is sharp. Version 1 raises the @ under the
-  /// surface; version 2 lights the line from behind.
+  /// surface. `backlit` lights the line from behind and closes the dark into
+  /// a solid plane. Version 2 is `still`: the water settles and the darkness
+  /// stays as the ripples left it, darker at the bottom than at the top, so
+  /// the screen never turns fully dark.
   public enum Ending: Sendable {
     case surfacing
     case backlit
+    case still
   }
 
   public var ending: Ending = .surfacing
@@ -49,7 +53,17 @@ public struct IntroConfig: Sendable {
   public var surfaceStart: Double { textFadeEnd }
   public var surfaceEnd: Double { surfaceStart + surfaceDuration }
   /// The last frame; it is held until the host dismisses the overlay.
-  public var end: Double { surfaceEnd + surfaceHold }
+  /// With a carousel, not before its phrase has been held a moment.
+  public var end: Double {
+    max(surfaceEnd + surfaceHold, (carousel?.handoff ?? phrase?.handoff ?? 0) + 1)
+  }
+
+  /// Version 2's rolling "Run … any agent" line (Carousel.swift); nil for
+  /// none.
+  public var carousel: Carousel?
+  /// Version 2's "One interface to control your agents" (Carousel.swift);
+  /// nil for none.
+  public var phrase: Phrase?
 
   /// Stone sits this fraction of the display height below the bottom edge.
   public var stoneDepth: Double = 0.2
@@ -189,12 +203,27 @@ public struct IntroConfig: Sendable {
       waterSheen = base.waterSheen
       waterSheenPower = base.waterSheenPower
       waterRim = base.waterRim
+      fontSize = base.fontSize
+      shaftStrength = base.shaftStrength
+      surfaceDuration = base.surfaceDuration
+      carousel = base.carousel
+      phrase = base.phrase
     case .two:
-      // The line is lit from behind instead of anything surfacing.
-      ending = .backlit
-      text = "One interface to control your agents"
+      // Nothing surfacing: one line (Carousel.swift) that becomes the
+      // heading of the window the user lands in, drawn out from it
+      // (WindowDrawing.swift). The darkness stays as the ripples left it.
+      // The rolling "Run … any agent" carousel can replace the line.
+      ending = .still
+      text = ""
       fontSize = 52
       mark = ""
+      surfaceDuration = 1
+      // The line waits for the water: it appears once the last ripple has
+      // crossed the display.
+      var line = Phrase()
+      line.appear = darknessComplete + 0.2
+      phrase = line
+      carousel = nil
       // Long, low swells: a gentle slope, so the shading stays soft, but
       // enough bending that the stage visibly moves under each one.
       wavelength = 150
@@ -207,6 +236,8 @@ public struct IntroConfig: Sendable {
       waterSheen = 0.16
       waterSheenPower = 14
       waterRim = 0.03
+      // The letters glow with the light behind them, but throw no beams.
+      shaftStrength = 0
     }
   }
 
@@ -367,6 +398,7 @@ public func textFrame(time t: Double, q: Double, config c: IntroConfig) -> TextF
     // light spreads along it, so no letter goes dark before the light arrives.
     return TextFrame(opacity: 1 - surfaceFrame(time: t, config: c).rise, blur: 0)
   }
+  if c.ending == .still { return TextFrame(opacity: 1, blur: 0) }
   let away = surfaceFrame(time: t, config: c).textAway
   // Gone before it is blurred enough to smear into a streak.
   return TextFrame(opacity: (1 - away) * (1 - away), blur: away * c.maxTextBlur * q)
@@ -413,6 +445,13 @@ public struct SurfaceFrame: Sendable, Equatable {
 public func surfaceFrame(time t: Double, config c: IntroConfig) -> SurfaceFrame {
   let elapsed = t - c.surfaceStart
   let s = min(1, max(0, elapsed / max(1e-6, c.surfaceDuration)))
+  if c.ending == .still {
+    // Only the water settles; nothing rises or darkens further.
+    return SurfaceFrame(
+      calm: elapsed <= 0 ? 1 : 1 - smootherstep(0, max(1e-6, c.calmDuration), elapsed),
+      rise: 0, focus: 0, presence: 0, textAway: 0
+    )
+  }
   if c.ending == .backlit {
     // rise: how far along the line the light has spread from the first
     // letter; focus: how far the shafts reach; presence: how bright it is.

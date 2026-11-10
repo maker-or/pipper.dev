@@ -18,14 +18,11 @@ export interface TabReorderOptions {
   threshold: number;
   /** Fraction of the narrower tab to come back before a swap undoes. */
   hysteresis: number;
-  /** Swaps stop while the held tab is this far above or below the strip. */
-  freezeDistance: number;
 }
 
 export const DEFAULT_TAB_REORDER: TabReorderOptions = {
   threshold: 0.45,
   hysteresis: 0.1,
-  freezeDistance: 40,
 };
 
 /** Where and which way the held tab was when it last passed each neighbour. */
@@ -43,8 +40,6 @@ export interface TabReorderInput {
   heldId: string;
   /** Left of the held tab, in the same coordinates as `origin`. */
   heldLeft: number;
-  /** How far the held tab is above (−) or below (+) the strip. */
-  heldOffsetY: number;
   memory: TabSwapMemory;
 }
 
@@ -75,7 +70,6 @@ export function reorderHeldTab(
   const order = [...input.order];
   const memory = new Map(input.memory);
   const unchanged = { order, memory };
-  if (Math.abs(input.heldOffsetY) > options.freezeDistance) return unchanged;
   const heldWidth = input.widths.get(input.heldId);
   if (heldWidth === undefined || !order.includes(input.heldId)) return unchanged;
 
@@ -127,4 +121,37 @@ export function reconcileDragOrder(
   const kept = dragOrder.filter((id) => present.has(id));
   const seen = new Set(kept);
   return [...kept, ...current.filter((id) => !seen.has(id))];
+}
+
+/**
+ * Past either end of the strip a held tab moves a fraction of the pointer's
+ * travel, so the edge pushes back instead of stopping it dead.
+ */
+export function rubberBand(value: number, min: number, max: number, elastic = 0.2): number {
+  if (value < min) return min - (min - value) * elastic;
+  if (value > max) return max + (value - max) * elastic;
+  return value;
+}
+
+/** A pointer position and when it was there, in ms. */
+export interface PointerSample {
+  x: number;
+  t: number;
+}
+
+/** How far back release velocity looks. */
+const VELOCITY_WINDOW_MS = 100;
+/** A pointer that sat this long before lifting was at rest. */
+const VELOCITY_STALE_MS = 50;
+
+/**
+ * The pointer's speed (px/s) when it lifted, from the samples of the last
+ * `VELOCITY_WINDOW_MS`. A pointer that paused before lifting has none.
+ */
+export function releaseVelocity(samples: readonly PointerSample[], now: number): number {
+  const last = samples.at(-1);
+  if (!last || now - last.t > VELOCITY_STALE_MS) return 0;
+  const first = samples.find((sample) => last.t - sample.t <= VELOCITY_WINDOW_MS) ?? last;
+  const dt = last.t - first.t;
+  return dt > 0 ? ((last.x - first.x) / dt) * 1000 : 0;
 }

@@ -3,8 +3,12 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  FIRST_LAUNCH_INTRO_VERSION,
   LAUNCH_INTRO_VERSIONS,
   launchIntroArgs,
+  introWindowLayout,
+  macWindowCornerRadius,
+  placeIntroLayout,
   resolveLaunchIntroHelperPath,
   shouldPlayLaunchIntro,
   startFirstLaunchIntro,
@@ -88,6 +92,23 @@ describe("when the intro plays", () => {
     expect(await startFirstLaunchIntro(input)).toBeNull();
   });
 
+  test("a new user sees version 2", async () => {
+    const argsFile = join(root, "args");
+    const session = await startFirstLaunchIntro({
+      platform: "darwin",
+      env: {},
+      userDataDir: join(root, "userData"),
+      onboardingCompleted: false,
+      helperPath: fakeHelper(`
+fs.writeFileSync(${JSON.stringify(argsFile)}, JSON.stringify(process.argv.slice(2)));
+emit({ type: "complete" });
+`),
+    });
+    expect(await session?.finished).toBe("complete");
+    expect(FIRST_LAUNCH_INTRO_VERSION).toBe(2);
+    expect(JSON.parse(readFileSync(argsFile, "utf8"))).toEqual(launchIntroArgs(2));
+  });
+
   test("is skipped when the helper isn't built", async () => {
     const session = await startFirstLaunchIntro({
       platform: "darwin",
@@ -127,6 +148,156 @@ describe("a running intro", () => {
     session.dismiss();
     await waitFor(() => existsSync(dismissFile));
     expect(readFileSync(dismissFile, "utf8")).toBe("dismissed");
+  });
+
+  test("ends by closing into the window it is handed", async () => {
+    const commandFile = join(root, "command");
+    const session = startLaunchIntro({
+      helperPath: fakeHelper(`
+emit({ type: "complete" });
+process.stdin.on("data", (data) => {
+  fs.writeFileSync(${JSON.stringify(commandFile)}, String(data));
+  process.exit(0);
+});
+`),
+      log: () => {},
+    });
+    expect(await session.finished).toBe("complete");
+    const target = {
+      x: 240,
+      y: 90,
+      width: 960,
+      height: 720,
+      radius: 16,
+      color: [23, 23, 23] as [number, number, number],
+    };
+    session.closeInto(target);
+    await waitFor(() => existsSync(commandFile));
+    const command = readFileSync(commandFile, "utf8").trim();
+    expect(command.startsWith("close ")).toBe(true);
+    expect(JSON.parse(command.slice("close ".length))).toEqual(target);
+  });
+
+  test("draws the window it is handed, without waiting on the helper", async () => {
+    const commandFile = join(root, "layout");
+    const session = startLaunchIntro({
+      helperPath: fakeHelper(`
+process.stdin.on("data", (data) => {
+  fs.writeFileSync(${JSON.stringify(commandFile)}, String(data));
+  emit({ type: "complete" });
+});
+`),
+      log: () => {},
+    });
+    const layout = {
+      window: {
+        x: 240,
+        y: 90,
+        width: 960,
+        height: 720,
+        radius: 16,
+        color: [23, 23, 23] as [number, number, number],
+      },
+      elements: [
+        {
+          kind: "shape" as const,
+          group: 1,
+          x: 300,
+          y: 200,
+          width: 340,
+          height: 60,
+          radius: 28,
+          color: [38, 38, 38, 255] as [number, number, number, number],
+        },
+      ],
+    };
+    session.drawWindow(layout);
+    expect(await session.finished).toBe("complete");
+    const command = readFileSync(commandFile, "utf8").trim();
+    expect(command.startsWith("layout ")).toBe(true);
+    expect(JSON.parse(command.slice("layout ".length))).toEqual(layout);
+  });
+
+  test("places the measured page on screen, or nothing until the picker has loaded", () => {
+    const card = {
+      kind: "shape" as const,
+      group: 1,
+      x: 100,
+      y: 50,
+      width: 340,
+      height: 59.3,
+      radius: 29.6,
+      color: [38, 38, 38, 255] as [number, number, number, number],
+    };
+    const heading = {
+      kind: "text" as const,
+      group: 0,
+      x: 100,
+      y: 20,
+      width: 99,
+      height: 12.2,
+      radius: 0,
+      color: null,
+    };
+    const placed = placeIntroLayout({
+      page: { background: [23, 23, 23], elements: [heading, card] },
+      windowBounds: { x: 240, y: 90, width: 960, height: 720 },
+      contentBounds: { x: 240, y: 90 },
+      zoom: 1,
+      radius: 16,
+    });
+    expect(placed?.window).toEqual({
+      x: 240,
+      y: 90,
+      width: 960,
+      height: 720,
+      radius: 16,
+      color: [23, 23, 23],
+    });
+    // Page pixels from the window's content origin, to the nearest half point.
+    expect(placed?.elements[1]).toEqual({ ...card, x: 340, y: 140, height: 59.5, radius: 29.5 });
+    expect(placed?.elements[0]).toMatchObject({
+      kind: "text",
+      x: 340,
+      y: 110,
+      width: 99,
+      height: 12,
+    });
+    // Zoomed pages scale with it.
+    const zoomed = placeIntroLayout({
+      page: { background: null, elements: [card] },
+      windowBounds: { x: 0, y: 0, width: 960, height: 720 },
+      contentBounds: { x: 0, y: 0 },
+      zoom: 1.5,
+      radius: 16,
+    });
+    expect(zoomed?.elements[0]).toMatchObject({ x: 150, y: 75, width: 510 });
+    // A page with nothing to outline (sign-in, or cards still loading).
+    expect(
+      placeIntroLayout({
+        page: { background: [23, 23, 23], elements: [heading] },
+        windowBounds: { x: 0, y: 0, width: 960, height: 720 },
+        contentBounds: { x: 0, y: 0 },
+        zoom: 1,
+        radius: 16,
+      }),
+    ).toBeNull();
+  });
+
+  test("hands over the window's frame alone before its page has loaded", () => {
+    expect(introWindowLayout({ x: 240, y: 90, width: 960, height: 720 }, 16, "#171717")).toEqual({
+      window: { x: 240, y: 90, width: 960, height: 720, radius: 16, color: [23, 23, 23] },
+      elements: [],
+    });
+    expect(
+      introWindowLayout({ x: 0, y: 0, width: 10, height: 10 }, 10, "none").window.color,
+    ).toBeNull();
+  });
+
+  test("matches the window's rounder corners from macOS 26", () => {
+    expect(macWindowCornerRadius("24.6.0")).toBe(10);
+    expect(macWindowCornerRadius("25.0.0")).toBe(16);
+    expect(macWindowCornerRadius("27.3.0")).toBe(16);
   });
 
   test("plays the version it was asked for", async () => {

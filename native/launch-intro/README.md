@@ -10,8 +10,9 @@ Everything visible is drawn by the Metal shader in
 - `LaunchIntroCore`: timeline, shaders and renderer. Every frame is a pure
   function of seconds since start; `Timeline.swift` holds all values.
 - `PipperLaunchIntro`: the overlay app. It reports `started`, `complete`,
-  `skipped` and `dismissed` as JSON lines on stdout, takes `dismiss` on stdin,
-  and exits when stdin closes. `electron/launch-intro.ts` is the host.
+  `skipped` and `dismissed` as JSON lines on stdout, takes `layout {json}`,
+  `close {json}` and `dismiss` on stdin, and exits when stdin closes.
+  `electron/launch-intro.ts` is the host.
 
 Then the stone turns out to have been the @. Once the line is sharp the water
 goes still and the line softens away, and a vast @ rises from where the stone
@@ -26,20 +27,60 @@ function of time. `ripple_fragment` draws everything up to the sharp line and
 `surface_fragment` everything after, so the opening's frames stay
 byte-for-byte what they were.
 
-There are two versions, sharing the timeline. Version 1 is the above: bold
+There are two versions, sharing the ripples. Version 1 is the above: bold
 ripples (dark bands, bright rims and glints) and the @ surfacing. Version 2
 (`IntroConfig(version: .two)`) has subtle ripples, long low swells that bend
-the stage, catch a soft light and bring the darkness in (`water_v2_fragment`),
-and a backlit ending (`backlight_fragment`): its line, "One interface to
-control your agents", sharpens in white, then the dark closes into a solid
-plane with the line cut through it and a light behind it, just up and to the
-left of the first letter, shines through. The letters burn white nearest the
-light, through Pipper's amber `#FFAA4F`, to red-orange at the far end, and
-their beams fan away from the light in a wedge that points back at it, the way
-Pipper's cursor points. Only the letters nearest the light throw much of a
-beam, so the line stays readable. The values are the `light…`, `shaft…`,
-`letter…`, `beamSoftness` and `planeDarkness` settings in `Timeline.swift`.
-The first launch plays version 1; the Dock menu replays either.
+the stage, catch a soft light and bring the darkness in (`water_v2_fragment`);
+once they have passed, the darkness stays as they left it, darker at the
+bottom than at the top as in version 1, so the screen never turns fully dark
+(`Ending.still`; the backlit ending's solid plane is `planeDarkness`).
+The backlit line (`backlight_fragment`, the `light…`, `shaft…` and `letter…`
+settings) is still supported but version 2 no longer shows it.
+
+Version 2's line is "One interface to control your agents" (`Phrase` in
+`Carousel.swift`). Once the last ripple has crossed the display, a laser
+prints it at the middle: a thin blue scan line with a bright head
+(`scan_fragment`) works down over it like a real printer (`scanLine` in
+`Carousel.swift`). It prints in bands: the paper feeds one band down with a
+quick jolt that overshoots a little and settles, then stops dead while the
+head travels across, speeding up and slowing at each end and printing behind
+itself, alternating direction each band (`word_fragment` and
+`drawing_fragment` show only what is printed). It is held there, then a second sweep prints the window
+the user is about to land in, top to bottom down its real frame
+(`WindowDrawing.swift`, `drawing_fragment`): above the scan line the window
+is already in its real colours (background, cards, toggles, button, soft bars
+for its text), with a thin outline glowing on the rows just printed, and it is
+printed over the line as it passes. The last frame is the window without its
+text and icons, in exactly its place, and the hand-over fades it into the
+real window (about 1.5s, easing in and out) while the dark draws in around
+it. Version 2 runs about 10.3s.
+
+A rolling "Run Claude, Codex … any agent" carousel (`Carousel`) can take the
+line's place: set `carousel` instead of `phrase` in `IntroConfig.use(.two)`.
+
+Nothing about that window is built in. While the intro plays, the launch
+window is already loaded, hidden; the host measures every element marked
+`data-intro-outline` in it (`INTRO_LAYOUT_SCRIPT` in
+`electron/launch-intro.ts`: `text`, `card`, `toggle`, `button`) until the
+agent picker has loaded and holds still, and sends it as `layout {json}`
+(the window's frame alone goes first, as soon as the window exists; the
+elements must arrive before the window starts printing):
+the window's frame, corners and background and each element's box, corners
+and colour, in screen points. A colour carries the element's opacity and its
+parents', so a disabled (half-transparent) button is drawn half-transparent. A layout that arrives after the drawing would
+have started, or none at all (say, a sign-in screen), ends the intro as
+before. To draw a different screen, mark its elements the same way.
+
+The first launch plays version 2; the Dock menu replays either.
+
+It ends in a window rather than fading. Once the last frame is held, the host
+shows the launch window under the overlay and sends `close` with its frame
+(points, from the top left of the menu-bar display), corner radius and
+background colour (`CloseTarget.swift`). The dark draws in to that rounded
+rectangle while the desktop comes back around it, takes on the window's
+colour, then the overlay fades to reveal the real window in the same place.
+A skipped or failed intro, or a window on another display, just fades. Dock
+replays close into whichever Pipper window is open.
 
 The first front washes the screen over to a stage: the desktop picture (the
 light or dark frame of a dynamic one, the still of an aerial), so from then on
@@ -61,6 +102,9 @@ swift build -c release
 .build/release/pipper-launch-intro --intro-version 2   # version 2
 .build/release/pipper-launch-intro --render-frames /tmp/intro \
   --times 0,1,2,3,4.267 --size 1440x900 --background wallpaper.heic --screen desktop.png
+# version 2's drawn window, from a layout's JSON in the frame's pixels
+.build/release/pipper-launch-intro --intro-version 2 --render-frames /tmp/intro \
+  --times 9,10,11,12 --size 1440x900 --background wallpaper.heic --layout layout.json
 ```
 
 ## Sound and haptics

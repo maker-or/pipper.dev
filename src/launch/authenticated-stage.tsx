@@ -5,6 +5,7 @@ import {
   CircleNotch,
   FolderIcon,
   GithubLogo,
+  MagnifyingGlass,
 } from "@phosphor-icons/react";
 import type { Project } from "../../contracts/projects.ts";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,8 @@ export function AuthenticatedStage({
   const loadAgents = useAgentRegistryStore((s) => s.load);
   const [projectSource, setProjectSource] = useState("local");
   const [isAddingProject, setIsAddingProject] = useState(false);
+  const [githubUsername, setGithubUsername] = useState<string | null>(null);
+  const [isGitHubSearchOpen, setIsGitHubSearchOpen] = useState(false);
 
   const [stage, setStage] = useState<LaunchStage>(() => {
     if (typeof window !== "undefined") {
@@ -111,6 +114,24 @@ export function AuthenticatedStage({
   useEffect(() => {
     trackOnboarding(`stage_${stage}_viewed`, "viewed", true);
   }, [stage]);
+
+  const welcomeName = authUser.name ?? githubUsername ?? authUser.email;
+  const githubSearchButton = projectSource === "github" && githubUsername != null && (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon-sm"
+      aria-label="Search repositories"
+      title="Search repositories"
+      aria-expanded={isGitHubSearchOpen}
+      active={isGitHubSearchOpen}
+      disabled={isAddingProject || isOpening}
+      onClick={() => setIsGitHubSearchOpen((open) => !open)}
+      className="shrink-0"
+    >
+      <MagnifyingGlass size={16} aria-hidden />
+    </Button>
+  );
 
   return (
     <div className="h-screen w-screen relative overflow-hidden bg-surface-1 text-foreground flex items-center justify-center p-6">
@@ -240,10 +261,11 @@ export function AuthenticatedStage({
         ) : (
           <>
             {stage === "list" && (
-              <header>
-                <h1 className="truncate text-2xl font-bold tracking-tight text-foreground">
-                  👋🏻 {authUser.name ?? authUser.email ?? "Welcome"}
+              <header className="flex items-center justify-between gap-3">
+                <h1 className="min-w-0 truncate text-2xl font-bold tracking-tight text-foreground">
+                  👋🏻 {welcomeName ? `Welcome ${welcomeName}` : "Welcome"}
                 </h1>
+                {githubSearchButton}
               </header>
             )}
             {stage === "add" && (
@@ -266,14 +288,18 @@ export function AuthenticatedStage({
                 >
                   <ArrowLeft className="size-4" strokeWidth={1.75} />
                 </button>
-                <h1 className="text-2xl font-semibold text-foreground tracking-tight">
+                <h1 className="flex-1 text-2xl font-semibold text-foreground tracking-tight">
                   New project
                 </h1>
+                {githubSearchButton}
               </header>
             )}
             <Tabs
               value={projectSource}
-              onValueChange={setProjectSource}
+              onValueChange={(next) => {
+                setProjectSource(next);
+                setIsGitHubSearchOpen(false);
+              }}
               className="flex flex-col gap-6"
             >
               <TabsList aria-label="Project source" className="w-full">
@@ -381,6 +407,8 @@ export function AuthenticatedStage({
               <TabPanel value="github">
                 <GitHubProjectPicker
                   disabled={isOpening}
+                  isSearchOpen={isGitHubSearchOpen}
+                  onUsernameChange={setGithubUsername}
                   onBusyChange={setIsAddingProject}
                   onCreated={(project) => {
                     trackOnboarding("github_project_opened", "complete", true);

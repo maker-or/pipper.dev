@@ -127,10 +127,10 @@ Tabs.displayName = "Tabs";
 
 interface TabsListProps extends ComponentPropsWithoutRef<typeof TabsPrimitive.List> {
   /**
-   * The tab being dragged, if any. Hover and focus go quiet so neighbours the
-   * pointer passes don't look like drop targets, and if it is the active tab
-   * its highlight hides: the held tab carries the active look, and its slot
-   * stays plain empty space.
+   * The tab being dragged (or springing back into its slot), if any. Hover and
+   * focus go quiet so neighbours the pointer passes don't look like drop
+   * targets, and if it is the active tab its highlight hides: the moving tab
+   * carries its own raised surface until it lands.
    */
   heldValue?: string | null;
 }
@@ -656,57 +656,6 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
 
 TabItem.displayName = "TabItem";
 
-/* ─────────────────────── TabDragPreview ─────────────────────── */
-
-interface TabDragPreviewProps {
-  icon?: IconComponent;
-  label: string;
-  /** The held tab is the active one; it keeps the active label weight. */
-  selected?: boolean;
-  attention?: boolean;
-  className?: string;
-}
-
-/**
- * A tab's face, for drawing it outside its strip (a held tab in a drag
- * overlay). Matches TabItem's padding, icon and label so the lift reads as
- * the same tab, not a copy.
- */
-function TabDragPreview({
-  icon: Icon,
-  label,
-  selected = false,
-  attention = false,
-  className,
-}: TabDragPreviewProps) {
-  const labelRef = useRef<HTMLSpanElement>(null);
-  const [overflows, setOverflows] = useState(false);
-  useLayoutEffect(() => {
-    const el = labelRef.current;
-    if (el) setOverflows(el.scrollWidth > el.clientWidth + 1);
-  }, [label]);
-  return (
-    <div className={cn("flex items-center gap-2 px-3 py-1.5", className)}>
-      {Icon && (
-        <span className="relative flex shrink-0">
-          <Icon size={16} strokeWidth={2} className="text-foreground" />
-          {attention && <span aria-hidden="true" className={ATTENTION_DOT} />}
-        </span>
-      )}
-      <span
-        ref={labelRef}
-        className={cn(
-          "min-w-0 max-w-[15ch] overflow-hidden whitespace-nowrap text-[13px] text-foreground",
-          overflows && LABEL_FADE,
-        )}
-        style={{ fontVariationSettings: selected ? fontWeights.semibold : fontWeights.normal }}
-      >
-        {label}
-      </span>
-    </div>
-  );
-}
-
 /* ─────────────────────── TabPanel ─────────────────────── */
 
 interface TabPanelProps extends ComponentPropsWithoutRef<typeof TabsPrimitive.Panel> {
@@ -719,5 +668,5 @@ const TabPanel = forwardRef<HTMLDivElement, TabPanelProps>(({ className, ...prop
 
 TabPanel.displayName = "TabPanel";
 
-export { Tabs, TabsList, TabItem, TabPanel, TabDragPreview };
-export type { TabsProps, TabsListProps, TabItemProps, TabPanelProps, TabDragPreviewProps };
+export { Tabs, TabsList, TabItem, TabPanel };
+export type { TabsProps, TabsListProps, TabItemProps, TabPanelProps };
