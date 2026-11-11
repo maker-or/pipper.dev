@@ -1,4 +1,4 @@
-export const PIPPER_RELEASE_REPOSITORY = "maker-or/omni";
+export const PIPPER_RELEASE_REPOSITORY = "maker-or/pipper.dev";
 
 export const PIPPER_CLERK_SIGN_IN_URL = "https://www.pipper.dev/auth";
 export const PIPPER_CLERK_SIGN_UP_URL = "https://www.pipper.dev/auth";
