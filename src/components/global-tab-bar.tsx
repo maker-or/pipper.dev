@@ -640,9 +640,19 @@ export function GlobalTabBar() {
     return reorder.order.flatMap((id) => byId.get(id) ?? []);
   }, [reorder.order, visibleOpenThreads]);
   // The active tab's highlight steps aside while that tab is off its slot:
-  // the tab carries its own raised surface until it lands.
+  // the tab carries its own raised surface until it lands. A terminal
+  // anchored to a thread moves with that thread, so it is off its slot
+  // whenever its anchor is.
+  const selectedDragId = useMemo(() => {
+    if (!selectedTabValue.startsWith(TERMINAL_TAB_PREFIX)) return selectedTabValue;
+    const terminalId = selectedTabValue.slice(TERMINAL_TAB_PREFIX.length);
+    const anchor = terminalTabs.find((session) => session.id === terminalId)?.anchorThreadId;
+    return anchor && visibleThreadIds.has(anchor) ? anchor : selectedTabValue;
+  }, [selectedTabValue, terminalTabs, visibleThreadIds]);
   const quietTabValue =
-    reorder.heldId ?? (reorder.liftedIds.includes(selectedTabValue) ? selectedTabValue : null);
+    reorder.heldId === selectedDragId || reorder.liftedIds.includes(selectedDragId)
+      ? selectedTabValue
+      : reorder.heldId;
 
   const threadTabIcon = (thread: Thread) => {
     if (runningThreadIds.includes(thread.id)) return TabWorkingIcon;

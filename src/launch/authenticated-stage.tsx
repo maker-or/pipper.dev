@@ -78,6 +78,15 @@ export function AuthenticatedStage({
         } catch {
           // Ignore storage failures and begin at the first step regardless.
         }
+        // Consume the request: a reload after finishing a step must resume at
+        // the next unfinished step, not reset the progress again.
+        params.delete("stage");
+        const query = params.toString();
+        window.history.replaceState(
+          window.history.state,
+          "",
+          `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`,
+        );
         return "agent";
       }
       if (stageParam === "add") {

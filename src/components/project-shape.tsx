@@ -193,7 +193,9 @@ export function ShapePicker({
               className={cn(
                 "size-3/5",
                 !selected && "group-hover:[--shape-fill:var(--foreground)]",
-                selected && "[&>path]:!fill-white [&>path]:!stroke-white",
+                // The theme's own text colour, so the chosen shape stays
+                // visible on the selected tile in light and dark themes.
+                selected && "[&>path]:!fill-foreground [&>path]:!stroke-foreground",
               )}
             />
           </button>

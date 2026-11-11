@@ -986,11 +986,34 @@
       // ---------------------------------------------------------------------------
       const STORE = "pipper-intro-playground";
       let presetId = "ripple";
+      // Settings from storage, pasted JSON or a typed number can be anything:
+      // keep each within its slider's range and of its kind, or fall back to
+      // the default, so nothing malformed reaches render().
+      function cleanValue(k, v) {
+        const p = PARAMS.find((param) => param.k === k);
+        const fallback = BASE[k];
+        if (!p) return typeof v === typeof fallback ? v : fallback;
+        if (p.type === "select") return p.options.some(([value]) => value === v) ? v : fallback;
+        if (p.type === "text") return typeof v === "string" ? v : fallback;
+        if (p.type === "color")
+          return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
+        if (p.type === "check") return typeof v === "boolean" ? v : fallback;
+        const n = typeof v === "number" ? v : Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(p.max ?? n, Math.max(p.min ?? n, n));
+      }
+      function cleanState(values) {
+        const source = values && typeof values === "object" ? values : {};
+        return Object.fromEntries(
+          Object.keys(BASE).map((k) => [k, k in source ? cleanValue(k, source[k]) : BASE[k]]),
+        );
+      }
+
       let state = { ...BASE };
       try {
         const saved = JSON.parse(localStorage.getItem(STORE) || "null");
         if (saved && saved.state) {
-          state = { ...BASE, ...saved.state };
+          state = cleanState(saved.state);
           presetId = saved.presetId || presetId;
         }
       } catch {}
@@ -1977,12 +2000,20 @@ void main() {
             }
           }
         }
-        render();
+        // Schedule the next frame first, so a frame that throws can't stop
+        // the loop for good.
+        requestAnimationFrame(tick);
+        try {
+          render();
+        } catch (error) {
+          if (!tick.reported) console.error("Playground frame failed:", error);
+          tick.reported = true;
+          return;
+        }
         if (T) {
           scrub.value = Math.min(1, time / T.end);
           timeLabel.textContent = `${Math.min(time, T.end).toFixed(2)} / ${T.end.toFixed(2)} s`;
         }
-        requestAnimationFrame(tick);
       }
 
       // ---------------------------------------------------------------------------
@@ -2131,7 +2162,7 @@ void main() {
       }
 
       function set(k, v) {
-        state[k] = v;
+        state[k] = cleanValue(k, v);
         syncInputs();
         updateMarks();
         save();
@@ -2222,7 +2253,7 @@ void main() {
         try {
           const { preset, ...rest } = JSON.parse(document.getElementById("json").value);
           if (preset && PRESETS.some((p) => p.id === preset)) presetId = preset;
-          state = { ...BASE, ...rest };
+          state = cleanState(rest);
           syncInputs();
           updateMarks();
           save();
@@ -2269,7 +2300,8 @@ void main() {
         if (e.target.value === "file") {
           fileTarget = "stage";
           fileInput.click();
-          e.target.value = images.stage ? "file" : stageMode;
+          // Show what is rendering; loadFile switches to "file" once one loads.
+          e.target.value = stageMode;
           return;
         }
         stageMode = e.target.value;
@@ -2300,7 +2332,14 @@ void main() {
 
       // Keyboard
       document.addEventListener("keydown", (e) => {
-        if (e.target.matches("input[type=text], input[type=number], textarea, select")) return;
+        // Sliders and colour pickers keep their own keys (arrows step them,
+        // Space toggles), like text fields.
+        if (
+          e.target.matches(
+            "input[type=text], input[type=number], input[type=range], input[type=color], textarea, select",
+          )
+        )
+          return;
         const i = PRESETS.findIndex((p) => p.id === presetId);
         if (e.code === "Space") {
           e.preventDefault();

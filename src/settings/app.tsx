@@ -477,7 +477,8 @@ function KeyboardView() {
           },
           {
             action: "Switch tabs",
-            description: `From the left of the tab bar, ${mod}1 opens the first tab through ${mod}9.`,
+            // "⌘1" reads as one key; "Ctrl" needs the "+" to.
+            description: `From the left of the tab bar, ${mod === "⌘" ? "⌘1" : "Ctrl+1"} opens the first tab through ${mod === "⌘" ? "⌘9" : "Ctrl+9"}.`,
             keys: mod === "⌘" ? ["⌘", "1–9"] : ["Ctrl", "1–9"],
           },
         ].map(({ action, description, keys }) => (

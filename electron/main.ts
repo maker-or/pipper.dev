@@ -1638,6 +1638,11 @@ function initializeMonitorService(): void {
 
 /** The first-launch intro, while it holds the launch window back. */
 let launchIntro: LaunchIntroSession | null = null;
+/**
+ * Intros a ready launch window has taken over: that window ends them by
+ * closing into its frame, so nothing else may dismiss them first.
+ */
+const introsEndedByWindow = new WeakSet<LaunchIntroSession>();
 
 /** Replays the native launch intro on demand (dock menu). No first-launch gating. */
 function replayLaunchIntro(version: LaunchIntroVersion): void {
@@ -1660,8 +1665,10 @@ function replayLaunchIntro(version: LaunchIntroVersion): void {
   if (launchWindow && !launchWindow.isDestroyed()) launchWindow.destroy();
   createLaunchWindow("onboarding");
   // If the window never got ready, don't leave the overlay holding its frame.
+  // This runs before the window's own handler (it was attached first), so it
+  // must stand aside once the window has taken the intro over.
   void session.finished.then(() => {
-    if (launchIntro !== session) return;
+    if (launchIntro !== session || introsEndedByWindow.has(session)) return;
     launchIntro = null;
     session.dismiss();
     if (launchWindow && !launchWindow.isDestroyed()) launchWindow.show();
@@ -1790,6 +1797,7 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
       created.show();
       return;
     }
+    introsEndedByWindow.add(intro);
     void sendIntroLayout(intro, created, () => launchIntro === intro);
     // Shown under the overlay, which then draws its dark in to this
     // window's frame and colour and hands over to it, so the intro ends as

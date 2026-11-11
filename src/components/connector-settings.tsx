@@ -507,7 +507,12 @@ function StatusLine({
   }
   switch (connector.status) {
     case "connected":
-      return <span className={cn(base, "text-foreground")} aria-label="Connected" />;
+      return (
+        <span className={cn(base, "text-muted-foreground")}>
+          <CheckCircleIcon size={14} weight="fill" className="text-emerald-500" aria-hidden />
+          Connected
+        </span>
+      );
     case "needs_sign_in":
       return (
         <span className={cn(base, "text-amber-500")}>

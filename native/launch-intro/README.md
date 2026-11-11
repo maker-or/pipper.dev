@@ -165,7 +165,7 @@ breath exist only in the playground until they are ported to `Shaders.swift`.
 `?preset=tide&t=1.2` opens a preset paused at a moment.
 
 ```sh
-python3 -m http.server 4791 --directory native/launch-intro/playground
+python3 -m http.server 4791 --directory playground   # from native/launch-intro, like the commands above
 ```
 
 `scripts/build.js` builds it into `dist/`, and electron-builder ships it as

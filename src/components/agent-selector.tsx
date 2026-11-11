@@ -344,16 +344,25 @@ function AgentSetupCard({
     result.status === "needs-auth"
       ? `Sign in required for ${descriptor.displayName}. Retry after authenticating`
       : `Retry ${descriptor.displayName}`;
-  // Antigravity signs in through Pipper's own auth buttons, not a docs page.
+  // Antigravity signs in through Pipper's own auth buttons, not a docs page:
+  // its individual sign-in when it offers one, else whatever methods it
+  // reported. With none at all, it falls back to the setup guide like the
+  // other agents, so a needs-auth card always offers a way forward.
   const isAntigravity = (descriptor.driverId ?? descriptor.id) === "antigravity-acp";
-  // Instances carry `driverId`; the setup guide is keyed by driver.
-  const guideUrl =
-    status === "ready" || isAntigravity
-      ? null
-      : setupGuideUrl(descriptor.driverId ?? descriptor.id);
   const individualAuthMethod = isAntigravity
     ? antigravityIndividualAuthMethod(result.authMethods)
     : undefined;
+  const authMethods =
+    isAntigravity && result.status === "needs-auth"
+      ? individualAuthMethod
+        ? [individualAuthMethod]
+        : (result.authMethods ?? [])
+      : [];
+  // Instances carry `driverId`; the setup guide is keyed by driver.
+  const guideUrl =
+    status === "ready" || authMethods.length > 0
+      ? null
+      : setupGuideUrl(descriptor.driverId ?? descriptor.id);
 
   const openSetupGuide = async () => {
     if (!guideUrl || !window.omni?.shell?.openExternal) return;
@@ -387,13 +396,10 @@ function AgentSetupCard({
           />
         ) : (
           <span className="inline-flex items-center gap-2">
-            {status === "retry" &&
-            isAntigravity &&
-            result.status === "needs-auth" &&
-            individualAuthMethod ? (
+            {status === "retry" && authMethods.length > 0 ? (
               <AgentAuthActions
                 agentId={descriptor.id}
-                methods={[individualAuthMethod]}
+                methods={authMethods}
                 onAuthenticated={onRetry}
               />
             ) : (

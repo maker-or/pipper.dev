@@ -103,7 +103,14 @@ function Tooltip({
           onOpenChangeProp?.(v);
         }}
       >
-        <TooltipPrimitive.Trigger>{children}</TooltipPrimitive.Trigger>
+        {/* A child that is already a button or link is the trigger itself:
+            wrapping it in the trigger's own button would nest buttons and add
+            a second focus stop. Anything else gets the focusable wrapper. */}
+        <TooltipPrimitive.Trigger
+          asChild={typeof children.type === "string" && ["button", "a"].includes(children.type)}
+        >
+          {children}
+        </TooltipPrimitive.Trigger>
         {mounted && (
           <TooltipPrimitive.Portal forceMount container={portalContainer ?? undefined}>
             <TooltipPrimitive.Content
