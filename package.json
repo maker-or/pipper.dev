@@ -23,6 +23,7 @@
     "release:launcher:publish": "bun scripts/publish-launcher-github-release.ts",
     "release:launcher:publish:win": "bun scripts/publish-launcher-windows-github-release.ts",
     "release:launcher:bridge": "bun scripts/publish-launcher-blob-bridge.ts",
+    "release:mac:local": "bun scripts/release-launcher-local.ts",
     "preview": "bunx --bun electron-vite preview",
     "start": "electron .",
     "lint": "oxlint",
