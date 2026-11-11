@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
-import { useShape } from "@/lib/shape-context";
 
 // ─── Lazy pdfjs loader ────────────────────────────────────────────────────
 // Imports pdfjs-dist on first PDF, caches the module, and points the worker
@@ -52,7 +51,6 @@ interface FileThumbnailProps {
 
 function FileThumbnail({ file, size, className }: FileThumbnailProps) {
   "use no memo";
-  const shape = useShape();
   const isImage = file.type.startsWith("image/");
   const isPdf = file.type === "application/pdf";
 
@@ -96,8 +94,10 @@ function FileThumbnail({ file, size, className }: FileThumbnailProps) {
   return (
     <div
       className={cn(
-        "relative shrink-0 overflow-hidden bg-accent border border-border",
-        shape.bg,
+        // Fixed radius, not the shape setting: matches sent image
+        // attachments in ChatMessage so a tile looks the same before and
+        // after sending.
+        "relative shrink-0 overflow-hidden rounded-md bg-accent border border-border",
         className,
       )}
       style={{ width: size, height: size }}
