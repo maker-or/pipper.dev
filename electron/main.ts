@@ -76,7 +76,12 @@ import type { ProjectFileGitStatus, ProjectFileTreeSnapshot } from "../contracts
 import { getActiveProjectId, setActiveProjectId } from "./session";
 import { ProjectFileLister } from "./project-file-list.ts";
 import { AUTH_CALLBACK_SUCCESS_HTML } from "./auth-callback-success";
-import { CLERK_ENABLED, REMOTE_ENABLED, SIRI_ENABLED } from "../contracts/features.ts";
+import {
+  CLERK_ENABLED,
+  LAUNCH_INTRO_ENABLED,
+  REMOTE_ENABLED,
+  SIRI_ENABLED,
+} from "../contracts/features.ts";
 import { isIdentifiableUser, resolveLaunchUser } from "./launch-user.ts";
 import {
   isAllowedClerkAuthUrl,
@@ -1636,6 +1641,7 @@ let launchIntro: LaunchIntroSession | null = null;
 
 /** Replays the native launch intro on demand (dock menu). No first-launch gating. */
 function replayLaunchIntro(version: LaunchIntroVersion): void {
+  if (!LAUNCH_INTRO_ENABLED) return;
   const helperPath = resolveLaunchIntroHelperPath({
     isPackaged: app.isPackaged,
     execPath: process.execPath,
@@ -3679,10 +3685,13 @@ app.whenReady().then(async () => {
     }
     app.dock?.setMenu(
       Menu.buildFromTemplate([
-        ...LAUNCH_INTRO_VERSIONS.map((version) => ({
-          label: `Replay Launch Intro — Version ${version}`,
-          click: () => replayLaunchIntro(version),
-        })),
+        // Held back from release builds; see contracts/features.ts.
+        ...(LAUNCH_INTRO_ENABLED
+          ? LAUNCH_INTRO_VERSIONS.map((version) => ({
+              label: `Replay Launch Intro — Version ${version}`,
+              click: () => replayLaunchIntro(version),
+            }))
+          : []),
         {
           label: "Show Onboarding",
           click: () => createLaunchWindow("onboarding"),
@@ -3917,17 +3926,21 @@ app.whenReady().then(async () => {
       });
     }
   } else {
-    launchIntro = await startFirstLaunchIntro({
-      platform: process.platform,
-      env: process.env,
-      userDataDir: app.getPath("userData"),
-      onboardingCompleted: state.completed,
-      helperPath: resolveLaunchIntroHelperPath({
-        isPackaged: app.isPackaged,
-        execPath: process.execPath,
-        appPath: app.getAppPath(),
-      }),
-    });
+    // Held back from release builds (contracts/features.ts): without it,
+    // new users go straight to onboarding.
+    launchIntro = LAUNCH_INTRO_ENABLED
+      ? await startFirstLaunchIntro({
+          platform: process.platform,
+          env: process.env,
+          userDataDir: app.getPath("userData"),
+          onboardingCompleted: state.completed,
+          helperPath: resolveLaunchIntroHelperPath({
+            isPackaged: app.isPackaged,
+            execPath: process.execPath,
+            appPath: app.getAppPath(),
+          }),
+        })
+      : null;
     logStartupMilestone("launch-window:starting", `intro=${launchIntro !== null}`);
     createLaunchWindow("list");
   }

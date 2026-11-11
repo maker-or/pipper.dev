@@ -1,5 +1,12 @@
 # Pipper launch intro (macOS)
 
+> **Not shipped.** The launch intro is held back from release builds: it is
+> off unless `VITE_PIPPER_LAUNCH_INTRO=1` (see `contracts/features.ts`). Off,
+> new users go straight to onboarding, the Dock has no replay items, and
+> `scripts/build.js` neither builds nor packages the helper (it also deletes
+> a stale one from `dist/`). To work on it, set the variable in `.env` or
+> before `bun run dev` / `bun run build`.
+
 The first-launch "stone in water" intro: three ripples leave back to back and
 cross the whole display, each leaving a third of the darkness, then one line of
 text sharpens in at the centre. It is a borderless, transparent,
@@ -37,9 +44,17 @@ bottom than at the top as in version 1, so the screen never turns fully dark
 The backlit line (`backlight_fragment`, the `light…`, `shaft…` and `letter…`
 settings) is still supported but version 2 no longer shows it.
 
+Version 2 first shows its name (`Brand.swift`). Once the last ripple has
+crossed the display, Pipper's brand icons (the tiles in
+`src/launch/welcome-shapes.svg`, drawn from the same outlines and colours)
+pop in one by one, one tile per letter of "Pipper", each with a springy
+overshoot and a pop in the score (`pop` in `Score.swift`). Then each pops
+out in the same order with a higher pop, and its letter springs in where it
+was; once all are in, the letters close up into the word. The name sits
+above the middle.
+
 Version 2's line is "One interface to control your agents" (`Phrase` in
-`Carousel.swift`). Once the last ripple has crossed the display, a laser
-prints it at the middle: a thin blue scan line with a bright head
+`Carousel.swift`). Once the name is whole, a laser prints it at the middle: a thin blue scan line with a bright head
 (`scan_fragment`) works down over it like a real printer (`scanLine` in
 `Carousel.swift`). It prints in bands: the paper feeds one band down with a
 quick jolt that overshoots a little and settles, then stops dead while the
@@ -53,7 +68,18 @@ for its text), with a thin outline glowing on the rows just printed, and it is
 printed over the line as it passes. The last frame is the window without its
 text and icons, in exactly its place, and the hand-over fades it into the
 real window (about 1.5s, easing in and out) while the dark draws in around
-it. Version 2 runs about 10.3s.
+it. Version 2 runs about 14s.
+
+Version 3 (`IntroConfig(version: .three)`) is version 2 opening on a bloom
+instead of ripples (`Opening.bloom`, `discs_fragment`): a grid of embossed
+discs, lit on their upper left and shaded on their lower right, through which
+a sakura colour blooms out from the middle of the display, deep plum at its
+core, then crimson, hot pink and pale pink-white at the edges, until it
+covers the screen (a little thinner at the edges, so the desktop shows
+faintly through). Its sound is a low swell rather than drops, and nothing
+taps the trackpad for it. The name, the line and the printed window then
+follow as in version 2. The bloom's timing and grid are the `bloom…` and
+`discColumns` settings.
 
 A rolling "Run Claude, Codex … any agent" carousel (`Carousel`) can take the
 line's place: set `carousel` instead of `phrase` in `IntroConfig.use(.two)`.
@@ -71,7 +97,7 @@ parents', so a disabled (half-transparent) button is drawn half-transparent. A l
 have started, or none at all (say, a sign-in screen), ends the intro as
 before. To draw a different screen, mark its elements the same way.
 
-The first launch plays version 2; the Dock menu replays either.
+The first launch plays version 2; the Dock menu replays any of the three.
 
 It ends in a window rather than fading. Once the last frame is held, the host
 shows the launch window under the overlay and sends `close` with its frame

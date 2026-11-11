@@ -583,6 +583,73 @@ fragment float4 word_fragment(
   return float4(u.color.rgb * a, a);
 }
 
+// A brand icon: a premultiplied RGBA image, gone where the window has been
+// printed over it.
+fragment float4 image_fragment(
+  VOut in [[stage_in]],
+  constant WordUniforms& u [[buffer(0)]],
+  texture2d<float> image [[texture(0)]]
+) {
+  if (isPrinted(in.position.xy, u.covered)) return 0;
+  return image.sample(wordSampler, in.uv) * u.opacity;
+}
+
+// Version 3's opening: a grid of embossed discs over the screen, through
+// which a sakura colour blooms out from the middle, deep plum at its core,
+// hot pink, then pale pink-white at the edges. Each disc catches light on
+// its upper left and casts a little shadow on its lower right. Y down.
+struct DiscUniforms {
+  float2 resolution;
+  float time;
+  float bloomStart;
+  float bloomDuration;
+  float columns;
+};
+
+float3 sakura(float k) {
+  const float3 plum = float3(74, 0, 40) / 255;
+  const float3 crimson = float3(200, 0, 80) / 255;
+  const float3 pink = float3(255, 60, 130) / 255;
+  const float3 blush = float3(255, 160, 230) / 255;
+  const float3 paper = float3(244, 238, 244) / 255;
+  if (k < 0.28) return mix(plum, crimson, k / 0.28);
+  if (k < 0.5) return mix(crimson, pink, (k - 0.28) / 0.22);
+  if (k < 0.72) return mix(pink, blush, (k - 0.5) / 0.22);
+  return mix(blush, paper, (k - 0.72) / 0.28);
+}
+
+fragment float4 discs_fragment(VOut in [[stage_in]], constant DiscUniforms& u [[buffer(0)]]) {
+  float2 pix = in.position.xy;
+  float2 middle = u.resolution * 0.5;
+  float grow = smoothstep(0.0, 1.0, clamp((u.time - u.bloomStart) / max(u.bloomDuration, 1e-3), 0.0, 1.0));
+  // Distance from the middle, the field a little wider than it is tall.
+  float d = length((pix - middle) / float2(u.resolution.x * 0.5, u.resolution.y * 0.62));
+  // The bloom's front: nothing beyond it yet. It runs on past the corners
+  // (d ≈ 1.3 there), so the whole display is covered once it is full.
+  float reach = smoothstep(0.0, 0.25, grow * 1.65 - d);
+  if (reach <= 0) return 0;
+  float3 rgb = sakura(clamp(d / (0.05 + 1.15 * grow), 0.0, 1.0));
+
+  // The disc this point belongs to, the grid centred on the display.
+  float pitch = u.resolution.x / u.columns;
+  float2 cell = (floor((pix - middle) / pitch + 0.5)) * pitch + middle;
+  float2 q = pix - cell;
+  float r = pitch * 0.47;
+  float dq = length(q);
+  float inside = 1 - smoothstep(r - 1.0, r + 0.5, dq);
+  float light = dot(q / max(dq, 1e-3), normalize(float2(-1, -1)));
+  // A lit rim on the upper left, a darker one on the lower right.
+  rgb += smoothstep(r * 0.72, r, dq) * inside * light * 0.10;
+  // A little shadow just outside the lower right.
+  float ring = smoothstep(r, r + pitch * 0.06, dq) * (1 - smoothstep(r + pitch * 0.06, r + pitch * 0.2, dq));
+  rgb -= ring * max(0.0, -light) * 0.08;
+
+  // Dense over the middle, a little thinner at the edges so the screen
+  // shows faintly through.
+  float alpha = mix(0.96, 0.82, smoothstep(0.6, 1.3, d)) * reach;
+  return float4(clamp(rgb, 0.0, 1.0) * alpha, alpha);
+}
+
 vertex VOut text_vertex(uint vid [[vertex_id]], constant TextUniforms& u [[buffer(0)]]) {
   float2 corner = float2(vid & 1, vid >> 1);
   float2 pix = u.rect.xy + corner * u.rect.zw;

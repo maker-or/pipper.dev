@@ -65,7 +65,7 @@ export const DRAG_LAYOUT_SPRING = {
   mass: 0.6,
 } as const;
 /** A move this far lifts the item, so a click with a slight wobble stays a click. */
-const DRAG_ACTIVATION_PX = 6;
+export const DRAG_ACTIVATION_PX = 6;
 /** A drag with the pointer this close to the list's visible edge scrolls it. */
 const AUTO_SCROLL_EDGE_PX = 40;
 /** Fastest auto-scroll, at the very edge, in px per frame. */
@@ -73,11 +73,15 @@ const AUTO_SCROLL_MAX_SPEED = 14;
 /** Release velocity is capped so a wild flick can't fling an item off screen. */
 const MAX_RELEASE_VELOCITY = 4000;
 /** A drag pushes the item, so it lands with a small bounce. */
-const RELEASE_SPRING: Transition = { type: "spring", visualDuration: 0.3, bounce: 0.2 };
+export const RELEASE_SPRING: Transition = { type: "spring", visualDuration: 0.3, bounce: 0.2 };
 /** Reduced motion: no fling, no bounce, a short settle. */
-const RELEASE_SPRING_REDUCED: Transition = { type: "spring", visualDuration: 0.15, bounce: 0 };
+export const RELEASE_SPRING_REDUCED: Transition = {
+  type: "spring",
+  visualDuration: 0.15,
+  bounce: 0,
+};
 /** Elastic of the list's ends. */
-const EDGE_ELASTIC = 0.2;
+export const EDGE_ELASTIC = 0.2;
 
 interface AxisReader {
   pointer: (event: { clientX: number; clientY: number }) => number;
@@ -181,6 +185,22 @@ export interface DragReorder {
   /** An item's offset from its slot. Things that travel with it share it. */
   offsetFor: (id: string) => MotionValue<number>;
   onPointerDown: (id: string, event: ReactPointerEvent<HTMLElement>) => void;
+  /**
+   * Read-only: the spring an item is settling on, if any, as it was started.
+   * For tools that document the gesture (the spec posters); the app never
+   * reads it.
+   */
+  settleOf: (id: string) => SettleInfo | null;
+}
+
+/** A settle spring as the hook started it. */
+export interface SettleInfo {
+  controls: AnimationPlaybackControls;
+  /** Offset it started from. */
+  from: number;
+  /** Release velocity it was seeded with, px/s. */
+  velocity: number;
+  transition: Transition;
 }
 
 export function useDragReorder({
@@ -230,6 +250,7 @@ export function useDragReorder({
   const sessionRef = useRef<DragSession | null>(null);
   const offsets = useRef(new Map<string, MotionValue<number>>());
   const settles = useRef(new Map<string, AnimationPlaybackControls>());
+  const settleInfo = useRef(new Map<string, SettleInfo>());
   /** Each lifted item's slot (start of its group) as last laid out. */
   const slots = useRef(new Map<string, number>());
   const pendingCommits = useRef(0);
@@ -246,10 +267,23 @@ export function useDragReorder({
   const gapOf = (list: HTMLElement) =>
     Number.parseFloat(latest.current.ax.gap(getComputedStyle(list))) || 0;
 
-  /** Pointer position in list coordinates (scroll included). */
+  /**
+   * Screen px per layout px along the axis: 1 in the app, other than 1 when
+   * the list sits inside a CSS-scaled container. Pointer positions are screen
+   * px and slots are layout px, so every pointer distance goes through this.
+   */
+  const screenScale = (list: HTMLElement) => {
+    const { ax } = latest.current;
+    const rect = list.getBoundingClientRect();
+    const size = ax.size(list);
+    return size > 0 ? (ax.end(rect) - ax.start(rect)) / size : 1;
+  };
+
+  /** Pointer position in list coordinates (layout px, scroll included). */
   const listPosition = (list: HTMLElement, pointer: number) => {
     const { ax } = latest.current;
-    return pointer - ax.start(list.getBoundingClientRect()) - ax.border(list) + list[ax.scroll];
+    const fromStart = (pointer - ax.start(list.getBoundingClientRect())) / screenScale(list);
+    return fromStart - ax.border(list) + list[ax.scroll];
   };
 
   const slotOf = (id: string): number | null => {
@@ -271,11 +305,12 @@ export function useDragReorder({
   const settle = (id: string, velocity: number) => {
     settles.current.get(id)?.stop();
     const reduced = latest.current.reduceMotion;
-    const controls = animate(offsetFor(id), 0, {
-      ...(reduced ? RELEASE_SPRING_REDUCED : RELEASE_SPRING),
-      velocity: reduced ? 0 : velocity,
-    });
+    const transition = reduced ? RELEASE_SPRING_REDUCED : RELEASE_SPRING;
+    const seeded = reduced ? 0 : velocity;
+    const from = offsetFor(id).get();
+    const controls = animate(offsetFor(id), 0, { ...transition, velocity: seeded });
     settles.current.set(id, controls);
+    settleInfo.current.set(id, { controls, from, velocity: seeded, transition });
     void controls.then(() => {
       if (settles.current.get(id) !== controls) return;
       settles.current.delete(id);
@@ -421,11 +456,13 @@ export function useDragReorder({
     const stillThere = currentIds.includes(session.id);
     const next = reconcileDragOrder(session.order, currentIds);
     const moved = next.some((id, index) => id !== currentIds[index]);
+    const list = listRef.current;
+    const k = list ? screenScale(list) : 1;
     const velocity =
       outcome === "drop"
         ? Math.max(
             -MAX_RELEASE_VELOCITY,
-            Math.min(MAX_RELEASE_VELOCITY, releaseVelocity(session.samples, performance.now())),
+            Math.min(MAX_RELEASE_VELOCITY, releaseVelocity(session.samples, performance.now()) / k),
           ) * (session.banded ? EDGE_ELASTIC : 1)
         : 0;
 
@@ -549,7 +586,12 @@ export function useDragReorder({
     [],
   );
 
-  return { axis, order, heldId, liftedIds, offsetFor, onPointerDown };
+  const settleOf = useCallback((id: string) => {
+    const info = settleInfo.current.get(id);
+    return info && settles.current.get(id) === info.controls ? info : null;
+  }, []);
+
+  return { axis, order, heldId, liftedIds, offsetFor, onPointerDown, settleOf };
 }
 
 /**

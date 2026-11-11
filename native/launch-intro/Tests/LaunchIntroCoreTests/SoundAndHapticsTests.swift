@@ -78,3 +78,19 @@ private func rms(_ audio: StereoAudio, from a: Double, to b: Double) -> Double {
   #expect(near.contains { $0.kind == .front })
   #expect(!far.contains { $0.kind == .front })
 }
+
+@Test func eachBrandTileIsHeardAsItPopsInAndOut() throws {
+  let c = IntroConfig(version: .two)
+  let brand = try #require(c.brand)
+  let audio = renderScore(c)
+  var silent = c
+  silent.brand = nil
+  let without = renderScore(silent)
+  // A pop lands on every tile, in and out: clearly louder than the music
+  // would be there without the name.
+  for i in 0 ..< brand.name.count {
+    for at in [brand.popIn(i), brand.popOutTime(i)] {
+      #expect(rms(audio, from: at, to: at + 0.04) > rms(without, from: at, to: at + 0.04) * 1.8)
+    }
+  }
+}

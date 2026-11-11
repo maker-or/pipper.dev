@@ -126,6 +126,14 @@ struct ScanUniforms {
   var width: Float
 }
 
+struct DiscUniforms {
+  var resolution: SIMD2<Float>
+  var time: Float
+  var bloomStart: Float
+  var bloomDuration: Float
+  var columns: Float
+}
+
 struct TextUniforms {
   var rect: SIMD4<Float>
   var color: SIMD4<Float>
@@ -180,6 +188,11 @@ public final class IntroRenderer {
   /// The carousel's words, "Run" first, each drawn once at full size: its
   /// mask, its advance, and the padding round it, in device pixels.
   private var words: [(mask: MTLTexture, width: Double, pad: Double)] = []
+  /// The name's letters, and its four brand icons (RGBA, premultiplied).
+  private var letters: [(mask: MTLTexture, width: Double, pad: Double)] = []
+  private var brandIcons: [MTLTexture] = []
+  private let imagePipeline: MTLRenderPipelineState
+  private let discsPipeline: MTLRenderPipelineState
   private let emptyTexture: MTLTexture
   private var text: (mask: MTLTexture, blurred: MTLTexture, rect: SIMD4<Float>)?
   /// Padding around the line's ink inside `text.rect`, in device pixels.
@@ -224,6 +237,8 @@ public final class IntroRenderer {
     drawingPipeline = try pipeline("fullscreen_vertex", "drawing_fragment", Self.pixelFormat, blended: true)
     wordPipeline = try pipeline("text_vertex", "word_fragment", Self.pixelFormat, blended: true)
     scanPipeline = try pipeline("fullscreen_vertex", "scan_fragment", Self.pixelFormat, blended: true)
+    imagePipeline = try pipeline("text_vertex", "image_fragment", Self.pixelFormat, blended: true)
+    discsPipeline = try pipeline("fullscreen_vertex", "discs_fragment", Self.pixelFormat, blended: true)
 
     let empty = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .bgra8Unorm, width: 1, height: 1, mipmapped: false)
     guard let emptyTexture = device.makeTexture(descriptor: empty) else { throw IntroRendererError.resource("texture") }
@@ -293,9 +308,19 @@ public final class IntroRenderer {
       plane: config.ending == .backlit ? Float(surfaceFrame(time: time, config: config).presence) : 0,
       planeDarkness: Float(config.planeDarkness)
     )
+    if config.opening == .bloom {
+      var discs = DiscUniforms(
+        resolution: [Float(geometry.width), Float(geometry.height)], time: Float(time),
+        bloomStart: Float(config.bloomStart), bloomDuration: Float(config.bloomDuration),
+        columns: Float(config.discColumns)
+      )
+      encoder.setRenderPipelineState(discsPipeline)
+      encoder.setFragmentBytes(&discs, length: MemoryLayout<DiscUniforms>.stride, index: 0)
+      encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    } else {
     switch config.version {
     case .one: encoder.setRenderPipelineState(time > config.surfaceStart ? surfacePipeline : ripplePipeline)
-    case .two: encoder.setRenderPipelineState(waterV2Pipeline)
+    case .two, .three: encoder.setRenderPipelineState(waterV2Pipeline)
     }
     encoder.setFragmentBytes(&look, length: MemoryLayout<WaterLook>.stride, index: 2)
     encoder.setFragmentBytes(&uniforms, length: MemoryLayout<RippleUniforms>.stride, index: 0)
@@ -304,6 +329,7 @@ public final class IntroRenderer {
     encoder.setFragmentTexture(levels?.a ?? emptyTexture, index: 1)
     encoder.setFragmentTexture(levels?.b ?? emptyTexture, index: 2)
     encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
 
     if var light = lightUniforms(time: time), let text {
       encoder.setRenderPipelineState(backlightPipeline)
@@ -335,6 +361,41 @@ public final class IntroRenderer {
       encoder.setFragmentBytes(&uniforms, length: MemoryLayout<DrawUniforms>.stride, index: 0)
       encoder.setFragmentBytes(&elements, length: MemoryLayout<DrawnElement>.stride * elements.count, index: 1)
       encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+    }
+
+    // The name: brand tiles popping in and out, letters popping in. Gone
+    // where the window has been printed over it.
+    let brand = brandFrames(time: time, config: config, geometry: geometry, letterWidths: letters.map(\.width))
+    if !brand.isEmpty, brandIcons.count == BrandIcons.count, letters.count == brand.count {
+      func quad(_ texture: MTLTexture, centre: SIMD2<Double>, size: CGSize, opacity: Double, color: SIMD4<Float>) {
+        var uniforms = WordUniforms(
+          rect: [
+            Float(centre.x - Double(size.width) / 2), Float(centre.y - Double(size.height) / 2),
+            Float(size.width), Float(size.height),
+          ],
+          color: color, target: [Float(geometry.width), Float(geometry.height)],
+          sigma: 0, opacity: Float(opacity), shown: ScanLine.done.printUniform, covered: windowPrint.printUniform
+        )
+        encoder.setVertexBytes(&uniforms, length: MemoryLayout<WordUniforms>.stride, index: 0)
+        encoder.setFragmentBytes(&uniforms, length: MemoryLayout<WordUniforms>.stride, index: 0)
+        encoder.setFragmentTexture(texture, index: 0)
+        encoder.drawPrimitives(type: .triangleStrip, vertexStart: 0, vertexCount: 4)
+      }
+      encoder.setRenderPipelineState(wordPipeline)
+      for (i, frame) in brand.enumerated() where frame.letterScale > 0.001 {
+        let letter = letters[i]
+        let size = CGSize(
+          width: Double(letter.mask.width) * frame.letterScale, height: Double(letter.mask.height) * frame.letterScale
+        )
+        quad(letter.mask, centre: frame.letterCentre, size: size, opacity: 1, color: config.textColor)
+      }
+      encoder.setRenderPipelineState(imagePipeline)
+      for frame in brand where frame.tileScale > 0.001 {
+        let size = CGSize(
+          width: Double(frame.tileSize.width) * frame.tileScale, height: Double(frame.tileSize.height) * frame.tileScale
+        )
+        quad(brandIcons[frame.icon], centre: frame.centre, size: size, opacity: 1, color: [1, 1, 1, 1])
+      }
     }
 
     var scans: [ScanLine] = []
@@ -484,56 +545,91 @@ public final class IntroRenderer {
   /// stays sharp as it shrinks to the heading.
   private func layoutWords() throws {
     words = []
-    let strings: [String]
-    let weights: [Double]
+    letters = []
+    brandIcons = []
+    var strings: [String] = []
+    var weights: [Double] = []
     if let carousel = config.carousel {
       strings = [carousel.lead] + carousel.all
       weights = [carousel.leadWeight] + carousel.all.map { _ in carousel.wordWeight }
     } else if let phrase = config.phrase {
       strings = [phrase.text]
       weights = [phrase.weight]
-    } else {
-      return
     }
-    let size = config.fontSize * geometry.q
-    let pad = 2.0
+    guard !strings.isEmpty || config.brand != nil else { return }
     guard let commandBuffer = queue.makeCommandBuffer(), let blit = commandBuffer.makeBlitCommandEncoder() else {
       throw IntroRendererError.resource("word commands")
     }
+    let size = config.fontSize * geometry.q
     for (index, string) in strings.enumerated() {
-      let font = systemFont(size: size, weight: weights[index])
-      let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
-        NSAttributedString.Key(kCTFontAttributeName as String): font,
-        NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
-      ]))
-      var ascent: CGFloat = 0
-      var descent: CGFloat = 0
-      let advance = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
-      let width = Int(ceil(advance + pad * 2))
-      let height = Int(ceil(ascent + descent + pad * 2))
-      var pixels = [UInt8](repeating: 0, count: width * height)
-      try pixels.withUnsafeMutableBytes { buffer in
-        guard let context = CGContext(
-          data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
-          bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
-        ) else { throw IntroRendererError.resource("word bitmap") }
-        context.setFillColor(gray: 1, alpha: 1)
-        context.setAllowsFontSmoothing(false)
-        context.setShouldAntialias(true)
-        context.textPosition = CGPoint(x: pad, y: pad + descent)
-        CTLineDraw(line, context)
+      words.append(try wordMask(string, size: size, weight: weights[index], blit: blit))
+    }
+    if let brand = config.brand {
+      for letter in brand.name {
+        letters.append(try wordMask(String(letter), size: brand.letterSize * geometry.q, weight: 0.4, blit: blit))
       }
-      let descriptor = MTLTextureDescriptor.texture2DDescriptor(
-        pixelFormat: .r8Unorm, width: width, height: height, mipmapped: true
-      )
-      guard let mask = device.makeTexture(descriptor: descriptor) else { throw IntroRendererError.resource("word mask") }
-      mask.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: width)
-      blit.generateMipmaps(for: mask)
-      words.append((mask, advance, pad))
+      // Drawn larger than they show, so the swell as they pop out stays sharp.
+      let height = Int(ceil(brand.tileHeight * geometry.q * 1.3))
+      let width = Int(ceil(Double(height) * BrandIcons.tileAspect))
+      for index in 0 ..< BrandIcons.count {
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        try pixels.withUnsafeMutableBytes { buffer in
+          guard let context = CGContext(
+            data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+          ) else { throw IntroRendererError.resource("brand bitmap") }
+          context.setShouldAntialias(true)
+          BrandIcons.draw(index, in: context, size: CGSize(width: width, height: height))
+        }
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+          pixelFormat: .rgba8Unorm, width: width, height: height, mipmapped: true
+        )
+        guard let texture = device.makeTexture(descriptor: descriptor) else { throw IntroRendererError.resource("brand icon") }
+        texture.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: width * 4)
+        blit.generateMipmaps(for: texture)
+        brandIcons.append(texture)
+      }
     }
     blit.endEncoding()
     commandBuffer.commit()
     commandBuffer.waitUntilCompleted()
+  }
+
+  /// One word drawn once at full size with mipmaps, so it stays sharp as it
+  /// is scaled: its mask, its advance, and the padding round it.
+  private func wordMask(
+    _ string: String, size: Double, weight: Double, blit: MTLBlitCommandEncoder
+  ) throws -> (mask: MTLTexture, width: Double, pad: Double) {
+    let pad = 2.0
+    let font = systemFont(size: size, weight: weight)
+    let line = CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: [
+      NSAttributedString.Key(kCTFontAttributeName as String): font,
+      NSAttributedString.Key(kCTForegroundColorFromContextAttributeName as String): true,
+    ]))
+    var ascent: CGFloat = 0
+    var descent: CGFloat = 0
+    let advance = CTLineGetTypographicBounds(line, &ascent, &descent, nil)
+    let width = Int(ceil(advance + pad * 2))
+    let height = Int(ceil(ascent + descent + pad * 2))
+    var pixels = [UInt8](repeating: 0, count: width * height)
+    try pixels.withUnsafeMutableBytes { buffer in
+      guard let context = CGContext(
+        data: buffer.baseAddress, width: width, height: height, bitsPerComponent: 8,
+        bytesPerRow: width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue
+      ) else { throw IntroRendererError.resource("word bitmap") }
+      context.setFillColor(gray: 1, alpha: 1)
+      context.setAllowsFontSmoothing(false)
+      context.setShouldAntialias(true)
+      context.textPosition = CGPoint(x: pad, y: pad + descent)
+      CTLineDraw(line, context)
+    }
+    let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+      pixelFormat: .r8Unorm, width: width, height: height, mipmapped: true
+    )
+    guard let mask = device.makeTexture(descriptor: descriptor) else { throw IntroRendererError.resource("word mask") }
+    mask.replace(region: MTLRegionMake2D(0, 0, width, height), mipmapLevel: 0, withBytes: pixels, bytesPerRow: width)
+    blit.generateMipmaps(for: mask)
+    return (mask, advance, pad)
   }
 
   /// The surfacing's uniforms, and the two blur levels either side of how

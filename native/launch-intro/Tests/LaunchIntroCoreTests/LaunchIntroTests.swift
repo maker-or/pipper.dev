@@ -349,14 +349,16 @@ private func centreRow(_ frame: FramePixels) -> [Int] {
   #expect(two.version == .two && two.ending == .still)
   // No line and nothing surfacing: its last ripple becomes the window.
   #expect(two.text.isEmpty && two.mark.isEmpty && two.phrase != nil && two.carousel == nil && one.phrase == nil)
+  #expect(two.brand != nil && one.brand == nil)
   #expect(two.rippleStarts == one.rippleStarts && two.travel == one.travel)
-  #expect(two.end < one.end)
+  #expect(two.end > two.brand!.done)
   // Switching back restores version 1's water, line and @ exactly.
   var back = two
   back.use(.one)
   #expect(back.ending == .surfacing && back.text == one.text && back.mark == one.mark)
   #expect(back.wavelength == one.wavelength && back.refraction == one.refraction && back.waterRim == one.waterRim)
   #expect(back.fontSize == one.fontSize && back.end == one.end && back.carousel == nil && back.phrase == nil)
+  #expect(back.brand == nil)
 }
 
 @Test func version2NeverTurnsTheScreenFullyDarkAndHoldsStill() throws {
@@ -483,6 +485,33 @@ layout {"window":{"x":60,"y":45,"width":600,"height":360,"radius":16,"color":[23
   #expect(at(start) == .blank && at(end).isPrinted([800, 499]))
 }
 
+@Test func theIconsPopInThenOutIntoPipper() throws {
+  let c = IntroConfig(version: .two)
+  let brand = try #require(c.brand)
+  #expect(brand.name == "Pipper" && IntroConfig(version: .one).brand == nil)
+  // After the ripples; every tile in before any pops out; the line after the name.
+  #expect(brand.start > c.darknessComplete)
+  #expect(brand.popOutTime(0) > brand.popIn(brand.name.count - 1) + brand.spring)
+  #expect(c.phrase!.appear > brand.done)
+  let g = IntroGeometry(width: 1440, height: 900, config: c)
+  let widths = [40.0, 20, 40, 40, 36, 26]
+  #expect(brandFrames(time: brand.start, config: c, geometry: g, letterWidths: widths).isEmpty)
+  // One tile per letter, cycling the four brand icons, in a row above the middle.
+  let all = brandFrames(time: brand.popOutTime(0) - 0.01, config: c, geometry: g, letterWidths: widths)
+  #expect(all.map(\.icon) == [0, 1, 2, 3, 0, 1])
+  #expect(all.allSatisfy { abs($0.tileScale - 1) < 0.01 && $0.letterScale == 0 && $0.centre.y < 450 })
+  #expect(abs((all.first!.centre.x + all.last!.centre.x) / 2 - 720) < 0.5)
+  // Mid-way out: the first tiles have become letters, the rest are tiles still.
+  let midway = brandFrames(time: brand.popOutTime(3), config: c, geometry: g, letterWidths: widths)
+  #expect(midway[0].tileScale == 0 && midway[0].letterScale > 0.9)
+  #expect(midway[5].tileScale > 0.99 && midway[5].letterScale == 0)
+  // Once whole, the letters sit side by side as the word, centred.
+  let word = brandFrames(time: brand.done, config: c, geometry: g, letterWidths: widths)
+  #expect(word.allSatisfy { $0.tileScale == 0 && abs($0.letterScale - 1) < 0.01 })
+  #expect(abs(word[1].letterCentre.x - word[0].letterCentre.x - 30) < 0.01)
+  #expect(abs(word.first!.letterCentre.x - 20 - (720 - widths.reduce(0, +) / 2)) < 0.01)
+}
+
 @Test func theLaserPrintsTheLineAtTheMiddleAfterTheRipples() throws {
   let c = IntroConfig(version: .two)
   let phrase = try #require(c.phrase)
@@ -568,4 +597,50 @@ layout {"window":{"x":60,"y":45,"width":600,"height":360,"radius":16,"color":[23
   #expect(near(end.pixel(x: 555, yUp: 450 - 345), (250, 250, 250)))
   // Nothing is drawn outside the window.
   #expect(end.pixel(x: 20, yUp: 20).r < 12)
+}
+
+// Version 3: version 2 opening on a sakura bloom through a grid of discs.
+
+@Test func version3OpensOnABloomThenFollowsVersion2() {
+  let two = IntroConfig(version: .two)
+  let three = IntroConfig(version: .three)
+  #expect(three.version == .three && three.opening == .bloom && two.opening == .ripples)
+  // The rest is version 2's: the name, then the printed line.
+  #expect(three.phrase?.text == two.phrase?.text && three.brand?.name == two.brand?.name)
+  #expect(three.brand!.start > three.bloomEnd && three.phrase!.appear > three.brand!.done)
+  // Switching away puts the ripples back.
+  var back = three
+  back.use(.two)
+  #expect(back.opening == .ripples && back.version == .two)
+  // No ripples, so nothing taps the trackpad for them.
+  let g = IntroGeometry(width: 1440, height: 900, config: three)
+  #expect(!hapticPulses(at: [720, 450], from: 0, to: three.bloomEnd, geometry: g, config: three)
+    .contains { $0.kind == .front })
+}
+
+@Test func theBloomFillsTheScreenPlumAtItsCoreThroughEmbossedDiscs() throws {
+  guard MTLCreateSystemDefaultDevice() != nil else { return }
+  let c = IntroConfig(version: .three)
+  let renderer = try IntroRenderer(config: c, width: 720, height: 450)
+  // Nothing before it starts.
+  let before = try renderer.renderFrame(time: c.bloomStart * 0.5)
+  #expect(before.pixel(x: 360, yUp: 225).a == 0)
+  // Mid-bloom it covers the middle but hasn't reached the corners.
+  let mid = try renderer.renderFrame(time: c.bloomStart + c.bloomDuration * 0.3)
+  #expect(mid.pixel(x: 360, yUp: 225).a > 200 && mid.pixel(x: 2, yUp: 2).a < 40)
+  // Full: deep plum at the middle, pale pink at the corners, all covered.
+  let full = try renderer.renderFrame(time: c.bloomEnd)
+  let core = full.pixel(x: 360, yUp: 225)
+  #expect(core.r > core.g + 40 && Int(core.r) + Int(core.g) + Int(core.b) < 220)
+  for (x, y) in [(2, 2), (717, 2), (2, 447), (717, 447)] {
+    let corner = full.pixel(x: x, yUp: y)
+    #expect(corner.a > 180 && corner.r > 180 && corner.b > 180)
+  }
+  // Each disc is lit on its upper left and darker on its lower right.
+  let pitch = 720.0 / c.discColumns
+  let cell = (x: 360 + pitch * 3, y: 225.0)
+  let r = pitch * 0.47
+  let lit = full.pixel(x: Int(cell.x - r * 0.62), yUp: Int(450 - (cell.y - r * 0.62)))
+  let shaded = full.pixel(x: Int(cell.x + r * 0.62), yUp: Int(450 - (cell.y + r * 0.62)))
+  #expect(Int(lit.r) + Int(lit.g) + Int(lit.b) > Int(shaded.r) + Int(shaded.g) + Int(shaded.b) + 15)
 }

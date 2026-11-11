@@ -126,6 +126,31 @@ describe.skipIf(process.platform === "win32")("provider process reaping", () => 
     expect(runningProviderProcesses()).toEqual([]);
   }, 15_000);
 
+  test("closing a provider that is still starting stops it and never caches it", async () => {
+    const lifecycle = makeLifecycle();
+    // Never answers initialize, so close() lands mid-handshake.
+    const starting = lifecycle.acquire(descriptor("closed-starting", "stubborn"));
+    const outcome = starting.then(
+      () => "connected",
+      (error: Error) => error.message,
+    );
+    const helper = await helperPid(join(root, "closed-starting.pid"));
+    const [provider] = runningProviderProcesses();
+    expect(provider).toBeDefined();
+
+    await lifecycle.close("closed-starting");
+
+    expect(await outcome).toMatch(/closed while it was starting/);
+    expect(lifecycle.getCached("closed-starting")).toBeUndefined();
+    await waitFor(() => !isAlive(provider!.pid!) && !isAlive(helper), 2_000);
+    expect(runningProviderProcesses()).toEqual([]);
+
+    // The agent can be started again afterwards.
+    const fresh = await lifecycle.acquire(descriptor("closed-starting", "agent"));
+    expect(lifecycle.getCached("closed-starting")).toBe(fresh);
+    await lifecycle.terminateAll();
+  }, 15_000);
+
   test("the synchronous last-resort kill stops a provider that ignores SIGTERM and its group", async () => {
     const pidFile = join(root, "sync.pid");
     const child = spawnProviderProcess(process.execPath, [fixture, "stubborn", pidFile], {

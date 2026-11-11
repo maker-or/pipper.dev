@@ -1,0 +1,20 @@
+/* The row of posters: one window tall, scrolled sideways, each poster settling at the left edge, the next one peeking in. Its surround is the
+   posters' own (spec.module.css), so a poster's edge is the only line between them. */
+.strip { --surround: oklch(0.975 0 0); display: flex; align-items: center; box-sizing: border-box; height: 100dvh; padding-inline: 21px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; padding-bottom: var(--toolbar-room, 0px); overscroll-behavior-x: contain; scroll-padding-inline: 21px; background: var(--surround); color-scheme: light; }
+.strip[data-theme='dark'] { --surround: oklch(0.13 0 0); color-scheme: dark; }
+.slot { position: relative; flex: none; scroll-snap-align: start; }
+/* a poster settling: out of sight (and out of reach) under a spinner, then faded in */
+.slot > :not(.loader) { opacity: 0; pointer-events: none; transition: opacity 160ms ease-out; }
+.slot[data-shown] > :not(.loader) { opacity: 1; pointer-events: auto; transition-duration: 240ms; }
+.loader { position: absolute; left: 50%; top: 50%; width: 21px; height: 21px; margin: -10.5px 0 0 -10.5px; box-sizing: border-box; border-radius: 999px; border: 1.5px solid var(--spin-track); border-top-color: var(--spin); opacity: 1; pointer-events: none; transition: opacity 160ms ease-out; animation: spin 0.8s linear infinite; }
+.slot[data-shown] .loader { opacity: 0; animation-play-state: paused; }
+.strip { --spin: oklch(0.5 0 0); --spin-track: oklch(0.5 0 0 / 0.16); }
+.strip[data-theme='dark'] { --spin: oklch(0.72 0 0); --spin-track: oklch(1 0 0 / 0.12); }
+@keyframes spin { to { transform: rotate(1turn); } }
+@media (prefers-reduced-motion: reduce) { .loader { animation-duration: 2.4s; } .slot > :not(.loader) { transition: none; } }
+.strip::-webkit-scrollbar { display: none; }
+/* (the posters stand above the toolbar, never under it) */
+.strip:has([role='toolbar']) { --toolbar-room: 89px; }
+/* (snapping only for a finger: a trackpad's small sideways steps would each be pulled back to the nearest edge, and
+   a mouse wheel already moves a poster at a time) */
+@media (pointer: coarse) { .strip { scroll-snap-type: x mandatory; } }

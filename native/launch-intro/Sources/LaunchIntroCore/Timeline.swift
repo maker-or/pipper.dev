@@ -16,7 +16,27 @@ public struct IntroConfig: Sendable {
   public enum Version: Int, Sendable, CaseIterable {
     case one = 1
     case two = 2
+    /// Version 2 opening on a bloom of colour through a grid of discs
+    /// instead of ripples.
+    case three = 3
   }
+
+  /// How the intro opens. `ripples`: the stone and its rings (versions 1
+  /// and 2). `bloom`: a grid of embossed discs over the screen, through which
+  /// a sakura colour blooms out from the middle, plum at its core.
+  public enum Opening: Sendable {
+    case ripples
+    case bloom
+  }
+
+  public var opening: Opening = .ripples
+  /// The bloom starts here and has reached its full size `bloomDuration`
+  /// later; `discColumns` discs fit across the display.
+  public var bloomStart: Double = 0.2
+  public var bloomDuration: Double = 2.6
+  public var discColumns: Double = 14
+  /// The bloom has reached its full size.
+  public var bloomEnd: Double { bloomStart + bloomDuration }
 
   public private(set) var version: Version = .one
 
@@ -64,6 +84,9 @@ public struct IntroConfig: Sendable {
   /// Version 2's "One interface to control your agents" (Carousel.swift);
   /// nil for none.
   public var phrase: Phrase?
+  /// Version 2's name: brand icons that pop in, then pop out into "Pipper"
+  /// (Brand.swift); nil for none.
+  public var brand: Brand?
 
   /// Stone sits this fraction of the display height below the bottom edge.
   public var stoneDepth: Double = 0.2
@@ -208,7 +231,21 @@ public struct IntroConfig: Sendable {
       surfaceDuration = base.surfaceDuration
       carousel = base.carousel
       phrase = base.phrase
+      brand = base.brand
+      opening = base.opening
+    case .three:
+      // Version 2, but it opens on the bloom; the name follows the bloom.
+      use(.two)
+      self.version = .three
+      opening = .bloom
+      var name = brand ?? Brand()
+      name.start = bloomEnd + 0.3
+      brand = name
+      var line = phrase ?? Phrase()
+      line.appear = name.done + 0.3
+      phrase = line
     case .two:
+      opening = base.opening
       // Nothing surfacing: one line (Carousel.swift) that becomes the
       // heading of the window the user lands in, drawn out from it
       // (WindowDrawing.swift). The darkness stays as the ripples left it.
@@ -218,10 +255,13 @@ public struct IntroConfig: Sendable {
       fontSize = 52
       mark = ""
       surfaceDuration = 1
-      // The line waits for the water: it appears once the last ripple has
-      // crossed the display.
+      // The name waits for the water: its icons pop in once the last ripple
+      // has crossed the display. The line follows once the name is in.
+      var name = Brand()
+      name.start = darknessComplete + 0.2
+      brand = name
       var line = Phrase()
-      line.appear = darknessComplete + 0.2
+      line.appear = name.done + 0.3
       phrase = line
       carousel = nil
       // Long, low swells: a gentle slope, so the shading stays soft, but

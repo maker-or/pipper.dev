@@ -1,5 +1,12 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
   "endOfLine": "lf",
-  "ignorePatterns": ["coverage/**", "out/**", "release/**", "node_modules/**"]
+  "ignorePatterns": [
+    "coverage/**",
+    "out/**",
+    "release/**",
+    "node_modules/**",
+    ".claude/skills/**",
+    "specs-out/**"
+  ]
 }

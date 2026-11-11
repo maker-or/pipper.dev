@@ -301,7 +301,7 @@ process.stdin.on("data", (data) => {
   });
 
   test("plays the version it was asked for", async () => {
-    expect(LAUNCH_INTRO_VERSIONS).toEqual([1, 2]);
+    expect(LAUNCH_INTRO_VERSIONS).toEqual([1, 2, 3]);
     for (const version of LAUNCH_INTRO_VERSIONS) {
       const argsFile = join(root, `args-${version}`);
       const session = startLaunchIntro({

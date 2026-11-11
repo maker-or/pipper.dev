@@ -24,11 +24,12 @@ const CLOSE_GRACE_MS = 5_000;
 export type LaunchIntroOutcome = "complete" | "skipped" | "failed";
 
 /**
- * Version 1's ripples are bold; version 2's are subtle, seen the way the
- * surfacing @ is. Both share the timeline and the ending.
+ * Version 1: bold ripples and the @ surfacing. Version 2: subtle ripples, the
+ * Pipper name, the printed line and the printed window. Version 3: version 2
+ * opening on a sakura bloom through a grid of discs instead of ripples.
  */
-export type LaunchIntroVersion = 1 | 2;
-export const LAUNCH_INTRO_VERSIONS: readonly LaunchIntroVersion[] = [1, 2];
+export type LaunchIntroVersion = 1 | 2 | 3;
+export const LAUNCH_INTRO_VERSIONS: readonly LaunchIntroVersion[] = [1, 2, 3];
 
 /** What a new user sees on their first launch. */
 export const FIRST_LAUNCH_INTRO_VERSION: LaunchIntroVersion = 2;

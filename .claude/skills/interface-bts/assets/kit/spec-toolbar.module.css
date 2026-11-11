@@ -1,0 +1,84 @@
+/* The strip's toolbar: one row of pills on a dark bar floating at the foot of the window. Paper and accent carry
+   their names inside their pills; the rest say what they are by their icons. The chosen option sits under a white
+   pill. One size of type (12px). */
+.toolbar { --bar: oklch(0.17 0 0); --well: oklch(0.25 0 0); --idle: oklch(1 0 0 / 0.5); --hover: oklch(1 0 0 / 0.64);
+  position: fixed; left: 50%; bottom: 21px; z-index: 40; translate: -50% 0; display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 32px); box-sizing: border-box; padding: 8px; border-radius: 25px; background: var(--bar); box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08); color: oklch(1 0 0); font: 450 12px/15px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -0.08px; overflow-x: auto; scrollbar-width: none; -webkit-font-smoothing: antialiased; color-scheme: dark; }
+.toolbar::-webkit-scrollbar { display: none; }
+/* (out of sight until it shows the reader's own choices, then faded in; until a frame later nothing in it eases,
+   so nothing slides from a default into place) */
+.toolbar { opacity: 0; transition: opacity 0.2s ease-out; }
+.toolbar[data-shown] { opacity: 1; }
+.toolbar:not([data-shown]) { pointer-events: none; }
+.toolbar:not([data-live]) *, .toolbar:not([data-live]) *::before, .toolbar:not([data-live]) *::after { transition: none !important; }
+/* (a narrow screen: the ends fade where the row goes on, and only there) */
+.toolbar[data-more-right] { mask-image: linear-gradient(90deg, #000 calc(100% - 34px), transparent); }
+.toolbar[data-more-left] { mask-image: linear-gradient(90deg, transparent, #000 34px); }
+.toolbar[data-more-left][data-more-right] { mask-image: linear-gradient(90deg, transparent, #000 34px, #000 calc(100% - 34px), transparent); }
+.group { display: flex; align-items: center; gap: 8px; flex: none; height: 34px; padding-left: 13px; box-sizing: border-box; border-radius: 999px; background: var(--well); }
+.group .swatches { background: none; padding-left: 0; }
+.label { color: var(--idle); user-select: none; pointer-events: none; }
+.segmented { flex: none; }
+
+/* the segmented control: a well, the white pill under the chosen option, and the dark copy of the labels clipped to it */
+.segmented { position: relative; display: flex; height: 34px; padding: 3px; box-sizing: border-box; border-radius: 999px; background: var(--well); }
+.option { position: relative; display: grid; place-items: center; min-width: 34px; height: 28px; padding: 0 8px; box-sizing: border-box; border: 0; border-radius: 999px; background: none; color: var(--idle); font: inherit; cursor: pointer; transition: color 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+@media (hover: hover) { button.option:hover { color: var(--hover); } }
+.option:focus-visible { outline: 2px solid oklch(1 0 0 / 0.7); outline-offset: -2px; }
+/* (worded options all one width, so a face still loading, the hand, can't move the pill or the row) */
+.option[data-text] { width: 52px; padding: 0; }
+.optionFace { display: flex; align-items: center; gap: 5px; pointer-events: none; user-select: none; }
+.indicator { position: absolute; top: 3px; height: 28px; border-radius: 999px; background: oklch(1 0 0); pointer-events: none; }
+.onLayer { position: absolute; inset: 0; display: flex; padding: 3px; pointer-events: none; }
+.onLayer .option { color: oklch(0.17 0 0); }
+.segmented[data-ready] .indicator { transition: left 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94), width 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+.segmented[data-ready] .onLayer { transition: clip-path 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+
+/* swatches: round, on the same well. The colour is a disc inside the swatch; choosing one draws a white ring at the
+   swatch's own edge and shrinks the disc inside it, so the chosen one takes no more room than the rest. Both ease
+   over 200ms, out of the old choice as into the new. */
+.swatches { display: flex; align-items: center; gap: 5px; height: 34px; padding: 0 5px; box-sizing: border-box; border-radius: 999px; background: var(--well); }
+.swatch { --ease: cubic-bezier(0.25, 0.46, 0.45, 0.94); position: relative; display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 999px; cursor: pointer; color: var(--idle); background: transparent; }
+.swatch::before { content: ''; position: absolute; inset: 0; border-radius: inherit; background: var(--c, transparent); box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.12); transition: inset 0.2s var(--ease); }
+.swatch::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1.5px oklch(1 0 0); opacity: 0; pointer-events: none; transition: opacity 0.2s var(--ease); }
+.swatch[aria-checked='true']::before { inset: 3.5px; }
+.swatch[aria-checked='true']::after { opacity: 1; }
+.swatch > svg { position: relative; }
+.swatch:focus-visible { outline: 2px solid oklch(1 0 0 / 0.7); outline-offset: 2px; }
+/* (the poster's own accent: every poster has its own, so a wheel of them) */
+.swatch[data-auto]:not([style])::before { background: conic-gradient(#FF383C, #FF8D28, #FFCC00, #34C759, #00C3D0, #0088FF, #6155F5, #CB30E0, #FF383C); }
+/* (the plus, before a colour is picked through it: an outline round its icon) */
+.swatch[data-more]:not([style])::before { box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.24); }
+/* (hover: the ring, faint, the disc kept whole) */
+@media (hover: hover) { .swatch:hover:not([aria-checked='true'])::after { opacity: 0.32; } .swatch[data-more]:hover { color: var(--hover); } }
+@media (prefers-reduced-motion: reduce) { .swatch::before, .swatch::after { transition: none; } }
+.more { position: relative; display: grid; }
+/* the plus, and the X that takes its place on a colour picked through it: one spot, swapped with a fade. The X sits
+   on a dark disc over the colour, so it reads on any of them. */
+.moreIcons { position: relative; display: grid; place-items: center; width: 100%; height: 100%; border-radius: 999px; transition: background-color 0.15s var(--ease); }
+.moreIcons > svg { grid-area: 1 / 1; transition: opacity 0.15s var(--ease); }
+.moreIcons > [data-icon='cross'] { opacity: 0; color: oklch(1 0 0); }
+.swatch[data-custom] .moreIcons > [data-icon='plus'] { opacity: 0; }
+@media (hover: hover) {
+  .swatch[data-custom]:hover .moreIcons { background: oklch(0 0 0 / 0.42); }
+  .swatch[data-custom]:hover .moreIcons > [data-icon='cross'] { opacity: 1; }
+}
+.swatch[data-custom]:focus-visible .moreIcons { background: oklch(0 0 0 / 0.42); }
+.swatch[data-custom]:focus-visible .moreIcons > [data-icon='cross'] { opacity: 1; }
+
+/* the name of the control under the pointer, just above the toolbar: fades in, follows along once it's shown */
+.tip { position: fixed; z-index: 42; translate: -50% 0; padding: 5px 8px; border-radius: 8px; background: oklch(0.17 0 0); box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08); color: oklch(1 0 0); font: 450 12px/15px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing: -0.08px; white-space: nowrap; pointer-events: none; user-select: none; opacity: 0; transition: opacity 0.12s ease-out, left 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94); }
+.tip[data-shown] { opacity: 1; }
+
+/* the colour picker, opening above its swatch */
+.picker { --bar: oklch(0.17 0 0); --well: oklch(0.25 0 0); position: fixed; z-index: 41; opacity: 0; translate: 0 4px; transition: opacity 0.12s ease-out, translate 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94); display: grid; gap: 8px; width: 178px; padding: 8px; border-radius: 13px; background: var(--bar); box-shadow: 0 0 0 1px oklch(1 0 0 / 0.08); color: oklch(1 0 0); font: 450 12px/15px Inter, ui-sans-serif, system-ui, sans-serif; color-scheme: dark; }
+.square { position: relative; height: 112px; border-radius: 8px; cursor: crosshair; touch-action: none; background-image: linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, transparent); }
+.hue { position: relative; height: 13px; border-radius: 999px; cursor: ew-resize; touch-action: none; background: linear-gradient(90deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.knob { position: absolute; width: 13px; height: 13px; translate: -50% -50%; border-radius: 999px; box-shadow: 0 0 0 2px #fff, 0 0 0 3px oklch(0 0 0 / 0.2); pointer-events: none; }
+.hex { height: 28px; padding: 0 8px; border: 0; border-radius: 8px; background: var(--well); color: oklch(1 0 0); font: inherit; font-variant-numeric: tabular-nums; outline: none; }
+.hex:focus-visible { box-shadow: inset 0 0 0 1px oklch(1 0 0 / 0.5); }
+.picker[data-shown] { opacity: 1; translate: 0 0; }
+.square:focus-visible, .hue:focus-visible { outline: 2px solid oklch(1 0 0 / 0.7); outline-offset: 2px; }
+.square, .hue { outline: none; }
+.hue[data-dragging] { cursor: grabbing; }
+
+@media (prefers-reduced-motion: reduce) { .segmented[data-ready] .indicator, .segmented[data-ready] .onLayer, .picker, .tip, .moreIcons, .moreIcons > svg { transition: none; } .picker { translate: none; } }

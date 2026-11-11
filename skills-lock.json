@@ -25,6 +25,12 @@
       "skillPath": ".agents/skills/human-writing/SKILL.md",
       "computedHash": "df053b7c00ae74289efe3db6bd826797c64db3aeb4e2537809c71b97469cc38a"
     },
+    "interface-bts": {
+      "source": "nomanjack/interface-bts",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "9c41b8b2bd93e8bfb408d96cea32fd7b7845ba0b9499f39ca0d28180281d7a73"
+    },
     "seo-audit": {
       "source": "anthropics/knowledge-work-plugins",
       "sourceType": "github",

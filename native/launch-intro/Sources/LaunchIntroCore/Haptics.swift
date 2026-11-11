@@ -30,7 +30,8 @@ public func hapticPulses(
   guard t1 > t0 else { return [] }
   let distance = simd_distance_d(p, g.stone)
   var pulses: [HapticPulse] = []
-  for (index, start) in c.rippleStarts.enumerated() {
+  // Fronts are felt only when there are ripples to feel.
+  for (index, start) in c.rippleStarts.enumerated() where c.opening == .ripples {
     let arrival = start + distance / g.speed
     guard arrival > t0, arrival <= t1 else { continue }
     let strength = c.rippleStrengths[index]

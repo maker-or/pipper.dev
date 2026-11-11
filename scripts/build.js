@@ -32,6 +32,7 @@ const FEATURE_ENV = {
   remote: "VITE_PIPPER_REMOTE",
   siri: "VITE_PIPPER_SIRI",
   clerk: "VITE_PIPPER_CLERK",
+  launchIntro: "VITE_PIPPER_LAUNCH_INTRO",
 };
 const features = Object.fromEntries(
   Object.entries(FEATURE_ENV).map(([name, key]) => [
@@ -98,6 +99,13 @@ function buildMacSleeplessHelpers() {
 function buildLaunchIntro() {
   if (process.platform !== "darwin") return;
   const packageDir = join(root, "native", "launch-intro");
+  if (!features.launchIntro) {
+    // electron-builder packages whatever helper is in dist/, so a stale one
+    // from an earlier build must go too.
+    rmSync(join(packageDir, "dist", "pipper-launch-intro"), { force: true });
+    console.log("[build] The launch intro is off; its helper is not built or packaged.");
+    return;
+  }
   const args = [
     "build",
     "--package-path",
