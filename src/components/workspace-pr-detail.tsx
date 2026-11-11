@@ -1,11 +1,10 @@
 import { useRef, useState, type ReactNode } from "react";
 import { ClipFade } from "@/components/clip-fade";
-import { ArrowUpRight, Check, CircleNotch, Minus, X } from "@phosphor-icons/react";
+import { Check, CircleNotch, Minus, X } from "@phosphor-icons/react";
 import { WorkspacePrComments } from "@/components/workspace-pr-comments";
 import type {
   WorkspaceGitStatus,
   WorkspacePrCheck,
-  WorkspacePrComment,
   WorkspacePrDeployment,
 } from "../../contracts/git.ts";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
@@ -41,25 +40,30 @@ function StateIcon({
   }
 }
 
-/** A plain row: state glyph, name, outbound link. */
+/** A plain row: state glyph and name; the whole row opens its link. */
 function LinkRow({ icon, label, url }: { icon: ReactNode; label: string; url: string | null }) {
-  return (
-    <li className="flex min-h-8 items-center gap-2.5 py-1 text-[13px]">
+  const content = (
+    <>
       <span className="flex w-4 shrink-0 items-center justify-center">{icon}</span>
-      <span className="min-w-0 flex-1 truncate text-foreground" title={label}>
-        {label}
-      </span>
+      <span className="min-w-0 flex-1 truncate text-foreground">{label}</span>
+    </>
+  );
+  return (
+    <li className="text-[13px]">
       {url ? (
         <button
           type="button"
           onClick={() => void window.omni.shell.openHttps(url).catch(() => {})}
-          className="shrink-0 text-muted-foreground/70 transition-colors hover:text-foreground"
+          className="-mx-1.5 flex min-h-8 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-md px-1.5 py-1 text-left transition-colors duration-80 hover:bg-hover"
           title={url}
-          aria-label={`Open ${label}`}
         >
-          <ArrowUpRight size={13} />
+          {content}
         </button>
-      ) : null}
+      ) : (
+        <div className="flex min-h-8 items-center gap-2.5 py-1" title={label}>
+          {content}
+        </div>
+      )}
     </li>
   );
 }
@@ -73,13 +77,10 @@ const BODY_COLLAPSED_PX = 220;
 export function WorkspacePrDetail({
   status,
   items: _items,
-  onAddComments,
 }: {
   status: WorkspaceGitStatus;
   /** Retained for callers; the header's tone already states the merge state. */
   items: PrStatusItem[];
-  /** Hand comments to the agent; absent when no workspace thread can take them. */
-  onAddComments?: (comments: WorkspacePrComment[]) => void;
 }) {
   const pr = status.pr;
   const [bodyExpanded, setBodyExpanded] = useState(false);
@@ -159,7 +160,7 @@ export function WorkspacePrDetail({
         )}
       </section>
 
-      <WorkspacePrComments comments={pr.comments} onAddComments={onAddComments} />
+      <WorkspacePrComments comments={pr.comments} />
     </div>
   );
 }

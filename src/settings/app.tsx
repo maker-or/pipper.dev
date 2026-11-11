@@ -18,6 +18,7 @@ import type { IconComponent } from "@/lib/icon-context";
 import { useAgentRegistryStore } from "@/store/agent-registry-store";
 import { useTabGestureStore } from "@/store/tab-gesture-store";
 import type { AcpAgentDescriptor, BrowserConfig } from "../../contracts/acp.ts";
+import { REMOTE_ENABLED } from "../../contracts/features.ts";
 import type { WorkspaceDiskUsageReport } from "../../contracts/storage.ts";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -66,7 +67,9 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string; hidden?: boolean }> = [
   // Hidden while Pipper is designed dark-first; AppearanceView and the theme
   // picker stay so it can come back by dropping `hidden`.
   { id: "appearance", label: "Appearance", hidden: true },
-  { id: "design", label: "Design system" },
+  // Design system surface removed from the settings panel; DesignView and
+  // SECTION_META entry stay so it can come back by dropping `hidden`.
+  { id: "design", label: "Design system", hidden: true },
   { id: "agents", label: "Agents" },
   { id: "connectors", label: "Connectors" },
   { id: "browser", label: "Browser" },
@@ -74,7 +77,8 @@ const NAV_ITEMS: Array<{ id: SectionId; label: string; hidden?: boolean }> = [
   { id: "keyboard", label: "Keyboard & trackpad" },
   { id: "power", label: "Power" },
   { id: "storage", label: "Storage" },
-  { id: "remote", label: "Remote" },
+  // Held back from release builds; see contracts/features.ts.
+  { id: "remote", label: "Remote", hidden: !REMOTE_ENABLED },
 ];
 
 const VISIBLE_NAV_ITEMS = NAV_ITEMS.filter((item) => !item.hidden);
@@ -138,7 +142,7 @@ function SettingRow({
 
 function Kbd({ children }: { children: React.ReactNode }) {
   return (
-    <span className="rounded-md bg-surface-3 px-2 py-1 text-[11px] tabular-nums text-muted-foreground shadow-surface-1">
+    <span className="inline-flex h-8 min-w-8 items-center justify-center rounded-lg border border-border/80 bg-surface-2 px-2 font-sans text-xs font-medium text-foreground shadow-[0_1px_0_rgba(255,255,255,0.06)]">
       {children}
     </span>
   );
@@ -366,7 +370,7 @@ const SECTION_META: Record<SectionId, { title: string; blurb: string }> = {
   },
   connectors: {
     title: "Connectors",
-    blurb: "Give every agent other services' tools. Sign in once here; Pipper keeps the keys.",
+    blurb: "",
   },
   browser: {
     title: "Agent browser",
@@ -434,67 +438,68 @@ function KeyboardView() {
   const setSwipeEnabled = useTabGestureStore((state) => state.setSwipeEnabled);
   const isMac = typeof navigator !== "undefined" && /Mac/i.test(navigator.platform);
   return (
-    <div className="flex flex-col gap-4">
-      <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70">
-        <SettingRow
-          title="Swipe between tabs"
-          description={
-            isMac
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-4 rounded-2xl border border-border/60 bg-surface-1/35 p-4 transition-colors hover:border-border hover:bg-surface-1/60">
+        <div className="flex min-w-0 flex-col gap-1">
+          <span className="text-sm font-medium text-foreground">Swipe between tabs</span>
+          <span className="text-sm leading-5 text-muted-foreground">
+            {isMac
               ? "Uses your macOS ‘Swipe between pages’ gesture. Swipe left for the next tab or right for the previous tab."
-              : "Trackpad tab navigation is available on macOS."
-          }
-        >
-          <Switch
-            label="Swipe between tabs"
-            checked={swipeEnabled}
-            onToggle={() => setSwipeEnabled(!swipeEnabled)}
-            disabled={!isMac}
-            className="gap-0 px-0 py-0 [&>span:last-of-type]:sr-only"
-            data-pipper-id="settings-tab-swipe-switch"
-          />
-        </SettingRow>
-      </Elevated>
-      <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70 px-1 py-1">
-        <Table>
-          <TableBody>
-            <TableRow index={0}>
-              <TableCell>
-                <span className="font-medium text-foreground">Switch tabs</span>
-                <span className="mt-0.5 block text-[11px] leading-4">
-                  From the left of the tab bar, {mod}1 opens the first tab through {mod}9.
-                </span>
-              </TableCell>
-              <TableCell className="w-[1%] text-right whitespace-nowrap">
-                <Kbd>
-                  {mod}1–{mod}9
-                </Kbd>
-              </TableCell>
-            </TableRow>
-            <TableRow index={1}>
-              <TableCell>
-                <span className="font-medium text-foreground">New tab</span>
-                <span className="mt-0.5 block text-[11px] leading-4">
-                  Opens a new thread. The composer stays a draft until you send the first message.
-                </span>
-              </TableCell>
-              <TableCell className="w-[1%] text-right whitespace-nowrap">
-                <Kbd>{mod}T</Kbd>
-              </TableCell>
-            </TableRow>
-            <TableRow index={2}>
-              <TableCell>
-                <span className="font-medium text-foreground">New terminal</span>
-                <span className="mt-0.5 block text-[11px] leading-4">
-                  Opens a terminal in the current workspace.
-                </span>
-              </TableCell>
-              <TableCell className="w-[1%] text-right whitespace-nowrap">
-                <Kbd>{mod === "⌘" ? "⌘⇧T" : "Ctrl+Shift+T"}</Kbd>
-              </TableCell>
-            </TableRow>
-          </TableBody>
-        </Table>
-      </Elevated>
+              : "Trackpad tab navigation is available on macOS."}
+          </span>
+        </div>
+        <Switch
+          label="Swipe between tabs"
+          checked={swipeEnabled}
+          onToggle={() => setSwipeEnabled(!swipeEnabled)}
+          disabled={!isMac}
+          className="gap-0 px-0 py-0 [&>span:last-of-type]:sr-only"
+          data-pipper-id="settings-tab-swipe-switch"
+        />
+      </div>
+      <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {[
+          {
+            action: "New tab",
+            description:
+              "Opens a new thread. The composer stays a draft until you send the first message.",
+            keys: mod === "⌘" ? ["⌘", "T"] : ["Ctrl", "T"],
+          },
+          {
+            action: "New terminal",
+            description: "Opens a terminal in the current workspace.",
+            keys: mod === "⌘" ? ["⌘", "⇧", "T"] : ["Ctrl", "Shift", "T"],
+          },
+          {
+            action: "Close tab",
+            description: "",
+            keys: mod === "⌘" ? ["⌘", "W"] : ["Ctrl", "W"],
+          },
+          {
+            action: "Switch tabs",
+            // "⌘1" reads as one key; "Ctrl" needs the "+" to.
+            description: `From the left of the tab bar, ${mod === "⌘" ? "⌘1" : "Ctrl+1"} opens the first tab through ${mod === "⌘" ? "⌘9" : "Ctrl+9"}.`,
+            keys: mod === "⌘" ? ["⌘", "1–9"] : ["Ctrl", "1–9"],
+          },
+        ].map(({ action, description, keys }) => (
+          <li
+            key={action}
+            className="flex min-h-[112px] flex-col justify-between gap-5 rounded-2xl border border-border/60 bg-surface-1/35 p-4 transition-colors hover:border-border hover:bg-surface-1/60"
+          >
+            <span className="flex flex-col gap-1">
+              <span className="text-sm font-medium text-foreground">{action}</span>
+              {description && (
+                <span className="text-sm leading-5 text-muted-foreground">{description}</span>
+              )}
+            </span>
+            <span className="flex items-center gap-1.5">
+              {keys.map((key, index) => (
+                <Kbd key={`${key}-${index}`}>{key}</Kbd>
+              ))}
+            </span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
@@ -502,7 +507,7 @@ function KeyboardView() {
 function PowerView() {
   return (
     <>
-      <Elevated offset={1} className="overflow-hidden rounded-xl border border-border/70">
+      <Elevated offset={1} className="overflow-hidden rounded-lg border border-border/70">
         <SleeplessControl variant="settings" />
       </Elevated>
       <Accordion type="single" collapsible className="mt-2 w-full">

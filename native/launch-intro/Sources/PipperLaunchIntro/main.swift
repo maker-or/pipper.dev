@@ -1,0 +1,175 @@
+import AppKit
+import Foundation
+import ImageIO
+import LaunchIntroCore
+
+/// pipper-launch-intro [--intro-version 1|2] [--text <line>] [--font-size <units>] [--start-at <s>]
+///                     [--silent] [--no-haptics]
+///   Plays the intro over the main display and reports on stdout.
+///
+/// pipper-launch-intro --render-audio <file.wav>
+///   Writes the score, to listen to it without the overlay.
+///
+/// pipper-launch-intro --render-frames <dir> --times 0,1.5,3 [--size 2880x1800]
+///                     [--background <image>] [--screen <image>] [--layout <json>]
+///   Writes frames as PNGs. --background is the stage (the wallpaper); the
+///   frames are composited over --screen, what was on screen before the first
+///   ripple, which defaults to the background itself.
+struct Options {
+  var config = IntroConfig()
+  var startAt: Double = 0
+  var renderDirectory: String?
+  var times: [Double] = []
+  var size: (Int, Int) = (2880, 1800)
+  var background: String?
+  var screen: String?
+  var silent = false
+  var haptics = true
+  var audioPath: String?
+  /// For --render-frames: a window to draw, as the host's `layout` JSON, in
+  /// the rendered frame's pixels.
+  var layout: String?
+
+  init(_ arguments: [String]) {
+    var iterator = arguments.dropFirst().makeIterator()
+    while let flag = iterator.next() {
+      switch flag {
+      case "--silent": silent = true; continue
+      case "--no-haptics": haptics = false; continue
+      default: break
+      }
+      let value = iterator.next() ?? ""
+      switch flag {
+      case "--render-audio": audioPath = value
+      case "--intro-version": config.use(IntroConfig.Version(rawValue: Int(value) ?? 1) ?? .one)
+      case "--text": config.text = value
+      case "--font-size": config.fontSize = Double(value) ?? config.fontSize
+      case "--start-at": startAt = Double(value) ?? 0
+      case "--render-frames": renderDirectory = value
+      case "--times": times = value.split(separator: ",").compactMap { Double($0) }
+      case "--background": background = value
+      case "--screen": screen = value
+      case "--layout": layout = value
+      case "--size":
+        let parts = value.split(separator: "x").compactMap { Int($0) }
+        if parts.count == 2 { size = (parts[0], parts[1]) }
+      default: break
+      }
+    }
+  }
+}
+
+func loadImage(_ path: String) -> CGImage? {
+  guard let source = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+  return CGImageSourceCreateImageAtIndex(source, CGImageSourceGetPrimaryImageIndex(source), nil)
+}
+
+func renderFrames(_ options: Options, to directory: String) -> Int32 {
+  do {
+    let (width, height) = options.size
+    let renderer = try IntroRenderer(config: options.config, width: width, height: height)
+    func texture(_ path: String?) throws -> MTLTexture? {
+      guard let path, let image = loadImage(path),
+            let fitted = composeWallpaper(
+              image, width: width, height: height, scaling: .proportionallyUpOrDown,
+              allowClipping: true, fill: CGColor(gray: 0, alpha: 1)
+            )
+      else { return nil }
+      return try renderer.makeTexture(from: fitted)
+    }
+    renderer.backdrop = try texture(options.background)
+    if let path = options.layout {
+      let json = try String(contentsOfFile: path, encoding: .utf8)
+      renderer.drawing = WindowDrawing(command: "layout \(json)", origin: .zero, scale: 1, config: options.config)
+    }
+    let screen = try texture(options.screen) ?? renderer.backdrop
+    try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
+    for time in options.times {
+      let frame = try renderer.renderFrame(time: time, background: screen)
+      let url = URL(fileURLWithPath: directory).appendingPathComponent(String(format: "frame-%06.3f.png", time))
+      try writePNG(frame, to: url)
+      print(url.path)
+    }
+    return 0
+  } catch {
+    FileHandle.standardError.write(Data("\(error)\n".utf8))
+    return 1
+  }
+}
+
+let options = Options(CommandLine.arguments)
+if let directory = options.renderDirectory {
+  exit(renderFrames(options, to: directory))
+}
+if let path = options.audioPath {
+  do {
+    try writeWAV(renderScore(options.config), to: URL(fileURLWithPath: path))
+    print(path)
+    exit(0)
+  } catch {
+    FileHandle.standardError.write(Data("\(error)\n".utf8))
+    exit(1)
+  }
+}
+
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+var controller: OverlayController?
+/// Layouts that arrive before the overlay exists, applied once it does.
+var pendingLayouts: [String] = []
+
+listenForCommands({ command in
+  if command == "dismiss" {
+    controller?.dismiss()
+  } else if let target = CloseTarget(command: command) {
+    controller?.close(into: target)
+  } else if command.hasPrefix("layout ") {
+    if let controller { controller.draw(layout: command) } else { pendingLayouts.append(command) }
+  }
+}, onClose: { exit(0) })
+
+// Never outlive a host that stopped talking to us.
+DispatchQueue.main.asyncAfter(deadline: .now() + options.config.end + 30) {
+  if let controller { controller.dismiss() } else { exit(0) }
+}
+
+NotificationCenter.default.addObserver(
+  forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+) { _ in
+  if let screen = NSScreen.screens.first { controller?.fit(to: screen) }
+}
+
+Task { @MainActor in
+  // The menu bar display: where Pipper's first window opens.
+  guard let screen = NSScreen.screens.first,
+        let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+  else {
+    emit("error", ["message": "No display"])
+    exit(1)
+  }
+  let scale = screen.backingScaleFactor
+  // Rendered alongside the backdrop, so neither delays the other.
+  let config = options.config
+  let score = options.silent ? nil : Task.detached(priority: .userInitiated) { renderScore(config) }
+  let backdrop = await loadBackdrop(
+    screen: screen,
+    displayID: displayID,
+    pixelWidth: Int((screen.frame.width * scale).rounded()),
+    pixelHeight: Int((screen.frame.height * scale).rounded())
+  )
+  do {
+    let overlay = try OverlayController(
+      config: options.config, screen: screen, backdrop: backdrop, score: await score?.value,
+      haptics: options.haptics, startAt: options.startAt
+    )
+    controller = overlay
+    overlay.start()
+    for layout in pendingLayouts { overlay.draw(layout: layout) }
+    pendingLayouts = []
+  } catch {
+    emit("error", ["message": String(describing: error)])
+    exit(1)
+  }
+}
+
+app.run()

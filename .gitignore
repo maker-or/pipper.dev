@@ -59,3 +59,6 @@ native/pipper-remote-ios/build/
 
 # Local script output
 .tmp-check/
+
+# interface-bts poster captures
+specs-out/

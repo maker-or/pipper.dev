@@ -414,6 +414,7 @@ const api = {
     close: (threadId: string): Promise<OpenTabsState> => ipcRenderer.invoke("tabs:close", threadId),
     setActive: (threadId: string | null): Promise<OpenTabsState> =>
       ipcRenderer.invoke("tabs:setActive", threadId),
+    reorder: (ids: string[]): Promise<OpenTabsState> => ipcRenderer.invoke("tabs:reorder", ids),
     getActive: (): Promise<string | null> => ipcRenderer.invoke("tabs:getActive"),
     onChanged: (callback: (state: OpenTabsState) => void) => {
       const listener = (_event: any, state: OpenTabsState) => callback(state);

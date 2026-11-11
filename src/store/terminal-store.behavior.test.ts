@@ -20,18 +20,19 @@ afterEach(() => {
 });
 
 describe("terminal store session behavior", () => {
-  test("creates sessions with stable titles, cwd, and active selection", () => {
+  test("creates sessions with stable titles, cwd, thread anchor, and active selection", () => {
     const ids = ["term-1", "term-2"];
     vi.spyOn(crypto, "randomUUID").mockImplementation(() => ids.shift() ?? "term-fallback");
 
     useTerminalStore.getState().createSession("/tmp/project-a");
-    useTerminalStore.getState().createSession("/tmp/project-b");
+    useTerminalStore.getState().createSession("/tmp/project-b", "thread-b");
 
     expect(useTerminalStore.getState().sessions).toEqual([
       {
         id: "terminal:term-2",
         title: "Terminal 2",
         cwd: "/tmp/project-b",
+        anchorThreadId: "thread-b",
         status: "starting",
         history: "",
       },
@@ -39,6 +40,7 @@ describe("terminal store session behavior", () => {
         id: "terminal:term-1",
         title: "Terminal 1",
         cwd: "/tmp/project-a",
+        anchorThreadId: null,
         status: "starting",
         history: "",
       },
@@ -202,6 +204,7 @@ describe("terminal store session behavior", () => {
         id: "terminal:term-b-1",
         title: "Terminal 1",
         cwd: "/repo/worktrees/feature",
+        anchorThreadId: null,
         status: "starting",
         history: "",
       },

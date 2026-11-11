@@ -577,6 +577,49 @@ describe("add_connector requests", () => {
     expect(ready).toEqual([]);
   });
 
+  test("Don't connect during a sign-in ends the card, whatever the sign-in does next", async () => {
+    const secure = await startUpstream({ auth: true });
+    cleanups.push(secure.close);
+    const holder: { requests: ConnectorRequests | null; id: string } = { requests: null, id: "" };
+    gateway.dispose();
+    gateway = new ConnectorGateway({
+      store,
+      // The user presses Don't connect while the sign-in page is open.
+      openExternal: async () => {
+        expect(holder.requests!.get([holder.id])[0]!.state).toBe("connecting");
+        holder.requests!.decline(holder.id);
+      },
+      stdioShimPath: async () => "/tmp/shim.mjs",
+    });
+    const { requests, ready } = requestsWith();
+    holder.requests = requests;
+    holder.id = String(
+      requests.ask("t1", { name: "Secure", url: secure.url, reason: "x" }).request_id,
+    );
+
+    expect(await requests.connect(holder.id)).toMatchObject({ state: "declined" });
+    expect(requests.get([holder.id])[0]!.state).toBe("declined");
+    expect(ready).toEqual([]);
+  });
+
+  test("a connect cut short by a quit goes back to waiting instead of spinning", async () => {
+    const upstream = await startUpstream({ auth: false });
+    cleanups.push(upstream.close);
+    const before = requestsWith().requests;
+    const id = String(
+      before.ask("t1", { name: "Echo", url: upstream.url, reason: "x" }).request_id,
+    );
+    // The previous run saved `connecting`, then quit before the attempt finished.
+    testDb
+      .current!.prepare("UPDATE connector_requests SET state = 'connecting' WHERE id = ?")
+      .run(id);
+
+    const { requests, ready } = requestsWith();
+    expect(requests.get([id])[0]).toMatchObject({ state: "requested", error: null });
+    expect(await requests.connect(id)).toMatchObject({ state: "connected" });
+    expect(ready).toHaveLength(1);
+  });
+
   test("a card is found by id, or by thread and the connector asked for", () => {
     const { requests } = requestsWith();
     const linear = String(requests.ask("t1", { catalog: "linear", reason: "x" }).request_id);

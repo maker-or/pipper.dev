@@ -125,10 +125,19 @@ Tabs.displayName = "Tabs";
 
 /* ─────────────────────── TabsList ─────────────────────── */
 
-type TabsListProps = ComponentPropsWithoutRef<typeof TabsPrimitive.List>;
+interface TabsListProps extends ComponentPropsWithoutRef<typeof TabsPrimitive.List> {
+  /**
+   * The tab being dragged (or springing back into its slot), if any. Hover and
+   * focus go quiet so neighbours the pointer passes don't look like drop
+   * targets, and if it is the active tab its highlight hides: the moving tab
+   * carries its own raised surface until it lands.
+   */
+  heldValue?: string | null;
+}
 
 const TabsList = forwardRef<HTMLDivElement, TabsListProps>(
-  ({ children, className, ...props }, ref) => {
+  ({ children, className, heldValue = null, ...props }, ref) => {
+    const suspendHover = heldValue !== null;
     const containerRef = useRef<HTMLDivElement>(null);
     const isMouseInside = useRef(false);
     const shape = useShape();
@@ -147,13 +156,15 @@ const TabsList = forwardRef<HTMLDivElement, TabsListProps>(
     }, [setValueOrder, valueOrderKey]);
 
     const {
-      activeIndex: hoveredIndex,
+      activeIndex: pointerIndex,
       setActiveIndex: setHoveredIndex,
       itemRects,
       handlers,
       registerItem,
       measureItems,
     } = useProximityHover(containerRef, { axis: "x" });
+
+    const hoveredIndex = suspendHover ? null : pointerIndex;
 
     const registerTab = useCallback(
       (index: number, _value: string, el: HTMLElement | null) => {
@@ -199,7 +210,7 @@ const TabsList = forwardRef<HTMLDivElement, TabsListProps>(
     const activeSelectedIdx = optimisticIdx;
     const selectedRect = activeSelectedIdx !== null ? itemRects[activeSelectedIdx] : null;
     const hoverRect = hoveredIndex !== null ? itemRects[hoveredIndex] : null;
-    const focusRect = focusedIndex !== null ? itemRects[focusedIndex] : null;
+    const focusRect = focusedIndex !== null && !suspendHover ? itemRects[focusedIndex] : null;
     const isHoveringSelected = hoveredIndex === activeSelectedIdx;
     const isHovering = hoveredIndex !== null && !isHoveringSelected;
 
@@ -267,7 +278,10 @@ const TabsList = forwardRef<HTMLDivElement, TabsListProps>(
                 width: selectedRect.width,
                 top: selectedRect.top,
                 height: selectedRect.height,
-                opacity: isHovering ? 0.85 : 1,
+                // Hidden, not removed, while held: it keeps following the
+                // gap so it fades back in right where the tab lands.
+                opacity:
+                  heldValue !== null && heldValue === selectedValue ? 0 : isHovering ? 0.85 : 1,
               }}
               transition={{
                 ...springs.moderate,
@@ -352,6 +366,12 @@ const TabsList = forwardRef<HTMLDivElement, TabsListProps>(
 TabsList.displayName = "TabsList";
 
 /* ─────────────────────── TabItem ─────────────────────── */
+
+const ATTENTION_DOT =
+  "absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-amber-500 ring-1 ring-background";
+/** Overflowing labels fade out at the right edge instead of hard-clipping. */
+const LABEL_FADE =
+  "[mask-image:linear-gradient(to_right,black_calc(100%_-_12px),transparent_100%)]";
 
 interface TabItemProps extends ComponentPropsWithoutRef<typeof TabsPrimitive.Tab> {
   value: string;
@@ -490,11 +510,7 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
               )}
             />
             {attention && (
-              <span
-                data-pipper-id="tab-attention"
-                aria-hidden="true"
-                className="absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-amber-500 ring-1 ring-background"
-              />
+              <span data-pipper-id="tab-attention" aria-hidden="true" className={ATTENTION_DOT} />
             )}
           </span>
         )}
@@ -556,8 +572,7 @@ const TabItem = forwardRef<HTMLButtonElement, TabItemProps>(
               // Overflowing labels fade out at the right edge instead of
               // hard-clipping; the fade lifts on hover so the scroll reveals
               // the full label.
-              labelOverflow > 0 &&
-                "[mask-image:linear-gradient(to_right,black_calc(100%_-_12px),transparent_100%)] group-hover/tab:[mask-image:none]",
+              labelOverflow > 0 && [LABEL_FADE, "group-hover/tab:[mask-image:none]"],
             )}
             title={label}
           >

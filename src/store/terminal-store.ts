@@ -4,6 +4,8 @@ export interface TerminalSession {
   id: string;
   title: string;
   cwd?: string;
+  /** Thread this terminal was created from; its tab renders left of that thread. */
+  anchorThreadId?: string | null;
   status: "starting" | "running" | "exited" | "error";
   exitCode?: number;
   exitSignal?: number;
@@ -114,7 +116,7 @@ interface TerminalState {
   /** Changes only when tab metadata changes, never for ordinary PTY output. */
   tabsRevision: number;
   listenerInitialized: boolean;
-  createSession: (cwd?: string) => string;
+  createSession: (cwd?: string, anchorThreadId?: string | null) => string;
   closeSession: (id: string) => string | null;
   clearSessions: () => void;
   /** Stop and forget every terminal owned by a deleted workspace. */
@@ -171,7 +173,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   tabsRevision: 0,
   listenerInitialized: false,
 
-  createSession: (cwd?: string) => {
+  createSession: (cwd?: string, anchorThreadId?: string | null) => {
     const { nextSessionNumber, sessions, tabsRevision } = get();
     const id = `terminal:${crypto.randomUUID()}`;
     const title = `Terminal ${nextSessionNumber}`;
@@ -179,6 +181,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       id,
       title,
       cwd,
+      anchorThreadId: anchorThreadId ?? null,
       status: "starting",
       history: "",
     };

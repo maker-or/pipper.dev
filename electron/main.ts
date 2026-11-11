@@ -77,6 +77,13 @@ import { getActiveProjectId, setActiveProjectId } from "./session";
 import { ProjectFileLister } from "./project-file-list.ts";
 import { AUTH_CALLBACK_SUCCESS_HTML } from "./auth-callback-success";
 import {
+  CLERK_ENABLED,
+  LAUNCH_INTRO_ENABLED,
+  REMOTE_ENABLED,
+  SIRI_ENABLED,
+} from "../contracts/features.ts";
+import { isIdentifiableUser, resolveLaunchUser } from "./launch-user.ts";
+import {
   isAllowedClerkAuthUrl,
   resolveClerkSignInUrl,
   resolveClerkSignUpUrl,
@@ -156,6 +163,7 @@ import {
   openThreadTab,
   readOpenTabsState,
   activateTabAfterClose,
+  reorderThreadTabs,
   setActiveThreadTab,
   setLiveThreadIdsCheck,
   setTabEventObserver,
@@ -182,9 +190,23 @@ import {
 import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema";
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
-import { RemoteAccessController } from "./remote-access.ts";
+import {
+  INTRO_LAYOUT_SCRIPT,
+  LAUNCH_INTRO_VERSIONS,
+  launchIntroArgs,
+  macWindowCornerRadius,
+  introWindowLayout,
+  placeIntroLayout,
+  resolveLaunchIntroHelperPath,
+  startFirstLaunchIntro,
+  startLaunchIntro,
+  type LaunchIntroCloseTarget,
+  type LaunchIntroSession,
+  type MeasuredIntroPage,
+  type LaunchIntroVersion,
+} from "./launch-intro.ts";
+import type { RemoteAccessController } from "./remote-access.ts";
 import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
-import { RemoteDeviceStore } from "./remote-devices.ts";
 import type { RemoteScope, RemoteTransport } from "../contracts/remote.ts";
 import { ThreadBenchmarkController } from "./thread-benchmark.ts";
 import type {
@@ -640,6 +662,7 @@ const inFlightSiriRequests = new Map<string, Promise<unknown>>();
 /** Staged requests are durably claimed before creating a session. Retried
  * activations reopen the same thread; uncertain prompt delivery is never replayed. */
 async function consumeSiriRequest(requestId: string, preferredDir?: string): Promise<unknown> {
+  if (!SIRI_ENABLED) return null;
   if (typeof requestId !== "string" || !/^[A-Za-z0-9-]{1,123}$/.test(requestId)) {
     return null;
   }
@@ -808,7 +831,7 @@ async function openSiriThread(thread: unknown): Promise<void> {
  * Shortcuts. Callers must not block window creation on this.
  */
 async function consumePendingSiriRequests(): Promise<void> {
-  if (!agentManager) return;
+  if (!SIRI_ENABLED || !agentManager) return;
   const { getSiriRequestsDirs } = await import("./siri/siri-catalog.ts");
   // Key by request id, but keep the winning replica's dir so the consume
   // step reads the newest copy rather than whichever dir is listed first.
@@ -851,7 +874,7 @@ async function handlePipperDeepLink(url: string): Promise<boolean> {
   } catch {
     return false;
   }
-  if (parsed.protocol !== "pipper:") return false;
+  if (parsed.protocol !== "pipper:" || !SIRI_ENABLED) return false;
   const match = /^siri\/([A-Za-z0-9-]{1,128})\/?$/.exec(`${parsed.host}${parsed.pathname}`);
   if (!match?.[1]) return false;
   if (!agentManager) {
@@ -867,6 +890,20 @@ async function handlePipperDeepLink(url: string): Promise<boolean> {
   const thread = await consumeSiriRequest(match[1]);
   if (thread) await openSiriThread(thread);
   return true;
+}
+
+/**
+ * Keep the Siri catalog (projects and agents the App Intents can name) in
+ * step with Pipper. Best-effort: Siri must never break the change it follows.
+ */
+async function refreshSiriCatalogAfter(change: string): Promise<void> {
+  if (!SIRI_ENABLED) return;
+  try {
+    const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
+    refreshSiriCatalog();
+  } catch (err) {
+    console.warn(`[Main] Siri catalog refresh failed ${change}:`, err);
+  }
 }
 
 async function drainStartupSiriRequests(): Promise<void> {
@@ -1121,6 +1158,7 @@ function parseAuthCallback(url: string): {
 }
 
 async function handleAuthCallback(url: string): Promise<void> {
+  if (!CLERK_ENABLED) throw new Error("Sign-in is not available in this build.");
   const payload = parseAuthCallback(url);
   if (!payload.providerUserId) {
     throw new Error("Auth callback missing provider user id.");
@@ -1171,9 +1209,7 @@ async function handleAuthCallback(url: string): Promise<void> {
 }
 
 function getAuthenticatedUserForLaunch() {
-  const user = getMostRecentAuthUser();
-  if (!user?.provider_user_id || !user.email) return null;
-  return user;
+  return resolveLaunchUser(CLERK_ENABLED, CLERK_ENABLED ? getMostRecentAuthUser() : null);
 }
 
 function requireAuthenticatedUserForLaunch() {
@@ -1600,6 +1636,119 @@ function initializeMonitorService(): void {
   });
 }
 
+/** The first-launch intro, while it holds the launch window back. */
+let launchIntro: LaunchIntroSession | null = null;
+/**
+ * Intros a ready launch window has taken over: that window ends them by
+ * closing into its frame, so nothing else may dismiss them first.
+ */
+const introsEndedByWindow = new WeakSet<LaunchIntroSession>();
+
+/** Replays the native launch intro on demand (dock menu). No first-launch gating. */
+function replayLaunchIntro(version: LaunchIntroVersion): void {
+  if (!LAUNCH_INTRO_ENABLED) return;
+  const helperPath = resolveLaunchIntroHelperPath({
+    isPackaged: app.isPackaged,
+    execPath: process.execPath,
+    appPath: app.getAppPath(),
+  });
+  if (!fs.existsSync(helperPath)) {
+    console.warn(`[LaunchIntro] helper missing at ${helperPath}; cannot replay intro`);
+    return;
+  }
+  if (launchIntro) return;
+  // A replay is the whole first launch: a fresh onboarding window loads
+  // hidden behind the intro, which draws it and hands over to it, so it ends
+  // on the first onboarding step whatever was open before.
+  const session = startLaunchIntro({ helperPath, args: launchIntroArgs(version) });
+  launchIntro = session;
+  if (launchWindow && !launchWindow.isDestroyed()) launchWindow.destroy();
+  createLaunchWindow("onboarding");
+  // If the window never got ready, don't leave the overlay holding its frame.
+  // This runs before the window's own handler (it was attached first), so it
+  // must stand aside once the window has taken the intro over.
+  void session.finished.then(() => {
+    if (launchIntro !== session || introsEndedByWindow.has(session)) return;
+    launchIntro = null;
+    session.dismiss();
+    if (launchWindow && !launchWindow.isDestroyed()) launchWindow.show();
+  });
+}
+
+/** Reads the page's background at the top of the window as 0–255 RGB. */
+const PAGE_BACKGROUND_SCRIPT = `(() => {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  let el = document.elementFromPoint(innerWidth / 2, Math.min(24, innerHeight - 1));
+  for (; el && ctx; el = el.parentElement) {
+    ctx.clearRect(0, 0, 1, 1);
+    ctx.fillStyle = getComputedStyle(el).backgroundColor;
+    ctx.fillRect(0, 0, 1, 1);
+    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
+    if (a === 255) return [r, g, b];
+  }
+  return null;
+})()`;
+
+/**
+ * Measures the hidden launch window until its onboarding picker has loaded
+ * and holds still, then gives it to the intro to draw. Gives up quietly
+ * after a few seconds: the intro then ends as before.
+ */
+async function sendIntroLayout(
+  intro: LaunchIntroSession,
+  win: BrowserWindow | null,
+  playing: () => boolean,
+): Promise<void> {
+  let previous = "";
+  for (let attempt = 0; attempt < 30 && win && !win.isDestroyed() && playing(); attempt++) {
+    try {
+      const page = (await win.webContents.executeJavaScript(
+        INTRO_LAYOUT_SCRIPT,
+        true,
+      )) as MeasuredIntroPage;
+      const layout = placeIntroLayout({
+        page,
+        windowBounds: win.getBounds(),
+        contentBounds: win.getContentBounds(),
+        zoom: win.webContents.getZoomFactor(),
+        radius: macWindowCornerRadius(os.release()),
+      });
+      const key = layout ? JSON.stringify(layout) : "";
+      if (layout && key === previous) {
+        intro.drawWindow(layout);
+        return;
+      }
+      previous = key;
+    } catch (error) {
+      console.warn("[LaunchIntro] could not measure the launch window:", error);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+}
+
+/** Where the first-launch intro ends: the launch window's frame and colour. */
+async function launchIntroCloseTarget(win: BrowserWindow): Promise<LaunchIntroCloseTarget> {
+  let color: LaunchIntroCloseTarget["color"] = null;
+  try {
+    const read = await Promise.race([
+      win.webContents.executeJavaScript(PAGE_BACKGROUND_SCRIPT, true) as Promise<unknown>,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
+    ]);
+    if (
+      Array.isArray(read) &&
+      read.length === 3 &&
+      read.every((value) => typeof value === "number" && value >= 0 && value <= 255)
+    ) {
+      color = read as [number, number, number];
+    }
+  } catch (error) {
+    console.warn("[LaunchIntro] could not read the launch window's colour:", error);
+  }
+  return { ...win.getBounds(), radius: macWindowCornerRadius(os.release()), color };
+}
+
 function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void {
   console.log(`[Main] createLaunchWindow - stage: ${stage}`);
   if (launchWindow && !launchWindow.isDestroyed()) {
@@ -1611,16 +1760,16 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
   }
 
   console.log("[Main] Creating new launchWindow");
-  launchWindow = new BrowserWindow({
+  const created = new BrowserWindow({
     width: 960,
     height: 720,
     minWidth: 640,
     minHeight: 560,
     resizable: true,
-    title: "Welcome to Pipper Code (Alpha)",
     show: false,
     icon: getIconPath(),
     backgroundColor: "#171717",
+    titleBarStyle: "hidden",
     webPreferences: {
       preload: join(mainDir, "../preload/index.js"),
       sandbox: false,
@@ -1629,22 +1778,58 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
     },
   });
 
-  launchWindow.on("ready-to-show", () => {
+  launchWindow = created;
+  // The intro needs this window's frame early; the heading and cards follow
+  // once the page has loaded.
+  launchIntro?.drawWindow(
+    introWindowLayout(
+      created.getBounds(),
+      macWindowCornerRadius(os.release()),
+      created.getBackgroundColor(),
+    ),
+  );
+
+  created.on("ready-to-show", () => {
     console.log("[Main] launchWindow ready-to-show");
-    launchWindow?.show();
     scheduleDeferredStartupWork();
+    const intro = launchIntro;
+    if (!intro) {
+      created.show();
+      return;
+    }
+    introsEndedByWindow.add(intro);
+    void sendIntroLayout(intro, created, () => launchIntro === intro);
+    // Shown under the overlay, which then draws its dark in to this
+    // window's frame and colour and hands over to it, so the intro ends as
+    // the window. A skipped or failed intro just fades.
+    void intro.finished.then(async (outcome) => {
+      launchIntro = null;
+      const win = created;
+      const target =
+        outcome === "complete" && win && !win.isDestroyed()
+          ? await launchIntroCloseTarget(win)
+          : null;
+      if (win && !win.isDestroyed()) {
+        win.show();
+        app.focus({ steal: true });
+        win.focus();
+      }
+      if (target && win && !win.isDestroyed()) intro.closeInto(target);
+      else intro.dismiss();
+    });
   });
 
-  launchWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+  created.webContents.on("console-message", (_event, level, message, line, sourceId) => {
     console.log(`[Launch Renderer Console] [Level ${level}] ${message} (${sourceId}:${line})`);
   });
 
-  launchWindow.on("closed", () => {
+  created.on("closed", () => {
     console.log("[Main] launchWindow closed");
-    launchWindow = null;
+    // A replaced window closing must not forget its replacement.
+    if (launchWindow === created) launchWindow = null;
   });
 
-  void loadInto(launchWindow, "launch", stage);
+  void loadInto(created, "launch", stage);
 }
 
 function broadcastToWindows(channel: string, ...args: any[]) {
@@ -2008,6 +2193,7 @@ function registerIpc(): void {
   });
 
   ipcMain.handle("siri:getCatalog", async () => {
+    if (!SIRI_ENABLED) return null;
     const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
     return refreshSiriCatalog();
   });
@@ -2106,12 +2292,7 @@ function registerIpc(): void {
     async (_event, input: { name: string; path: string; icon: string }) => {
       requireAuthenticatedUserForLaunch();
       const project = createProject(input);
-      try {
-        const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
-        refreshSiriCatalog();
-      } catch (err) {
-        console.warn("[Main] Siri catalog refresh failed after project create:", err);
-      }
+      await refreshSiriCatalogAfter("after project create");
       captureAnalytics("project_created", {
         windowType: "launch",
         properties: {
@@ -2451,7 +2632,8 @@ function registerIpc(): void {
   );
 
   // Links surfaced from the workspace's own PR (CI runs, preview deploys,
-  // review comments) live on arbitrary hosts. Scheme-gated only: never file:,
+  // review comments) and from agent replies (often a local dev server on
+  // http://localhost) live on arbitrary hosts. Scheme-gated only: never file:,
   // javascript:, or app-internal URLs.
   ipcMain.handle("shell:openHttps", async (_event, url: string) => {
     let parsed: URL;
@@ -2460,13 +2642,18 @@ function registerIpc(): void {
     } catch {
       throw new Error("Invalid URL.");
     }
-    if (parsed.protocol !== "https:") throw new Error("Only https links can be opened.");
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("Only web links can be opened.");
+    }
     await shell.openExternal(parsed.toString());
   });
 
   ipcMain.handle("shell:openExternal", async (_event, url: string) => {
-    await ensureAuthCallbackServer();
-    const resolvedCallbackUrl = getAuthCallbackUrl();
+    const signIn = url === "clerk:sign-up" || url === "clerk:sign-in";
+    if (signIn && !CLERK_ENABLED) throw new Error("Sign-in is not available in this build.");
+    // Only a sign-in needs the loopback listener its callback returns to.
+    if (signIn) await ensureAuthCallbackServer();
+    const resolvedCallbackUrl = signIn ? getAuthCallbackUrl() : "";
     const appendReturnTo = (inputUrl: string): string =>
       withSignInParams(inputUrl, {
         returnTo: resolvedCallbackUrl,
@@ -2811,6 +2998,12 @@ function registerIpc(): void {
     return next;
   });
 
+  ipcMain.handle("tabs:reorder", async (_event, ids: string[]) => {
+    const next = await reorderThreadTabs(ids);
+    broadcastOpenTabsChanged(mainWindow, next);
+    return next;
+  });
+
   ipcMain.handle("tabs:getActive", async () => {
     return (await readOpenTabsState()).activeThreadId;
   });
@@ -2938,12 +3131,7 @@ function registerIpc(): void {
   ipcMain.handle("agent:getSelectedAgentIds", () => getSelectedAgentIds());
   ipcMain.handle("agent:setSelectedAgentIds", async (_event, agentIds: string[]) => {
     setSelectedAgentIds(agentIds);
-    try {
-      const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
-      refreshSiriCatalog();
-    } catch (err) {
-      console.warn("[Main] Siri catalog refresh failed after agent selection change:", err);
-    }
+    await refreshSiriCatalogAfter("after agent selection change");
   });
   ipcMain.handle("agent:listInstances", () => listAgentInstancesForRenderer());
   ipcMain.handle("agent:getAccountSchemas", () => listAgentAccountSchemas());
@@ -3506,6 +3694,21 @@ app.whenReady().then(async () => {
         console.error("[Main] Failed to set macOS dock icon:", err);
       }
     }
+    app.dock?.setMenu(
+      Menu.buildFromTemplate([
+        // Held back from release builds; see contracts/features.ts.
+        ...(LAUNCH_INTRO_ENABLED
+          ? LAUNCH_INTRO_VERSIONS.map((version) => ({
+              label: `Replay Launch Intro — Version ${version}`,
+              click: () => replayLaunchIntro(version),
+            }))
+          : []),
+        {
+          label: "Show Onboarding",
+          click: () => createLaunchWindow("onboarding"),
+        },
+      ]),
+    );
   }
   buildAppMenu();
   logStartupMilestone("database:init:start");
@@ -3519,15 +3722,10 @@ app.whenReady().then(async () => {
   // Seed per-driver default instances and wire instance→descriptor resolution
   // into the agent registry before anything spawns an agent.
   installAgentInstanceProvider();
-  try {
-    const { refreshSiriCatalog } = await import("./siri/siri-catalog.ts");
-    refreshSiriCatalog();
-  } catch (err) {
-    console.warn("[Main] Siri catalog refresh failed at startup:", err);
-  }
+  await refreshSiriCatalogAfter("at startup");
   await prepareBenchmarkLaunchState();
   const authUser = getAuthenticatedUserForLaunch();
-  if (authUser) {
+  if (isIdentifiableUser(authUser)) {
     identifyAnalyticsUser({
       providerUserId: authUser.provider_user_id,
       email: authUser.email,
@@ -3581,7 +3779,13 @@ app.whenReady().then(async () => {
     broadcast: (status) => broadcastToWindows("sleepless:statusChanged", status),
   });
   sleeplessController.setRunningThreadIds(agentManager.getRunningThreadIds());
-  if (process.env.PIPPER_REMOTE_ENABLED !== "0") {
+  // Held back from release builds (REMOTE_ENABLED); loaded only when on, so
+  // a build without it never starts the server or fetches cloudflared.
+  if (REMOTE_ENABLED && process.env.PIPPER_REMOTE_ENABLED !== "0") {
+    const [{ RemoteAccessController }, { RemoteDeviceStore }] = await Promise.all([
+      import("./remote-access.ts"),
+      import("./remote-devices.ts"),
+    ]);
     const cloudflaredExe = process.platform === "win32" ? "cloudflared.exe" : "cloudflared";
     remoteAccess = new RemoteAccessController({
       userDataPath: app.getPath("userData"),
@@ -3733,7 +3937,22 @@ app.whenReady().then(async () => {
       });
     }
   } else {
-    logStartupMilestone("launch-window:starting");
+    // Held back from release builds (contracts/features.ts): without it,
+    // new users go straight to onboarding.
+    launchIntro = LAUNCH_INTRO_ENABLED
+      ? await startFirstLaunchIntro({
+          platform: process.platform,
+          env: process.env,
+          userDataDir: app.getPath("userData"),
+          onboardingCompleted: state.completed,
+          helperPath: resolveLaunchIntroHelperPath({
+            isPackaged: app.isPackaged,
+            execPath: process.execPath,
+            appPath: app.getAppPath(),
+          }),
+        })
+      : null;
+    logStartupMilestone("launch-window:starting", `intro=${launchIntro !== null}`);
     createLaunchWindow("list");
   }
 

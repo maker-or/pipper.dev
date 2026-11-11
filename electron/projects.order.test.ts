@@ -26,12 +26,12 @@ afterEach(async () => {
 
 const names = (projects: Array<{ name: string }>) => projects.map((project) => project.name);
 
-test("the rail order is saved, survives a restart, and new projects join the end", async () => {
+test("the rail order is saved, survives a restart, and new projects join the top", async () => {
   let projects = await import("./projects.ts");
   const web = projects.createProject({ name: "web", path: "/repo/web", icon: "circle" });
   const api = projects.createProject({ name: "api", path: "/repo/api", icon: "heart" });
   const docs = projects.createProject({ name: "docs", path: "/repo/docs", icon: "gem" });
-  expect(names(projects.listProjects())).toEqual(["web", "api", "docs"]);
+  expect(names(projects.listProjects())).toEqual(["docs", "api", "web"]);
 
   expect(names(projects.reorderProjects([docs.id, web.id, api.id]))).toEqual([
     "docs",
@@ -46,7 +46,7 @@ test("the rail order is saved, survives a restart, and new projects join the end
   expect(names(projects.listProjects())).toEqual(["docs", "web", "api"]);
 
   projects.createProject({ name: "blog", path: "/repo/blog", icon: "flower" });
-  expect(names(projects.listProjects())).toEqual(["docs", "web", "api", "blog"]);
+  expect(names(projects.listProjects())).toEqual(["blog", "docs", "web", "api"]);
 });
 
 test("an order missing a project keeps it, after the ones that were listed", async () => {
@@ -70,5 +70,5 @@ test("projects from before reordering keep their name order", async () => {
   const projects = await import("./projects.ts");
   expect(names(projects.listProjects())).toEqual(["alpha", "Mid", "zeta"]);
   projects.createProject({ name: "beta", path: "/b", icon: "circle" });
-  expect(names(projects.listProjects())).toEqual(["alpha", "Mid", "zeta", "beta"]);
+  expect(names(projects.listProjects())).toEqual(["beta", "alpha", "Mid", "zeta"]);
 });

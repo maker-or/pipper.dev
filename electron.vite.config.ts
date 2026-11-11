@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite";
 import { resolve } from "node:path";
+import { loadEnv } from "vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
@@ -7,6 +8,14 @@ import { createCustomResolver } from "./src/lib/alias-resolver.ts";
 import { nodeModulesGuardPlugin } from "./src/lib/node-modules-guard.ts";
 
 const resolveCache = new Map<string, string | null>();
+
+/**
+ * REMOTE_ENABLED (contracts/features.ts). Without it the laptop never serves
+ * the phone app, so its page is left out of the build.
+ */
+const remoteEnabled =
+  (process.env.VITE_PIPPER_REMOTE ??
+    loadEnv("production", __dirname, "VITE_PIPPER_").VITE_PIPPER_REMOTE) === "1";
 
 const cacheInvalidatorPlugin = {
   name: "resolve-cache-invalidator",
@@ -88,7 +97,7 @@ export default defineConfig({
           monitor: resolve(__dirname, "monitor.html"),
           settings: resolve(__dirname, "settings.html"),
           "theme-lab": resolve(__dirname, "theme-lab.html"),
-          remote: resolve(__dirname, "remote.html"),
+          ...(remoteEnabled ? { remote: resolve(__dirname, "remote.html") } : {}),
         },
       },
     },

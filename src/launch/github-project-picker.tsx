@@ -50,17 +50,23 @@ interface GitHubProjectPickerProps {
   onCreated: (project: Project) => void;
   onBusyChange: (busy: boolean) => void;
   disabled?: boolean;
+  /** The search toggle lives in the launch header; the picker only renders the field. */
+  isSearchOpen?: boolean;
+  /** Reports the connected GitHub username (null when not signed in) for the launch header. */
+  onUsernameChange?: (username: string | null) => void;
 }
 
 export function GitHubProjectPicker({
   onCreated,
   onBusyChange,
   disabled = false,
+  isSearchOpen = false,
+  onUsernameChange,
 }: GitHubProjectPickerProps) {
   const [status, setStatus] = useState<GitHubCliStatus | null>(null);
   const [repositories, setRepositories] = useState<GitHubRepository[]>([]);
   const [query, setQuery] = useState("");
-  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [searchWasOpen, setSearchWasOpen] = useState(isSearchOpen);
   const [isLoading, setIsLoading] = useState(true);
   const [cloning, setCloning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -119,6 +125,18 @@ export function GitHubProjectPicker({
     };
   }, [refresh]);
 
+  // Toggling search from the header always starts from an empty query.
+  if (searchWasOpen !== isSearchOpen) {
+    setSearchWasOpen(isSearchOpen);
+    setQuery("");
+  }
+
+  // `status` is cleared to null during each recheck; only report settled
+  // results so the header name does not flicker on window focus.
+  useEffect(() => {
+    if (status) onUsernameChange?.(status.state === "ready" ? status.username : null);
+  }, [status, onUsernameChange]);
+
   const clone = async (repo: GitHubRepository) => {
     if (disabled || cloningRef.current) return;
     cloningRef.current = true;
@@ -143,37 +161,6 @@ export function GitHubProjectPicker({
 
   return (
     <div className="flex flex-col gap-4">
-      <header className="flex items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="text-xl font-bold tracking-tight text-foreground">Select a repository</h1>
-          <p className="text-xs leading-5 text-muted-foreground">
-            {status?.state === "ready"
-              ? `Connected as ${status.username}`
-              : "Connect GitHub to bring a repository into Pipper."}
-          </p>
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {status?.state === "ready" && (
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Search repositories"
-              title="Search repositories"
-              aria-expanded={isSearchOpen}
-              active={isSearchOpen}
-              disabled={cloning !== null || disabled}
-              onClick={() => {
-                setIsSearchOpen((current) => !current);
-                setQuery("");
-              }}
-            >
-              <MagnifyingGlass size={16} aria-hidden />
-            </Button>
-          )}
-        </div>
-      </header>
-
       {status?.state === "missing" && (
         <div className="flex flex-col gap-4 rounded-xl border border-border bg-surface-1/40 p-4">
           <div className="flex flex-col gap-1">

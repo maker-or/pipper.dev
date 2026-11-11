@@ -113,7 +113,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
         </div>
       </div>
 
-      <Card className="overflow-hidden border border-border bg-surface-1/75 shadow-[0_18px_60px_rgba(0,0,0,0.18)]">
+      <Card className="overflow-hidden rounded-xl border border-border bg-surface-1/75 shadow-[0_18px_60px_rgba(0,0,0,0.18)]">
         <CardContent className="p-0">
           <CardGroup
             orientation="inline"
@@ -122,7 +122,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
             proximityHover={false}
             className="divide-y divide-border/60"
           >
-            <Card className="min-h-0 bg-transparent">
+            <Card className="min-h-0 rounded-none bg-transparent">
               <CardHeader>
                 <CardTitle>Power adapter only</CardTitle>
                 <CardDescription>Keep the Mac awake only while it is plugged in.</CardDescription>
@@ -138,7 +138,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
               </CardFooter>
             </Card>
 
-            <Card className="min-h-0 bg-transparent">
+            <Card className="min-h-0 rounded-none bg-transparent">
               <CardHeader>
                 <CardTitle>Battery floor</CardTitle>
                 <CardDescription>Stop below this level.</CardDescription>
@@ -165,7 +165,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
               </CardFooter>
             </Card>
 
-            <Card className="min-h-0 bg-transparent">
+            <Card className="min-h-0 rounded-none bg-transparent">
               <CardHeader>
                 <CardTitle>Maximum run</CardTitle>
                 <CardDescription>A hard upper limit per run.</CardDescription>
@@ -240,7 +240,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
               Installing helper…
             </>
           ) : configured ? (
-            "Continue to Pipper"
+            "Continue"
           ) : (
             "Enable"
           )}

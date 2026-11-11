@@ -20,6 +20,10 @@ const cacheInvalidatorPlugin = {
 
 // https://vite.dev/config/
 export default defineConfig({
+  // Its own pre-bundle cache: sharing `node_modules/.vite` with a running
+  // `bun run dev` rewrites that renderer's optimized deps under it, so its
+  // next lazy chunk loads a second React ("reading 'useState' of null").
+  cacheDir: "node_modules/.vite-specs",
   resolve: {
     alias: [
       {

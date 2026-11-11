@@ -1,0 +1,11 @@
+/* Plain text controls: no fills. Idle is muted, hover and the chosen speed are ink. */
+.controls { display: flex; align-items: center; justify-content: space-between; gap: 13px; padding-bottom: 13px; color: var(--muted); font-size: 11px; line-height: 13px; user-select: none; }
+.controls button { display: inline-flex; align-items: center; justify-content: center; gap: 5px; min-height: 34px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; transition: color 120ms ease-out; }
+.controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.actions { display: flex; align-items: center; gap: 13px; }
+.speeds { display: flex; align-items: center; }
+.speeds button[aria-pressed='true'] { color: var(--ink); font-weight: 500; }
+/* (Play sits on the column's right edge: the icon's own padding goes, so its last letter lines up) */
+.actions > button { color: var(--ink); padding-right: 0; }
+.actions > button svg { margin-top: -1px; }
+@media (hover: hover) { .controls button:hover { color: var(--ink); } }

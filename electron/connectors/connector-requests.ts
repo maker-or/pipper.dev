@@ -168,6 +168,14 @@ export class ConnectorRequests {
   onReady: ((threadId: string, note: string) => void) | null = null;
 
   private readonly options: ConnectorRequestsOptions;
+  /**
+   * The connect attempt each request is running in this process. A request is
+   * only really `connecting` while it has one: a saved `connecting` row
+   * without one was cut short by a quit or crash. An attempt settles the card
+   * only while it still owns it, so a Decline (or a newer attempt) wins over
+   * whatever the older attempt finishes with.
+   */
+  private readonly attempts = new Map<string, symbol>();
 
   constructor(options: ConnectorRequestsOptions) {
     this.options = options;
@@ -262,7 +270,15 @@ export class ConnectorRequests {
   ): Promise<ConnectorRequestSnapshot> {
     const row = this.requireOpen(id);
     if (row.state === "connecting") return this.snapshot(row);
+    const attempt = Symbol(id);
+    this.attempts.set(id, attempt);
     this.setState(id, { state: "connecting", error: null });
+    const settle = (change: { state: ConnectorRequestState; error: string | null }): boolean => {
+      if (this.attempts.get(id) !== attempt) return false;
+      this.attempts.delete(id);
+      this.setState(id, change);
+      return true;
+    };
     const { store, gateway } = this.options;
     const entry = connectorCatalogEntry(row.catalog_id);
     let connector: ConnectorSnapshot;
@@ -303,9 +319,9 @@ export class ConnectorRequests {
       const message = errorText(error);
       // The user closed the sign-in; the card goes back to waiting for them.
       if (message.endsWith("The sign-in was cancelled.")) {
-        this.setState(id, { state: "requested", error: null });
+        settle({ state: "requested", error: null });
       } else {
-        this.setState(id, { state: "failed", error: message });
+        settle({ state: "failed", error: message });
       }
       return this.snapshot(this.row(id)!);
     }
@@ -316,10 +332,12 @@ export class ConnectorRequests {
             ? `${connector.name} didn't accept the key.`
             : `${connector.name} still needs a sign-in.`
           : (connector.lastError ?? `Couldn't connect to ${connector.name}.`);
-      this.setState(id, { state: "failed", error: message });
+      settle({ state: "failed", error: message });
       return this.snapshot(this.row(id)!);
     }
-    this.setState(id, { state: "connected", error: null });
+    // Declined while connecting: the user's answer stands, and the thread is
+    // not reloaded for a connector they turned down.
+    if (!settle({ state: "connected", error: null })) return this.snapshot(this.row(id)!);
     this.onReady?.(
       row.thread_id,
       connector.transport === "stdio"
@@ -340,6 +358,8 @@ export class ConnectorRequests {
 
   decline(id: string): ConnectorRequestSnapshot {
     const row = this.requireOpen(id);
+    // Release the attempt first, so its cancelled sign-in can't reopen the card.
+    this.attempts.delete(id);
     if (row.state === "connecting") this.cancel(id);
     this.setState(id, { state: "declined", error: null });
     return this.snapshot(this.row(id)!);
@@ -482,6 +502,16 @@ export class ConnectorRequests {
   }
 
   private expire(row: RequestRow): RequestRow {
+    if (row.state === "connecting" && !this.attempts.has(row.id)) {
+      // Pipper quit or crashed mid-connect: nothing is connecting any more, so
+      // the card goes back to waiting for the user instead of spinning forever.
+      this.db
+        .prepare(
+          "UPDATE connector_requests SET state = 'requested', error = NULL, updated_at = ? WHERE id = ?",
+        )
+        .run(this.now(), row.id);
+      row = { ...row, state: "requested", error: null };
+    }
     if (row.state !== "requested" || this.now() - row.created_at < REQUEST_TTL_MS) return row;
     this.db
       .prepare("UPDATE connector_requests SET state = 'expired', updated_at = ? WHERE id = ?")

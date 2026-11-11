@@ -38,12 +38,12 @@ const toneWash = `linear-gradient(to bottom, ${TONE_COLOR}100 0%, ${TONE_COLOR}1
 /** The rail's projects; the selected one has its thread on screen, so its
  *  shape takes the thread's git state (a PR with checks running). */
 const PROJECTS: { name: string; shape: ProjectShapeId; active?: boolean }[] = [
-  { name: "pipper", shape: "flower", active: true },
-  { name: "nucleus", shape: "cookie-9" },
-  { name: "marketing", shape: "heart" },
-  { name: "api", shape: "gem" },
-  { name: "docs", shape: "clover-4" },
-  { name: "infra", shape: "arch" },
+  { name: "pipper", shape: "very-sunny", active: true },
+  { name: "nucleus", shape: "burst" },
+  { name: "marketing", shape: "ghost" },
+  { name: "api", shape: "bun" },
+  { name: "docs", shape: "soft-boom" },
+  { name: "infra", shape: "puffy" },
 ];
 
 const sessions = [
@@ -418,7 +418,7 @@ export default function ProductDemo() {
       aria-label="Pipper workspace preview"
       className="flex w-full shrink-0 justify-center overflow-hidden bg-transparent p-[clamp(0.9rem,2.4vw,3rem)]"
     >
-      <div className="dark relative flex h-full min-h-[44rem] w-full max-w-[96rem] overflow-hidden rounded-[18px] border border-white/10 bg-surface-1 text-foreground">
+      <div className="dark relative flex h-[34rem] w-full max-w-[112rem] overflow-hidden rounded-[18px] border border-white/10 bg-surface-1 text-foreground md:h-[46rem]">
         {/* Left rail: one shape per project. */}
         <ProjectRail />
 

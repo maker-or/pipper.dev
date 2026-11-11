@@ -6,6 +6,7 @@ import { useWorkspaceViewStore } from "@/store/workspace-view-store";
 import { previewWorkspaceKey, usePreviewStore, type FileComment } from "@/store/preview-store";
 import { sendWorkspaceAgentPrompt } from "@/lib/workspace-agent-prompt";
 import { encodeContextString } from "@/lib/git-skills";
+import { classifyMarkdownHref, workspaceRelativePath } from "@/lib/markdown-links";
 
 /**
  * Tell the preview store which workspace is on screen: the same project and
@@ -136,4 +137,33 @@ export async function sendFileComments(
     restore();
     throw error;
   }
+}
+
+/**
+ * Follow a link from rendered markdown (agent replies, PR comments). Web
+ * pages open in the browser; a file path opens in the preview of the
+ * workspace on screen, the one the agent works in. Returns false when the
+ * link goes nowhere this app follows.
+ */
+export function openMarkdownLink(href: string | undefined): boolean {
+  const target = classifyMarkdownHref(href);
+  if (target.kind === "web") {
+    void window.omni.shell.openHttps(target.url).catch(() => {});
+    return true;
+  }
+  if (target.kind !== "file") return false;
+
+  const key = usePreviewStore.getState().shownWorkspaceKey;
+  if (!key) return false;
+  const [projectId = "", worktree = ""] = key.split("\u0000");
+  const worktreePath = worktree || null;
+  const root =
+    worktreePath ??
+    (useProjectStore.getState().activeProject?.id === projectId
+      ? useProjectStore.getState().activeProject!.path
+      : null);
+  const path = root ? workspaceRelativePath(target, root) : target.absolute ? null : target.path;
+  if (!projectId || !path) return false;
+  openFilePreview({ projectId, worktreePath, path });
+  return true;
 }

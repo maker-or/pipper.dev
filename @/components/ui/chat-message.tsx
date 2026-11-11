@@ -4,7 +4,6 @@ import { forwardRef, useEffect, useRef, useState, type ReactNode } from "react";
 import { motion, type HTMLMotionProps } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { springs } from "@/lib/springs";
-import { useShape } from "@/lib/shape-context";
 import { FileThumbnail } from "@/components/ui/file-thumbnail";
 import { toneIdentity } from "@/lib/workspace-tone";
 import { useWorkspaceTone } from "@/lib/workspace-tone-context";
@@ -41,7 +40,6 @@ const ChatMessage = forwardRef<HTMLDivElement, ChatMessageProps>(
     },
     ref,
   ) => {
-    const shape = useShape();
     const workspaceTone = useWorkspaceTone();
     const isUser = from === "user";
     // The user bubble carries the workspace's git-state tone when one is in
@@ -157,7 +155,7 @@ const ChatMessage = forwardRef<HTMLDivElement, ChatMessageProps>(
                   // Assistant bodies span it: inline widgets (iframes) have no
                   // content width of their own and would collapse otherwise.
                   isUser
-                    ? cn(shape.bg, "px-3.5", !expanded && "line-clamp-3")
+                    ? cn("rounded-xl", "px-3.5", !expanded && "line-clamp-3")
                     : "w-full text-foreground",
                 )}
               >

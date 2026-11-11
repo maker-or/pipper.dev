@@ -1,0 +1,2379 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Intro Playground</title>
+    <style>
+      :root {
+        --bg: #f4f4f6;
+        --panel: #ffffff;
+        --panel-2: #f0f0f3;
+        --line: #e2e2e8;
+        --text: #18181c;
+        --muted: #6b6b76;
+        --accent: #5b6cff;
+        --accent-ink: #ffffff;
+        --track: #dcdce3;
+        --stage-bg: #e8e8ec;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          --bg: #0e0e11;
+          --panel: #16161a;
+          --panel-2: #1d1d22;
+          --line: #2a2a31;
+          --text: #ececf1;
+          --muted: #8c8c98;
+          --accent: #8fa0ff;
+          --accent-ink: #0e0e11;
+          --track: #34343c;
+          --stage-bg: #08080a;
+        }
+      }
+      :root[data-theme="dark"] {
+        --bg: #0e0e11;
+        --panel: #16161a;
+        --panel-2: #1d1d22;
+        --line: #2a2a31;
+        --text: #ececf1;
+        --muted: #8c8c98;
+        --accent: #8fa0ff;
+        --accent-ink: #0e0e11;
+        --track: #34343c;
+        --stage-bg: #08080a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font:
+          13px/1.4 -apple-system,
+          BlinkMacSystemFont,
+          "SF Pro Text",
+          system-ui,
+          sans-serif;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 360px;
+        overflow: hidden;
+      }
+      main {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+        padding: 16px;
+        gap: 12px;
+      }
+      .viewport {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        place-items: center;
+        background: var(--stage-bg);
+        border-radius: 14px;
+        overflow: hidden;
+        position: relative;
+      }
+      .frame {
+        position: relative;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.35);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .frame canvas {
+        display: block;
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .drop-hint {
+        position: absolute;
+        inset: 0;
+        display: none;
+        place-items: center;
+        font-size: 15px;
+        background: color-mix(in srgb, var(--accent) 25%, transparent);
+        color: #fff;
+        pointer-events: none;
+      }
+      .viewport.dragging .drop-hint {
+        display: grid;
+      }
+
+      .transport {
+        display: grid;
+        grid-template-columns: auto auto minmax(0, 1fr) auto auto auto;
+        gap: 10px;
+        align-items: center;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+      .scrub {
+        position: relative;
+        height: 28px;
+        display: flex;
+        align-items: center;
+      }
+      .scrub input {
+        width: 100%;
+      }
+      .marks {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        height: 6px;
+        pointer-events: none;
+      }
+      .marks i {
+        position: absolute;
+        top: 0;
+        width: 2px;
+        height: 6px;
+        border-radius: 1px;
+        background: var(--accent);
+        transform: translateX(-1px);
+      }
+      .marks i.text {
+        background: var(--muted);
+      }
+      .time {
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        min-width: 92px;
+        text-align: right;
+      }
+
+      button,
+      select,
+      input[type="text"],
+      textarea {
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 6px 10px;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--muted);
+      }
+      button.primary {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+      }
+      button.icon {
+        width: 34px;
+        height: 32px;
+        padding: 0;
+        display: grid;
+        place-items: center;
+      }
+      button.icon svg {
+        width: 16px;
+        height: 16px;
+        fill: currentColor;
+      }
+      label.toggle {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        color: var(--muted);
+        white-space: nowrap;
+      }
+
+      aside {
+        background: var(--panel);
+        border-left: 1px solid var(--line);
+        overflow-y: auto;
+        min-height: 0;
+        padding: 14px 14px 40px;
+      }
+      h1 {
+        font-size: 15px;
+        margin: 2px 0 2px;
+      }
+      .sub {
+        color: var(--muted);
+        margin: 0 0 12px;
+        font-size: 12px;
+      }
+      .presets {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 6px;
+        margin-bottom: 10px;
+      }
+      .preset {
+        text-align: left;
+        padding: 8px 10px;
+        border-radius: 10px;
+        display: grid;
+        gap: 2px;
+      }
+      .preset b {
+        font-weight: 600;
+        font-size: 12.5px;
+      }
+      .preset span {
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.3;
+      }
+      .preset.active {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+      }
+      .row-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+        margin-bottom: 12px;
+      }
+      .modified {
+        color: var(--accent);
+        font-size: 11px;
+        margin-left: 6px;
+      }
+
+      details {
+        border-top: 1px solid var(--line);
+        padding: 8px 0;
+      }
+      summary {
+        cursor: pointer;
+        font-weight: 600;
+        padding: 4px 0;
+        list-style: none;
+        display: flex;
+        justify-content: space-between;
+      }
+      summary::after {
+        content: "+";
+        color: var(--muted);
+      }
+      details[open] summary::after {
+        content: "–";
+      }
+      .param {
+        display: grid;
+        grid-template-columns: 1fr 64px;
+        gap: 2px 8px;
+        align-items: center;
+        padding: 5px 0;
+      }
+      .param .name {
+        color: var(--text);
+        font-size: 12px;
+        cursor: default;
+        user-select: none;
+      }
+      .param .name.changed::after {
+        content: " •";
+        color: var(--accent);
+      }
+      .param .hint {
+        grid-column: 1 / -1;
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: -2px;
+      }
+      .param input[type="range"] {
+        grid-column: 1 / 2;
+        width: 100%;
+      }
+      .param input[type="number"] {
+        grid-row: 1 / 3;
+        grid-column: 2;
+        width: 64px;
+        font: inherit;
+        font-variant-numeric: tabular-nums;
+        color: var(--text);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 4px 6px;
+      }
+      .param.wide {
+        grid-template-columns: 1fr;
+      }
+      .param.wide input,
+      .param.wide select {
+        width: 100%;
+      }
+      .param input[type="color"] {
+        grid-row: 1 / 3;
+        grid-column: 2;
+        width: 64px;
+        height: 28px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: var(--panel-2);
+        padding: 2px;
+      }
+      input[type="range"] {
+        accent-color: var(--accent);
+      }
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        font:
+          11px/1.4 ui-monospace,
+          Menlo,
+          monospace;
+        resize: vertical;
+      }
+      .toast {
+        position: fixed;
+        left: 50%;
+        bottom: 24px;
+        transform: translateX(-50%);
+        background: var(--text);
+        color: var(--bg);
+        padding: 8px 14px;
+        border-radius: 8px;
+        opacity: 0;
+        transition: opacity 0.2s;
+        pointer-events: none;
+      }
+      .toast.show {
+        opacity: 1;
+      }
+      .kbd {
+        color: var(--muted);
+        font-size: 11px;
+        margin-top: 14px;
+        line-height: 1.6;
+      }
+      .kbd b {
+        font-weight: 600;
+        color: var(--text);
+      }
+      @media (max-width: 860px) {
+        body {
+          grid-template-columns: 1fr;
+          grid-template-rows: auto 1fr;
+          overflow: auto;
+        }
+        main {
+          padding: 16px;
+        }
+        .viewport {
+          flex: none;
+          height: min(66vw, 70vh);
+          min-height: 220px;
+        }
+        aside {
+          border-left: 0;
+          border-top: 1px solid var(--line);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <div class="viewport" id="viewport">
+        <div class="frame" id="frame">
+          <canvas id="gl"></canvas>
+          <canvas id="text"></canvas>
+        </div>
+        <div class="drop-hint">Drop an image: left half = screen, right half = wallpaper</div>
+      </div>
+      <div class="transport">
+        <button class="icon" id="restart" title="Restart (R)">
+          <svg viewBox="0 0 256 256">
+            <path
+              d="M216 128a88 88 0 1 1-88-88 87.4 87.4 0 0 1 62.2 25.8L208 83.7V48a8 8 0 0 1 16 0v56a8 8 0 0 1-8 8h-56a8 8 0 0 1 0-16h36.7l-17.8-17.9A72 72 0 1 0 200 128a8 8 0 0 1 16 0Z"
+            />
+          </svg>
+        </button>
+        <button class="icon primary" id="play" title="Play / pause (Space)"></button>
+        <div class="scrub">
+          <div class="marks" id="marks"></div>
+          <input type="range" id="scrub" min="0" max="1" step="0.001" value="0" />
+        </div>
+        <span class="time" id="time">0.00 / 0.00 s</span>
+        <select id="rate" title="Playback speed">
+          <option value="0.1">0.1×</option>
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+        </select>
+        <label class="toggle"><input type="checkbox" id="loop" checked /> Loop</label>
+      </div>
+    </main>
+
+    <aside>
+      <h1>Launch intro playground</h1>
+      <p class="sub">
+        Pick a starting point, then tune. Double-click a setting's name to reset it.
+      </p>
+      <div class="presets" id="presets"></div>
+      <p class="sub" style="margin: 4px 0 6px">What happens after the line</p>
+      <div class="presets" id="nexts"></div>
+      <div class="row-actions">
+        <button id="reset">Reset to preset</button>
+        <button id="copySwift">Copy Swift</button>
+        <button id="copyJson">Copy JSON</button>
+      </div>
+      <div id="groups"></div>
+
+      <details>
+        <summary>Scene</summary>
+        <div class="param wide">
+          <span class="name">Screen (what's on screen before the intro)</span>
+          <select id="screenSrc">
+            <option value="demo">Demo desktop</option>
+            <option value="file">Choose image…</option>
+          </select>
+        </div>
+        <div class="param wide">
+          <span class="name">Wallpaper (the stage)</span>
+          <select id="stageSrc">
+            <option value="demo">Demo wallpaper</option>
+            <option value="screen">Same as screen (Screen Recording granted)</option>
+            <option value="file">Choose image…</option>
+          </select>
+        </div>
+        <div class="param wide">
+          <span class="name">Display shape</span>
+          <select id="aspect">
+            <option value="1.6">16:10 (MacBook)</option>
+            <option value="1.7778">16:9</option>
+            <option value="1.5">3:2</option>
+          </select>
+        </div>
+        <div class="param wide">
+          <span class="name">Theme</span>
+          <select id="theme">
+            <option value="">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+        <input type="file" id="file" accept="image/*" hidden />
+      </details>
+
+      <details>
+        <summary>Settings JSON</summary>
+        <p class="sub">Paste settings here and apply, or copy them to share.</p>
+        <textarea id="json" spellcheck="false"></textarea>
+        <div class="row-actions" style="margin-top: 6px"><button id="applyJson">Apply</button></div>
+      </details>
+
+      <div class="kbd">
+        <b>Space</b> play/pause · <b>R</b> restart · <b>← →</b> step a frame ·
+        <b>[ ]</b> previous/next preset
+      </div>
+    </aside>
+    <div class="toast" id="toast"></div>
+
+    <script>
+      "use strict";
+
+      // ---------------------------------------------------------------------------
+      // Settings. Lengths are design units on a 1440-wide display (like Timeline.swift).
+      // ---------------------------------------------------------------------------
+      const BASE = {
+        source: "single",
+        count: 3,
+        spacing: 0.3,
+        firstStrength: 1.5,
+        otherStrength: 0.65,
+        stoneX: 0.5,
+        stoneY: -0.2,
+        tideAngle: 0,
+        rainSeed: 7,
+        wobble: 0,
+        wobbleScale: 5,
+        wobbleSpeed: 1,
+        travel: 2.667,
+        textDelay: 0,
+        textDuration: 2.667,
+        hold: 1,
+        soft: 160,
+        wavelength: 46,
+        pack: 180,
+        amplitude: 9,
+        decay: 0.375,
+        refraction: 3,
+        bump: 1.6,
+        lightAzimuth: 121.6,
+        lightElevation: 46.3,
+        light: 0.3,
+        glint: 0.55,
+        glintPower: 60,
+        rim: 0.3,
+        rimWidth: 1,
+        rimColor: "#8fa8ff",
+        tint: "#050507",
+        darkBottom: 0.94,
+        darkTop: 0.5,
+        stage: true,
+        stageWash: 0.5,
+        push: 14,
+        pushPeriod: 0.8,
+        pushDamping: 0.5,
+        pushOnset: 0.2,
+        lens: 0,
+        lensWidth: 120,
+        breath: 0,
+        breathPeriod: 2,
+        breathDecay: 0.8,
+        text: "One interface for every agent",
+        fontSize: 40,
+        fontWeight: 400,
+        textColor: "#f2f2f7",
+        maxTextBlur: 14,
+        // What happens after the line is sharp (act 2). "none" ends as before.
+        next: "none",
+        nextDelay: 0.4,
+        nextLength: 3.2,
+        nextHold: 0.8,
+        agents: 7,
+        winW: 960,
+        winH: 720,
+      };
+
+      /** Act 2 settings follow the viewer across presets instead of resetting. */
+      const NEXT_KEYS = ["next", "nextDelay", "nextLength", "nextHold", "agents", "winW", "winH"];
+      const NEXTS = [
+        { id: "none", name: "Stop here", desc: "Hold on the line, as today." },
+        {
+          id: "drops",
+          name: "Every agent is a drop",
+          desc: "Drops land, rings converge, the window surfaces.",
+        },
+        {
+          id: "rise",
+          name: "Window rises",
+          desc: "The centre goes still; the window rises out of it.",
+        },
+        {
+          id: "tide",
+          name: "Tide goes out",
+          desc: "Ripples run back into the stone; the screen returns.",
+        },
+        {
+          id: "names",
+          name: "Names bubble up",
+          desc: "Agent names rise, pop, and merge into pipper.",
+        },
+        {
+          id: "rain",
+          name: "Rain to calm",
+          desc: "Rain everywhere, one ring calms it, the window appears.",
+        },
+      ];
+      const AGENT_NAMES = [
+        "Claude Code",
+        "Codex",
+        "Cursor",
+        "Gemini CLI",
+        "OpenCode",
+        "Goose",
+        "Amp",
+        "Copilot",
+      ];
+
+      const PRESETS = [
+        {
+          id: "ripple",
+          name: "Ripple",
+          desc: "What ships today: three rings, back to back.",
+          values: {},
+        },
+        {
+          id: "swell",
+          name: "Single swell",
+          desc: "One slow, wide ring lifts the screen once.",
+          values: {
+            count: 1,
+            firstStrength: 1.6,
+            soft: 320,
+            wavelength: 90,
+            pack: 320,
+            amplitude: 12,
+            push: 26,
+            pushPeriod: 1.1,
+            pushDamping: 0.45,
+            travel: 3.2,
+            textDuration: 3.2,
+            stageWash: 0.4,
+          },
+        },
+        {
+          id: "bloom",
+          name: "Bloom",
+          desc: "Rings grow from the centre, where the text appears.",
+          values: {
+            stoneY: 0.5,
+            travel: 2.2,
+            textDuration: 2.2,
+            push: 12,
+          },
+        },
+        {
+          id: "lens",
+          name: "Lens",
+          desc: "A glass band magnifies what it passes.",
+          values: {
+            count: 1,
+            firstStrength: 1,
+            amplitude: 0,
+            refraction: 0,
+            rim: 0.12,
+            glint: 0,
+            light: 0,
+            lens: 70,
+            lensWidth: 90,
+            soft: 160,
+            rim: 0.35,
+            light: 0.12,
+            push: 6,
+            travel: 3.2,
+            textDuration: 3.2,
+          },
+        },
+        {
+          id: "tide",
+          name: "Tide",
+          desc: "A straight line rises from the bottom.",
+          values: {
+            source: "line",
+            count: 2,
+            spacing: 0.45,
+            firstStrength: 1.4,
+            otherStrength: 0.7,
+            stoneY: -0.05,
+            wavelength: 70,
+            pack: 110,
+            soft: 200,
+            amplitude: 5,
+            bump: 1.1,
+            push: 18,
+          },
+        },
+        {
+          id: "pair",
+          name: "Two stones",
+          desc: "Rings from both corners cross in the middle.",
+          values: {
+            source: "pair",
+            stoneX: 0.08,
+            stoneY: -0.1,
+            count: 2,
+            spacing: 0.35,
+            firstStrength: 1.1,
+            otherStrength: 0.6,
+            amplitude: 5,
+            pack: 120,
+            push: 10,
+          },
+        },
+        {
+          id: "shock",
+          name: "Shockwave",
+          desc: "One thin, fast, sharp pulse.",
+          values: {
+            count: 1,
+            firstStrength: 1.4,
+            soft: 50,
+            wavelength: 22,
+            pack: 50,
+            amplitude: 20,
+            refraction: 12,
+            travel: 1.6,
+            textDuration: 1.8,
+            push: 26,
+            pushPeriod: 0.4,
+            pushDamping: 0.35,
+            pushOnset: 0.05,
+            rim: 0.9,
+            rimWidth: 0.6,
+            stageWash: 1,
+          },
+        },
+        {
+          id: "ink",
+          name: "Ink drop",
+          desc: "Same rings with a wobbly, organic edge.",
+          values: {
+            wobble: 28,
+            wobbleScale: 3,
+            wobbleSpeed: 0.8,
+            soft: 200,
+            amplitude: 5,
+            pack: 120,
+            rim: 0.18,
+          },
+        },
+        {
+          id: "rain",
+          name: "Rain",
+          desc: "Drops land everywhere and merge.",
+          values: {
+            source: "rain",
+            count: 10,
+            spacing: 0.12,
+            firstStrength: 0.9,
+            otherStrength: 0.9,
+            wavelength: 28,
+            pack: 90,
+            soft: 90,
+            amplitude: 7,
+            push: 6,
+            travel: 2.4,
+            textDuration: 2.4,
+            rim: 0.25,
+          },
+        },
+        {
+          id: "breath",
+          name: "Breath",
+          desc: "No edge: the screen breathes in and out.",
+          values: {
+            stoneY: 0.5,
+            count: 1,
+            soft: 1200,
+            amplitude: 0,
+            rim: 0,
+            glint: 0,
+            light: 0,
+            push: 0,
+            breath: 0.06,
+            breathPeriod: 2.4,
+            breathDecay: 0.5,
+            travel: 3,
+            textDuration: 2.5,
+            stageWash: 1,
+          },
+        },
+      ];
+
+      const GROUPS = [
+        {
+          title: "Shape",
+          open: true,
+          params: [
+            {
+              k: "source",
+              label: "Source",
+              type: "select",
+              options: [
+                ["single", "One stone"],
+                ["pair", "Two stones (mirrored)"],
+                ["rain", "Rain (random drops)"],
+                ["line", "Tide (straight line)"],
+              ],
+            },
+            {
+              k: "count",
+              label: "Ripples",
+              min: 1,
+              max: 12,
+              step: 1,
+              hint: "Two stones allows up to 8.",
+            },
+            { k: "spacing", label: "Gap between ripples (s)", min: 0, max: 1.5, step: 0.01 },
+            { k: "firstStrength", label: "First ripple strength", min: 0, max: 3, step: 0.05 },
+            { k: "otherStrength", label: "Other ripples strength", min: 0, max: 3, step: 0.05 },
+            {
+              k: "stoneX",
+              label: "Stone across",
+              min: 0,
+              max: 1,
+              step: 0.01,
+              hint: "0 = left edge, 1 = right edge.",
+            },
+            {
+              k: "stoneY",
+              label: "Stone height",
+              min: -1,
+              max: 1,
+              step: 0.01,
+              hint: "Fraction of screen height; below 0 is under the bottom edge.",
+            },
+            { k: "tideAngle", label: "Tide angle (°)", min: -60, max: 60, step: 1 },
+            { k: "rainSeed", label: "Rain seed", min: 1, max: 99, step: 1 },
+          ],
+        },
+        {
+          title: "Edge wobble",
+          params: [
+            {
+              k: "wobble",
+              label: "Wobble (pt)",
+              min: 0,
+              max: 120,
+              step: 1,
+              hint: "0 is a perfect circle or line.",
+            },
+            { k: "wobbleScale", label: "Lobes", min: 1, max: 14, step: 1 },
+            { k: "wobbleSpeed", label: "Wobble speed", min: 0, max: 4, step: 0.05 },
+          ],
+        },
+        {
+          title: "Timing",
+          open: true,
+          params: [
+            {
+              k: "travel",
+              label: "Travel (s)",
+              min: 0.5,
+              max: 6,
+              step: 0.01,
+              hint: "Time for one front to cross the display.",
+            },
+            {
+              k: "textDelay",
+              label: "Text starts after last ripple (s)",
+              min: -1,
+              max: 3,
+              step: 0.01,
+            },
+            { k: "textDuration", label: "Text sharpen-in (s)", min: 0.1, max: 6, step: 0.01 },
+            { k: "hold", label: "Hold before held frame (s)", min: 0, max: 4, step: 0.1 },
+          ],
+        },
+        {
+          title: "Water",
+          params: [
+            { k: "soft", label: "Soft edge (pt)", min: 10, max: 1600, step: 1 },
+            { k: "wavelength", label: "Wavelength (pt)", min: 6, max: 200, step: 1 },
+            {
+              k: "pack",
+              label: "Pack (pt)",
+              min: 10,
+              max: 800,
+              step: 1,
+              hint: "How far behind the front the bands still show.",
+            },
+            { k: "amplitude", label: "Amplitude (pt)", min: 0, max: 50, step: 0.5 },
+            { k: "decay", label: "Decay", min: 0, max: 3, step: 0.005 },
+            { k: "refraction", label: "Refraction / shimmer", min: 0, max: 30, step: 0.1 },
+            { k: "bump", label: "Band depth for lighting", min: 0, max: 5, step: 0.05 },
+          ],
+        },
+        {
+          title: "Light & colour",
+          params: [
+            { k: "lightAzimuth", label: "Light direction (°)", min: 0, max: 360, step: 1 },
+            { k: "lightElevation", label: "Light height (°)", min: 5, max: 85, step: 0.1 },
+            { k: "light", label: "Shading", min: 0, max: 1.5, step: 0.01 },
+            { k: "glint", label: "Glints", min: 0, max: 3, step: 0.01 },
+            { k: "glintPower", label: "Glint sharpness", min: 4, max: 300, step: 1 },
+            { k: "rim", label: "Rim brightness", min: 0, max: 2, step: 0.01 },
+            { k: "rimWidth", label: "Rim width", min: 0.1, max: 3, step: 0.01 },
+            { k: "rimColor", label: "Rim colour", type: "color" },
+            { k: "tint", label: "Ink colour", type: "color", hint: "The colour of the darkness." },
+          ],
+        },
+        {
+          title: "Darkness",
+          params: [
+            { k: "darkBottom", label: "Darkness at bottom", min: 0, max: 1, step: 0.01 },
+            { k: "darkTop", label: "Darkness at top", min: 0, max: 1, step: 0.01 },
+          ],
+        },
+        {
+          title: "Stage & push",
+          open: true,
+          params: [
+            {
+              k: "stage",
+              label: "Stage wash on",
+              type: "check",
+              hint: "Off = no wallpaper, nothing moves (the no-stage case).",
+            },
+            {
+              k: "stageWash",
+              label: "Stage wash width",
+              min: 0.05,
+              max: 3,
+              step: 0.01,
+              hint: "Fraction of the soft edge.",
+            },
+            { k: "push", label: "Push (pt)", min: 0, max: 80, step: 0.5 },
+            { k: "pushPeriod", label: "Spring swing (s)", min: 0.15, max: 2.5, step: 0.01 },
+            {
+              k: "pushDamping",
+              label: "Damping",
+              min: 0.05,
+              max: 0.95,
+              step: 0.01,
+              hint: "Lower overshoots more.",
+            },
+            { k: "pushOnset", label: "Onset (s)", min: 0.01, max: 1, step: 0.01 },
+          ],
+        },
+        {
+          title: "Lens",
+          params: [
+            { k: "lens", label: "Magnify (pt)", min: 0, max: 120, step: 0.5 },
+            { k: "lensWidth", label: "Lens width (pt)", min: 10, max: 500, step: 1 },
+          ],
+        },
+        {
+          title: "Breath",
+          params: [
+            { k: "breath", label: "Breath depth", min: 0, max: 0.2, step: 0.001 },
+            { k: "breathPeriod", label: "Breath length (s)", min: 0.4, max: 6, step: 0.05 },
+            { k: "breathDecay", label: "Breath fade", min: 0, max: 3, step: 0.01 },
+          ],
+        },
+        {
+          title: "What happens next",
+          params: [
+            {
+              k: "next",
+              label: "After the line",
+              type: "select",
+              options: NEXTS.map((n) => [n.id, n.name]),
+            },
+            {
+              k: "nextDelay",
+              label: "Starts after the line is sharp (s)",
+              min: 0,
+              max: 2,
+              step: 0.05,
+            },
+            {
+              k: "nextLength",
+              label: "Speed (length, s)",
+              min: 1.5,
+              max: 6,
+              step: 0.05,
+              hint: "Every beat of act 2 scales with this.",
+            },
+            { k: "nextHold", label: "Hold on the window (s)", min: 0, max: 3, step: 0.1 },
+            { k: "agents", label: "Agents (drops / names)", min: 3, max: 8, step: 1 },
+            { k: "winW", label: "Window width (pt)", min: 400, max: 1400, step: 10 },
+            { k: "winH", label: "Window height (pt)", min: 300, max: 880, step: 10 },
+          ],
+        },
+        {
+          title: "Text",
+          params: [
+            { k: "text", label: "Line", type: "text" },
+            { k: "fontSize", label: "Font size (pt)", min: 12, max: 140, step: 1 },
+            { k: "fontWeight", label: "Weight", min: 100, max: 900, step: 100 },
+            { k: "textColor", label: "Colour", type: "color" },
+            { k: "maxTextBlur", label: "Starting blur (pt)", min: 0, max: 60, step: 0.5 },
+          ],
+        },
+      ];
+      const PARAMS = GROUPS.flatMap((g) => g.params);
+
+      // ---------------------------------------------------------------------------
+      // State, persisted per viewer.
+      // ---------------------------------------------------------------------------
+      const STORE = "pipper-intro-playground";
+      let presetId = "ripple";
+      // Settings from storage, pasted JSON or a typed number can be anything:
+      // keep each within its slider's range and of its kind, or fall back to
+      // the default, so nothing malformed reaches render().
+      function cleanValue(k, v) {
+        const p = PARAMS.find((param) => param.k === k);
+        const fallback = BASE[k];
+        if (!p) return typeof v === typeof fallback ? v : fallback;
+        if (p.type === "select") return p.options.some(([value]) => value === v) ? v : fallback;
+        if (p.type === "text") return typeof v === "string" ? v : fallback;
+        if (p.type === "color")
+          return typeof v === "string" && /^#[0-9a-f]{6}$/i.test(v) ? v : fallback;
+        if (p.type === "check") return typeof v === "boolean" ? v : fallback;
+        const n = typeof v === "number" ? v : Number(v);
+        if (!Number.isFinite(n)) return fallback;
+        return Math.min(p.max ?? n, Math.max(p.min ?? n, n));
+      }
+      function cleanState(values) {
+        const source = values && typeof values === "object" ? values : {};
+        return Object.fromEntries(
+          Object.keys(BASE).map((k) => [k, k in source ? cleanValue(k, source[k]) : BASE[k]]),
+        );
+      }
+
+      let state = { ...BASE };
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORE) || "null");
+        if (saved && saved.state) {
+          state = cleanState(saved.state);
+          presetId = saved.presetId || presetId;
+        }
+      } catch {}
+      const presetValues = () => ({
+        ...BASE,
+        ...(PRESETS.find((p) => p.id === presetId)?.values || {}),
+      });
+      let saveTimer = 0;
+      function save() {
+        clearTimeout(saveTimer);
+        saveTimer = setTimeout(() => {
+          try {
+            localStorage.setItem(STORE, JSON.stringify({ presetId, state }));
+          } catch {}
+        }, 200);
+      }
+
+      // ---------------------------------------------------------------------------
+      // WebGL
+      // ---------------------------------------------------------------------------
+      const MAX_DROPS = 32;
+      /** Act 1 may use up to this many; act 2 adds its own drops after them. */
+      const ACT1_DROPS = 16;
+      const glCanvas = document.getElementById("gl");
+      const textCanvas = document.getElementById("text");
+      const gl = glCanvas.getContext("webgl2", { premultipliedAlpha: false, antialias: false });
+      if (!gl) document.getElementById("viewport").textContent = "This page needs WebGL 2.";
+
+      const VERT = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(p * 2.0 - 1.0, 0, 1);
+}`;
+
+      // Mirrors ripple_fragment in Shaders.swift, generalised: each "drop" is a
+      // source with its own start, strength and position; the tide uses a line.
+      const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uTime;
+uniform int uCount;
+uniform vec2 uPos[${MAX_DROPS}];
+uniform float uStart[${MAX_DROPS}];
+uniform float uStrength[${MAX_DROPS}];
+uniform int uLine;
+uniform vec2 uLineDir;
+uniform float uLineC0;
+uniform float uSpeed, uWavelength, uPack, uSoft, uAmp, uDecay, uRefraction, uBump;
+// Share of the darkness each drop brings; 0 marks an act 2 drop, which only
+// ripples (its own speed, decay and band size) and can be calmed.
+uniform float uFillW[${MAX_DROPS}];
+uniform float uSpeed2, uDecay2, uWavelength2, uPack2;
+// Act 2: one ring that can morph from a circle (0) to the window's rounded
+// rect (1); a calm mask that flattens act 2 water; a stilled window area;
+// and a drain that hands pixels back to the live screen.
+uniform float uRingS, uRingR, uRingMorph, uRingW;
+uniform vec2 uRingC, uWinC, uWinHalf;
+uniform float uWinRadius;
+uniform int uCalmMode;
+uniform float uCalmAmt, uCalmSoft, uStill;
+uniform float uDrainOn, uDrainR;
+uniform vec2 uDrainC;
+uniform float uWobble, uWobbleK, uWobbleSpeed;
+uniform vec3 uL;
+uniform float uLight, uGlint, uGlintPow;
+uniform vec3 uRimColor;
+uniform float uRim, uRimSoft;
+uniform vec3 uTint;
+uniform float uDarkBottom, uDarkTop;
+uniform float uHasStage, uStageWash, uStageStart;
+uniform float uPush, uPushOmega, uPushDecay, uPushNorm, uPushOnset;
+uniform float uLens, uLensWidth;
+uniform float uBreathAmt;
+uniform sampler2D uScreen, uStage;
+out vec4 outColor;
+
+const float TAU = 6.28318530718;
+
+float wob(float a, float t) {
+  float k = uWobbleK;
+  return 0.7 * sin(k * a + t) + 0.25 * sin((k + 1.0) * a - 1.3 * t + 1.3)
+       + 0.05 * sin((2.0 * k + 1.0) * a + 2.0 * t + 2.1);
+}
+
+float frontDistance(int i, vec2 p, out vec2 dir) {
+  if (uLine == 1) {
+    dir = uLineDir;
+    float d = dot(p, uLineDir) - uLineC0;
+    if (uWobble > 0.0) {
+      float along = dot(p, vec2(-uLineDir.y, uLineDir.x)) / uRes.x * TAU;
+      d += uWobble * wob(along, uTime * uWobbleSpeed + float(i) * 1.7);
+    }
+    return d;
+  }
+  vec2 delta = p - uPos[i];
+  float d = length(delta);
+  dir = delta / max(d, 1e-3);
+  if (uWobble > 0.0) {
+    float a = atan(delta.y, delta.x);
+    d += uWobble * wob(a, uTime * uWobbleSpeed + float(i) * 1.7) * smoothstep(0.0, uWobble * 4.0, d);
+  }
+  return d;
+}
+
+struct Field { float fill; float height; float rim; vec2 push; vec2 lens; float cover; };
+
+float sdRoundRect(vec2 q, vec2 b, float r) {
+  vec2 d = abs(q) - b + r;
+  return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - r;
+}
+
+float ringDistance(vec2 p) {
+  vec2 q = p - uRingC;
+  return mix(length(q), sdRoundRect(q, uWinHalf, uWinRadius), uRingMorph);
+}
+
+// How flat act 2's water is at p: 1 where the calm has passed.
+float calmAt(vec2 p) {
+  if (uCalmMode == 1) return uCalmAmt * smoothstep(uRingR - uCalmSoft, uRingR + uCalmSoft, ringDistance(p));
+  if (uCalmMode == 2) return uCalmAmt * (1.0 - smoothstep(uRingR - uCalmSoft, uRingR, length(p - uRingC)));
+  if (uCalmMode == 3) return uCalmAmt * (1.0 - smoothstep(-uCalmSoft, 0.0, sdRoundRect(p - uWinC, uWinHalf, uWinRadius)));
+  return 0.0;
+}
+
+Field field(vec2 p, bool full) {
+  Field f = Field(0.0, 0.0, 0.0, vec2(0), vec2(0), 0.0);
+  float still = 1.0 - calmAt(p);
+  for (int i = 0; i < ${MAX_DROPS}; i++) {
+    if (i >= uCount) break;
+    float age = uTime - uStart[i];
+    if (age < 0.0) continue;
+    bool act2 = uFillW[i] <= 0.0;
+    float speed = act2 ? uSpeed2 : uSpeed;
+    float wavelength = act2 ? uWavelength2 : uWavelength;
+    float k = act2 ? still : 1.0;
+    float strength = uStrength[i] * k;
+    vec2 dir;
+    float d = frontDistance(i, p, dir);
+    float x = d - age * speed;
+    float s = x > 0.0 ? wavelength * 0.6 : (act2 ? uPack2 : uPack);
+    float fade = exp(-age * (act2 ? uDecay2 : uDecay));
+    f.height += strength * uAmp * fade * exp(-(x * x) / (s * s)) * sin(x * TAU / wavelength);
+    if (!full) continue;
+    float rimSoft = act2 ? uRimSoft * 0.3 : uRimSoft;
+    f.rim += strength * fade * exp(-(x * x) / (rimSoft * rimSoft));
+    float tau = -x / speed;
+    if (tau > 0.0) {
+      f.push += dir * strength * (act2 ? 0.5 : 1.0) * uPushNorm * smoothstep(0.0, uPushOnset, tau)
+        * exp(-uPushDecay * tau) * sin(uPushOmega * tau) * uPush;
+    }
+    if (act2) continue;
+    f.fill += uFillW[i] * (1.0 - smoothstep(-uSoft, 0.0, x));
+    f.cover = max(f.cover, 1.0 - smoothstep(-uStageWash, 0.0, x));
+    float lx = x / uLensWidth;
+    f.lens -= dir * strength * uLens * lx * exp(-lx * lx);
+  }
+  if (uRingS > 0.0) {
+    float x = ringDistance(p) - uRingR;
+    f.height += uRingS * uAmp * exp(-(x * x) / (uRingW * uRingW)) * sin(x * TAU / uWavelength2);
+    if (full) f.rim += uRingS * exp(-(x * x) / (uRingW * uRingW * 0.25));
+  }
+  return f;
+}
+
+void main() {
+  vec2 p = gl_FragCoord.xy; // y up, like the Swift side
+  Field f = field(p, true);
+  vec2 g = vec2(field(p + vec2(1, 0), false).height - f.height, field(p + vec2(0, 1), false).height - f.height);
+
+  float y01 = clamp(p.y / uRes.y, 0.0, 1.0);
+  float alpha = mix(uDarkBottom, uDarkTop, y01) * clamp(f.fill, 0.0, 1.0);
+  // A still pool where the window will rise: a shade deeper than around it.
+  if (uStill > 0.0) {
+    float inside = 1.0 - smoothstep(-uCalmSoft, 0.0, sdRoundRect(p - uWinC, uWinHalf, uWinRadius));
+    alpha = min(1.0, alpha + uStill * 0.05 * inside);
+  }
+  vec3 n = normalize(vec3(-g * uBump, 1));
+  float light = (dot(n, uL) - uL.z) * uLight;
+  float glint = max(pow(max(dot(reflect(-uL, n), vec3(0, 0, 1)), 0.0), uGlintPow) - pow(uL.z, uGlintPow), 0.0) * uGlint;
+  vec3 extra = vec3(light + glint) + uRimColor * f.rim * uRim;
+
+  float r = 0.0;
+  vec3 behind = vec3(0);
+  if (uHasStage > 0.5 && uTime >= uStageStart) {
+    r = f.cover;
+    if (r > 0.0) {
+      vec2 centre = uRes * 0.5;
+      vec2 offset = g * uRefraction - f.push + f.lens + (centre - p) * uBreathAmt;
+      behind = texture(uStage, (p + offset) / uRes).rgb;
+    }
+  }
+
+  // The tide going out: past the drain front, pixels go back to the live screen.
+  if (uDrainOn > 0.5) {
+    float back = smoothstep(uDrainR, uDrainR + uSoft * 0.5, distance(p, uDrainC));
+    alpha *= 1.0 - back;
+    r *= 1.0 - back;
+    extra *= 1.0 - back * 0.7;
+  }
+
+  // Overlay, premultiplied, exactly as the helper draws it.
+  float a = 1.0 - (1.0 - alpha) * (1.0 - r);
+  vec3 rgb = (1.0 - alpha) * r * behind + alpha * uTint + extra;
+  float deficit = max(0.0, -min(rgb.r, min(rgb.g, rgb.b)));
+  rgb = max(rgb, 0.0);
+  a = min(1.0, a + deficit * (1.0 - a));
+  // The window server's composite over the live screen.
+  vec3 screen = texture(uScreen, p / uRes).rgb;
+  outColor = vec4(min(rgb + (1.0 - a) * screen, 1.0), 1);
+}`;
+
+      function compile(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        return s;
+      }
+      const program = gl.createProgram();
+      gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+      gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+      gl.linkProgram(program);
+      if (!gl.getProgramParameter(program, gl.LINK_STATUS))
+        throw new Error(gl.getProgramInfoLog(program));
+      gl.useProgram(program);
+      gl.bindVertexArray(gl.createVertexArray());
+      const U = {};
+      for (let i = 0; i < gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS); i++) {
+        const name = gl.getActiveUniform(program, i).name.replace(/\[0\]$/, "");
+        U[name] = gl.getUniformLocation(program, name);
+      }
+
+      function makeTexture(unit) {
+        const t = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, t);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+        return t;
+      }
+      const screenTex = makeTexture(0);
+      const stageTex = makeTexture(1);
+      gl.uniform1i(U.uScreen, 0);
+      gl.uniform1i(U.uStage, 1);
+      function upload(unit, tex, canvas) {
+        gl.activeTexture(gl.TEXTURE0 + unit);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+      }
+
+      // ---------------------------------------------------------------------------
+      // Scene: a demo desktop and wallpaper, or the viewer's own images.
+      // ---------------------------------------------------------------------------
+      let aspect = 1.6;
+      const images = { screen: null, stage: null };
+      let stageMode = "demo";
+
+      function rng(seed) {
+        let a = seed >>> 0;
+        return () => {
+          a = (a + 0x6d2b79f5) >>> 0;
+          let t = a;
+          t = Math.imul(t ^ (t >>> 15), t | 1);
+          t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+          return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+        };
+      }
+
+      function drawWallpaper(ctx, w, h) {
+        const sky = ctx.createLinearGradient(0, 0, 0, h);
+        sky.addColorStop(0, "#1d2b6b");
+        sky.addColorStop(0.45, "#6b4c9a");
+        sky.addColorStop(0.72, "#d77c8f");
+        sky.addColorStop(1, "#f3b07a");
+        ctx.fillStyle = sky;
+        ctx.fillRect(0, 0, w, h);
+        const r = rng(3);
+        ctx.fillStyle = "#fff";
+        for (let i = 0; i < 160; i++) {
+          ctx.globalAlpha = 0.3 + r() * 0.6;
+          ctx.beginPath();
+          ctx.arc(r() * w, r() * h * 0.45, r() * 1.4 * (w / 1440) + 0.4, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.globalAlpha = 1;
+        const sun = ctx.createRadialGradient(w * 0.62, h * 0.6, 0, w * 0.62, h * 0.6, h * 0.16);
+        sun.addColorStop(0, "#fff3d6");
+        sun.addColorStop(0.6, "#ffd29a");
+        sun.addColorStop(1, "rgba(255,210,154,0)");
+        ctx.fillStyle = sun;
+        ctx.fillRect(0, 0, w, h);
+        const ridges = ["#7a4f8f", "#5a3a78", "#3c2a5e", "#221a3f"];
+        ridges.forEach((color, i) => {
+          const base = h * (0.62 + i * 0.1);
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.moveTo(0, h);
+          for (let x = 0; x <= w; x += w / 240) {
+            const u = x / w;
+            const y =
+              base -
+              h *
+                (0.05 + i * 0.01) *
+                (Math.sin(u * (5 + i * 2) + i * 1.7) * 0.6 +
+                  Math.sin(u * (13 + i * 3) + i) * 0.25 +
+                  Math.sin(u * 31 + i * 4) * 0.08);
+            ctx.lineTo(x, y);
+          }
+          ctx.lineTo(w, h);
+          ctx.fill();
+        });
+      }
+
+      function roundRect(ctx, x, y, w, h, r) {
+        ctx.beginPath();
+        ctx.roundRect(x, y, w, h, r);
+      }
+
+      function drawDesktop(ctx, w, h) {
+        drawWallpaper(ctx, w, h);
+        const s = w / 1440;
+        // Menu bar
+        ctx.fillStyle = "rgba(20,16,40,0.35)";
+        ctx.fillRect(0, 0, w, 26 * s);
+        ctx.fillStyle = "#fff";
+        ctx.font = `600 ${13 * s}px -apple-system, system-ui, sans-serif`;
+        ctx.textBaseline = "middle";
+        ctx.fillText("Pipper", 40 * s, 13 * s);
+        ctx.font = `${13 * s}px -apple-system, system-ui, sans-serif`;
+        ["File", "Edit", "View", "Window", "Help"].forEach((m, i) =>
+          ctx.fillText(m, (100 + i * 52) * s, 13 * s),
+        );
+        ctx.textAlign = "right";
+        ctx.fillText("Sat 7 Nov  18:04", w - 20 * s, 13 * s);
+        ctx.textAlign = "left";
+        // Windows
+        const win = (x, y, ww, hh, dark) => {
+          ctx.save();
+          ctx.shadowColor = "rgba(0,0,0,0.35)";
+          ctx.shadowBlur = 40 * s;
+          ctx.shadowOffsetY = 14 * s;
+          ctx.fillStyle = dark ? "#1e1e24" : "#f7f7f9";
+          roundRect(ctx, x * s, y * s, ww * s, hh * s, 12 * s);
+          ctx.fill();
+          ctx.restore();
+          ["#ff5f57", "#febc2e", "#28c840"].forEach((c, i) => {
+            ctx.fillStyle = c;
+            ctx.beginPath();
+            ctx.arc((x + 18 + i * 20) * s, (y + 18) * s, 6 * s, 0, Math.PI * 2);
+            ctx.fill();
+          });
+          const r = rng(x + y);
+          for (let i = 0; i < Math.floor((hh - 60) / 22); i++) {
+            ctx.fillStyle = dark
+              ? i % 5 === 0
+                ? "#8fa8ff"
+                : "#4a4a55"
+              : i % 5 === 0
+                ? "#5b6cff"
+                : "#c9c9d2";
+            roundRect(
+              ctx,
+              (x + 24 + (i % 4 === 0 ? 0 : 16)) * s,
+              (y + 48 + i * 22) * s,
+              (ww - 80) * (0.35 + r() * 0.6) * s,
+              9 * s,
+              4.5 * s,
+            );
+            ctx.fill();
+          }
+        };
+        win(150, 110, 640, 460, true);
+        win(640, 230, 560, 400, false);
+        // Desktop icons
+        const colors = ["#ef5350", "#4caf50", "#f2b632", "#4a7cf2", "#9c4dd6", "#e0e0e6"];
+        for (let i = 0; i < 6; i++) {
+          ctx.fillStyle = colors[i];
+          roundRect(ctx, 1340 * s, (60 + i * 92) * s, 56 * s, 56 * s, 12 * s);
+          ctx.fill();
+        }
+        // Dock
+        const dockW = 600 * s,
+          dockH = 70 * s;
+        ctx.fillStyle = "rgba(255,255,255,0.22)";
+        roundRect(ctx, (w - dockW) / 2, h - dockH - 8 * s, dockW, dockH, 20 * s);
+        ctx.fill();
+        for (let i = 0; i < 9; i++) {
+          ctx.fillStyle = colors[i % colors.length];
+          roundRect(
+            ctx,
+            (w - dockW) / 2 + (16 + i * 64) * s,
+            h - dockH - 8 * s + 9 * s,
+            52 * s,
+            52 * s,
+            12 * s,
+          );
+          ctx.fill();
+        }
+      }
+
+      function drawCover(ctx, img, w, h) {
+        const scale = Math.max(w / img.width, h / img.height);
+        const dw = img.width * scale,
+          dh = img.height * scale;
+        ctx.drawImage(img, (w - dw) / 2, (h - dh) / 2, dw, dh);
+      }
+
+      function composeScene() {
+        const w = 2048,
+          h = Math.round(2048 / aspect);
+        const make = () => {
+          const c = document.createElement("canvas");
+          c.width = w;
+          c.height = h;
+          return c;
+        };
+        const screen = make();
+        const sctx = screen.getContext("2d");
+        images.screen ? drawCover(sctx, images.screen, w, h) : drawDesktop(sctx, w, h);
+        upload(0, screenTex, screen);
+        let stage = make();
+        const tctx = stage.getContext("2d");
+        if (stageMode === "screen") stage = screen;
+        else if (stageMode === "file" && images.stage) drawCover(tctx, images.stage, w, h);
+        else drawWallpaper(tctx, w, h);
+        upload(1, stageTex, stage);
+      }
+
+      // ---------------------------------------------------------------------------
+      // Derived timeline (mirrors Timeline.swift)
+      // ---------------------------------------------------------------------------
+      function hexToRgb(hex) {
+        const n = parseInt(hex.slice(1), 16);
+        return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+      }
+      function smoothstep(a, b, x) {
+        const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+        return t * t * (3 - 2 * t);
+      }
+
+      function spring(c) {
+        const omega = (2 * Math.PI) / c.pushPeriod;
+        const zeta = Math.min(0.95, Math.max(0.01, c.pushDamping));
+        const decay = (omega * zeta) / Math.sqrt(1 - zeta * zeta);
+        const onset = Math.max(1e-3, c.pushOnset);
+        let peak = 0;
+        for (let i = 1; i <= 400; i++) {
+          const tau = (c.pushPeriod * i) / 400;
+          peak = Math.max(
+            peak,
+            smoothstep(0, onset, tau) * Math.exp(-decay * tau) * Math.sin(omega * tau),
+          );
+        }
+        return { omega, decay, onset, norm: peak > 0 ? 1 / peak : 0 };
+      }
+
+      function timeline(c, W, H) {
+        const q = W / 1440;
+        const drops = [];
+        const pair = c.source === "pair";
+        const count = Math.min(c.count, pair ? ACT1_DROPS / 2 : ACT1_DROPS);
+        const r = rng(c.rainSeed * 7919);
+        for (let i = 0; i < count; i++) {
+          const strength = i === 0 ? c.firstStrength : c.otherStrength;
+          let start = i * c.spacing;
+          const y = c.stoneY * H;
+          if (c.source === "rain") {
+            start += r() * c.spacing;
+            drops.push({ x: (0.08 + r() * 0.84) * W, y: (0.05 + r() * 0.9) * H, start, strength });
+          } else if (pair) {
+            drops.push({ x: c.stoneX * W, y, start, strength });
+            drops.push({ x: (1 - c.stoneX) * W, y, start, strength });
+          } else {
+            drops.push({ x: c.stoneX * W, y, start, strength });
+          }
+        }
+        const corners = [
+          [0, 0],
+          [W, 0],
+          [0, H],
+          [W, H],
+        ];
+        const soft = c.soft * q;
+        const wobble = c.wobble * q;
+        let far = 0,
+          lineDir = [0, 1],
+          lineC0 = 0;
+        if (c.source === "line") {
+          const a = (c.tideAngle * Math.PI) / 180;
+          lineDir = [Math.sin(a), Math.cos(a)];
+          const dots = corners.map(([x, y]) => x * lineDir[0] + y * lineDir[1]);
+          lineC0 = Math.min(...dots) - Math.max(0, -c.stoneY) * H;
+          far = Math.max(...dots) - lineC0;
+        } else {
+          for (const d of drops)
+            for (const [x, y] of corners) far = Math.max(far, Math.hypot(x - d.x, y - d.y));
+        }
+        const speed = (far + soft + wobble) / c.travel;
+        const starts = drops.map((d) => d.start);
+        const last = Math.max(0, ...starts);
+        const textStart = Math.max(0, last + c.textDelay);
+        const textEnd = textStart + c.textDuration;
+        const act1End = Math.max(textEnd, last + c.travel);
+        const actStart = c.next === "none" ? Infinity : act1End + c.nextDelay;
+        const end = c.next === "none" ? act1End + c.hold : actStart + c.nextLength + c.nextHold;
+        return {
+          actStart,
+          q,
+          drops,
+          speed,
+          soft,
+          wobble,
+          lineDir,
+          lineC0,
+          starts,
+          textStart,
+          textEnd,
+          end,
+          first: Math.min(0, ...starts),
+        };
+      }
+
+      // ---------------------------------------------------------------------------
+      // Act 2: what happens after the line. Beats are written for a 3.2 s act at
+      // 1440 wide and scale with nextLength and the display. Pure in (c, T, time).
+      // ---------------------------------------------------------------------------
+      const ease = (x) => x * x * (3 - 2 * x);
+      const clamp01 = (x) => Math.min(1, Math.max(0, x));
+
+      function act2(c, T, W, H) {
+        const q = T.q;
+        const k = c.nextLength / 3.2;
+        const a = (time - T.actStart) / k; // act time on the 3.2 s score
+        const at = (beat) => T.actStart + beat * k; // absolute time of a beat
+        const centre = [W / 2, H / 2];
+        const stone = T.drops[0] ? [T.drops[0].x, T.drops[0].y] : [W / 2, -0.2 * H];
+        const far = (pt) =>
+          Math.max(
+            ...[
+              [0, 0],
+              [W, 0],
+              [0, H],
+              [W, H],
+            ].map(([x, y]) => Math.hypot(x - pt[0], y - pt[1])),
+          );
+        const out = {
+          drops: [],
+          ring: { s: 0, r: 0, morph: 0, w: 50 * q, c: centre },
+          calm: { mode: 0, amt: 0, soft: 80 * q },
+          still: 0,
+          drain: { on: 0, r: 0, c: stone },
+          textOut: 0,
+          window: 0,
+          names: [],
+          wordmark: 0,
+        };
+        if (c.next === "none" || !(a > -1)) return out;
+        const r = rng(c.rainSeed * 31 + 5);
+        if (c.next !== "names") out.textOut = ease(clamp01(a / 0.6));
+
+        if (c.next === "drops") {
+          // One drop per agent, scattered around the centre.
+          for (let i = 0; i < c.agents; i++) {
+            const angle = (i / c.agents) * Math.PI * 2 + r() * 0.6;
+            const radius = (0.22 + r() * 0.2) * H;
+            out.drops.push({
+              x: centre[0] + Math.cos(angle) * radius * 1.25,
+              y: centre[1] + Math.sin(angle) * radius,
+              start: at(0.15 + i * 0.16),
+              strength: 0.6,
+            });
+          }
+          // Then one ring closes in from the edges, squares off into the
+          // window's outline and flattens everything it has passed.
+          const u = clamp01((a - 1.35) / 1.0);
+          out.ring = {
+            s:
+              a < 1.35
+                ? 0
+                : a < 2.35
+                  ? 1.1 * ease(clamp01(u / 0.15))
+                  : 1.1 * Math.exp(-(a - 2.35) * 2.5),
+            r: far(centre) * (1 - u * u),
+            morph: ease(clamp01((u - 0.55) / 0.45)),
+            w: 60 * q,
+            c: centre,
+          };
+          out.calm = { mode: 1, amt: a >= 1.35 ? 1 : 0, soft: 80 * q };
+          out.window = ease(clamp01((a - 2.2) / 0.6));
+        } else if (c.next === "rise") {
+          // The window's footprint goes still, then its outline breaks the
+          // surface and water sheets off the edges.
+          out.still = ease(clamp01((a - 0.3) / 0.8));
+          out.calm = { mode: 3, amt: out.still, soft: 120 * q };
+          out.ring = {
+            s:
+              a < 0.95
+                ? 0
+                : 0.9 * ease(clamp01((a - 0.95) / 0.15)) * Math.exp(-Math.max(0, a - 1.1) * 1.6),
+            r: 60 * q * ease(clamp01((a - 1.0) / 1.2)),
+            morph: 1,
+            w: 40 * q,
+            c: centre,
+          };
+          out.window = ease(clamp01((a - 1.0) / 0.7));
+        } else if (c.next === "tide") {
+          // The rings run in reverse back into the stone and take the
+          // darkness with them; the window is already there underneath.
+          const reach = far(stone) + T.soft;
+          const u = ease(clamp01((a - 0.2) / 2.1));
+          out.drain = { on: a > 0.2 ? 1 : 0, r: reach * (1 - u), c: stone };
+          out.ring = {
+            s:
+              a < 0.2
+                ? 0
+                : 0.9 * ease(clamp01((a - 0.2) / 0.2)) * (1 - ease(clamp01((u - 0.8) / 0.2))),
+            r: reach * (1 - u),
+            morph: 0,
+            w: 50 * q,
+            c: stone,
+          };
+          const toCentre = Math.hypot(centre[0] - stone[0], centre[1] - stone[1]);
+          out.window = 1 - ease(clamp01((out.drain.r - (toCentre - 0.2 * H)) / (0.5 * H)));
+          if (a <= 0.2) out.window = 0;
+        } else if (c.next === "names") {
+          // Names rise from below like bubbles, pop into small rings under the
+          // line, then gather into one word.
+          const n = Math.min(c.agents, AGENT_NAMES.length);
+          const row = H / 2 + 70 * q; // y down, for the text canvas
+          const gather = ease(clamp01((a - 2.1) / 0.5));
+          for (let i = 0; i < n; i++) {
+            const t0 = 0.1 + i * 0.18;
+            const p = clamp01((a - t0) / 0.9);
+            const x = W / 2 + (i - (n - 1) / 2) * 150 * q;
+            const rise = 1 - Math.pow(1 - p, 3);
+            out.names.push({
+              text: AGENT_NAMES[i],
+              x: x + (W / 2 - x) * gather,
+              y: H + 30 * q + (row - H - 30 * q) * rise,
+              blur: (1 - p) * 8 * q,
+              opacity: ease(clamp01(p / 0.2)) * (1 - gather),
+            });
+            out.drops.push({ x, y: H - row, start: at(t0 + 0.9), strength: 0.35 });
+          }
+          out.wordmark = ease(clamp01((a - 2.4) / 0.5));
+          out.wordmarkY = row;
+        } else if (c.next === "rain") {
+          // Busy rain everywhere, then one ring from the stone calms it.
+          for (let i = 0; i < 14; i++) {
+            out.drops.push({
+              x: (0.05 + r() * 0.9) * W,
+              y: (0.05 + r() * 0.9) * H,
+              start: at(0.05 + r() * 1.25),
+              strength: 0.5 + r() * 0.4,
+            });
+          }
+          const u = clamp01((a - 1.45) / 1.0);
+          out.ring = {
+            s: a < 1.45 ? 0 : 1.4 * Math.exp(-(a - 1.45) * 0.9),
+            r: (far(stone) + T.soft) * u,
+            morph: 0,
+            w: 70 * q,
+            c: stone,
+          };
+          out.calm = { mode: 2, amt: a >= 1.45 ? 1 : 0, soft: 120 * q };
+          out.window = ease(clamp01((a - 2.35) / 0.6));
+        }
+        return out;
+      }
+
+      // ---------------------------------------------------------------------------
+      // Rendering
+      // ---------------------------------------------------------------------------
+      let time = 0;
+      let playing = true;
+      let rate = 1;
+      let loop = true;
+      let T = null;
+      let A = null;
+
+      function render() {
+        const W = glCanvas.width,
+          H = glCanvas.height;
+        if (!W || !H) return;
+        const c = state;
+        T = timeline(c, W, H);
+        const q = T.q;
+        A = act2(c, T, W, H);
+        gl.viewport(0, 0, W, H);
+        const pos = new Float32Array(MAX_DROPS * 2);
+        const start = new Float32Array(MAX_DROPS);
+        const strength = new Float32Array(MAX_DROPS);
+        const fillW = new Float32Array(MAX_DROPS);
+        const all = [...T.drops, ...A.drops].slice(0, MAX_DROPS);
+        all.forEach((d, i) => {
+          pos[i * 2] = d.x;
+          pos[i * 2 + 1] = d.y;
+          start[i] = d.start;
+          strength[i] = d.strength;
+          // Each act 1 drop leaves an equal share of the darkness; act 2 none.
+          fillW[i] = i < T.drops.length ? 1 / Math.max(1, T.drops.length) : 0;
+        });
+        gl.uniform2f(U.uRes, W, H);
+        gl.uniform1f(U.uTime, time);
+        gl.uniform1i(U.uCount, all.length);
+        gl.uniform2fv(U.uPos, pos);
+        gl.uniform1fv(U.uStart, start);
+        gl.uniform1fv(U.uStrength, strength);
+        gl.uniform1fv(U.uFillW, fillW);
+        gl.uniform1f(U.uSpeed2, 160 * q);
+        gl.uniform1f(U.uDecay2, 1.4);
+        gl.uniform1f(U.uWavelength2, 26 * q);
+        gl.uniform1f(U.uPack2, 70 * q);
+        gl.uniform1f(U.uRingS, A.ring.s);
+        gl.uniform1f(U.uRingR, A.ring.r);
+        gl.uniform1f(U.uRingMorph, A.ring.morph);
+        gl.uniform1f(U.uRingW, A.ring.w);
+        gl.uniform2f(U.uRingC, A.ring.c[0], A.ring.c[1]);
+        gl.uniform2f(U.uWinC, W / 2, H / 2);
+        gl.uniform2f(U.uWinHalf, (c.winW / 2) * q, (c.winH / 2) * q);
+        gl.uniform1f(U.uWinRadius, 12 * q);
+        gl.uniform1i(U.uCalmMode, A.calm.mode);
+        gl.uniform1f(U.uCalmAmt, A.calm.amt);
+        gl.uniform1f(U.uCalmSoft, A.calm.soft);
+        gl.uniform1f(U.uStill, A.still);
+        gl.uniform1f(U.uDrainOn, A.drain.on);
+        gl.uniform1f(U.uDrainR, A.drain.r);
+        gl.uniform2f(U.uDrainC, A.drain.c[0], A.drain.c[1]);
+        gl.uniform1i(U.uLine, c.source === "line" ? 1 : 0);
+        gl.uniform2f(U.uLineDir, T.lineDir[0], T.lineDir[1]);
+        gl.uniform1f(U.uLineC0, T.lineC0);
+        gl.uniform1f(U.uSpeed, T.speed);
+        gl.uniform1f(U.uWavelength, c.wavelength * q);
+        gl.uniform1f(U.uPack, c.pack * q);
+        gl.uniform1f(U.uSoft, T.soft);
+        gl.uniform1f(U.uAmp, c.amplitude * q);
+        gl.uniform1f(U.uDecay, c.decay);
+        gl.uniform1f(U.uRefraction, c.refraction);
+        gl.uniform1f(U.uBump, c.bump);
+        gl.uniform1f(U.uWobble, T.wobble);
+        gl.uniform1f(U.uWobbleK, Math.round(c.wobbleScale));
+        gl.uniform1f(U.uWobbleSpeed, c.wobbleSpeed);
+        const az = (c.lightAzimuth * Math.PI) / 180,
+          el = (c.lightElevation * Math.PI) / 180;
+        gl.uniform3f(U.uL, Math.cos(az) * Math.cos(el), Math.sin(az) * Math.cos(el), Math.sin(el));
+        gl.uniform1f(U.uLight, c.light);
+        gl.uniform1f(U.uGlint, c.glint);
+        gl.uniform1f(U.uGlintPow, c.glintPower);
+        gl.uniform3f(U.uRimColor, ...hexToRgb(c.rimColor));
+        gl.uniform1f(U.uRim, c.rim);
+        gl.uniform1f(U.uRimSoft, T.soft * 0.35 * c.rimWidth);
+        gl.uniform3f(U.uTint, ...hexToRgb(c.tint));
+        gl.uniform1f(U.uDarkBottom, c.darkBottom);
+        gl.uniform1f(U.uDarkTop, c.darkTop);
+        gl.uniform1f(U.uHasStage, c.stage ? 1 : 0);
+        gl.uniform1f(U.uStageWash, c.stageWash * T.soft);
+        gl.uniform1f(U.uStageStart, T.first);
+        const sp = spring(c);
+        gl.uniform1f(U.uPush, c.push * q);
+        gl.uniform1f(U.uPushOmega, sp.omega);
+        gl.uniform1f(U.uPushDecay, sp.decay);
+        gl.uniform1f(U.uPushNorm, sp.norm);
+        gl.uniform1f(U.uPushOnset, sp.onset);
+        gl.uniform1f(U.uLens, c.lens * q);
+        gl.uniform1f(U.uLensWidth, c.lensWidth * q);
+        const breath =
+          c.breath *
+          Math.sin((2 * Math.PI * time) / c.breathPeriod) *
+          Math.exp(-c.breathDecay * time) *
+          smoothstep(0, 0.3, time);
+        gl.uniform1f(U.uBreathAmt, breath);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        drawText(c, q);
+      }
+
+      const tctx = textCanvas.getContext("2d");
+      function drawText(c, q) {
+        const W = textCanvas.width,
+          H = textCanvas.height;
+        tctx.clearRect(0, 0, W, H);
+        const p = Math.min(
+          1,
+          Math.max(0, (time - T.textStart) / Math.max(1e-3, T.textEnd - T.textStart)),
+        );
+        // In act 2 the line sinks back the way it came: blurring out.
+        const sink = A ? A.textOut : 0;
+        const opacity = p * p * (3 - 2 * p) * (1 - sink);
+        if (opacity > 0 && c.text) {
+          const blur = (1 - p + sink) * c.maxTextBlur * q;
+          tctx.save();
+          tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
+          tctx.globalAlpha = opacity;
+          tctx.fillStyle = c.textColor;
+          tctx.font = `${c.fontWeight} ${c.fontSize * q}px -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif`;
+          tctx.textAlign = "center";
+          tctx.textBaseline = "middle";
+          tctx.fillText(c.text, W / 2, H / 2);
+          tctx.restore();
+        }
+        if (A) drawAct2(c, q, W, H);
+      }
+
+      const FONT = `-apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif`;
+      function drawAct2(c, q, W, H) {
+        tctx.save();
+        tctx.textAlign = "center";
+        tctx.textBaseline = "middle";
+        for (const n of A.names) {
+          if (n.opacity <= 0) continue;
+          tctx.filter = n.blur > 0.3 ? `blur(${n.blur}px)` : "none";
+          tctx.globalAlpha = n.opacity;
+          tctx.fillStyle = c.textColor;
+          tctx.font = `400 ${18 * q}px ${FONT}`;
+          tctx.fillText(n.text, n.x, n.y);
+        }
+        if (A.wordmark > 0) {
+          const blur = (1 - A.wordmark) * 10 * q;
+          tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
+          tctx.globalAlpha = A.wordmark;
+          tctx.fillStyle = c.textColor;
+          tctx.font = `600 ${46 * q}px ${FONT}`;
+          tctx.letterSpacing = `${-0.04 * 46 * q}px`;
+          tctx.fillText("pipper", W / 2, A.wordmarkY);
+        }
+        tctx.restore();
+        if (A.window > 0) drawLaunchWindow(c, q, W, H, A.window);
+      }
+
+      /** A stand-in for the real launch window (src/launch/unauthenticated-stage.tsx). */
+      function drawLaunchWindow(c, q, W, H, t) {
+        const w = c.winW * q,
+          h = c.winH * q;
+        const x = (W - w) / 2,
+          y = (H - h) / 2;
+        tctx.save();
+        tctx.globalAlpha = t;
+        const blur = (1 - t) * 10 * q;
+        tctx.filter = blur > 0.3 ? `blur(${blur}px)` : "none";
+        tctx.translate(W / 2, H / 2);
+        tctx.scale(0.97 + 0.03 * t, 0.97 + 0.03 * t);
+        tctx.translate(-W / 2, -H / 2);
+        tctx.shadowColor = "rgba(0,0,0,0.5)";
+        tctx.shadowBlur = 50 * q;
+        tctx.shadowOffsetY = 18 * q;
+        tctx.fillStyle = "#171717";
+        roundRect(tctx, x, y, w, h, 12 * q);
+        tctx.fill();
+        tctx.shadowColor = "transparent";
+        tctx.strokeStyle = "rgba(255,255,255,0.08)";
+        tctx.lineWidth = Math.max(1, q);
+        tctx.stroke();
+        ["#ff5f57", "#febc2e", "#28c840"].forEach((col, i) => {
+          tctx.fillStyle = col;
+          tctx.beginPath();
+          tctx.arc(x + (20 + i * 20) * q, y + 20 * q, 6 * q, 0, Math.PI * 2);
+          tctx.fill();
+        });
+        const left = x + 36 * q;
+        const size = Math.min(84, c.winW * 0.075) * q;
+        tctx.textBaseline = "alphabetic";
+        tctx.font = `300 ${size}px ${FONT}`;
+        tctx.letterSpacing = `${-0.085 * size}px`;
+        tctx.fillStyle = "#ffffff";
+        tctx.fillText("Welcome", left, y + 70 * q + size);
+        tctx.fillStyle = "#777777";
+        tctx.fillText("Pipper code", left, y + 70 * q + size * 2.16);
+        tctx.letterSpacing = "0px";
+        const by = y + 70 * q + size * 2.16 + 70 * q;
+        tctx.fillStyle = "#f2f2f7";
+        roundRect(tctx, left, by, 140 * q, 44 * q, 22 * q);
+        tctx.fill();
+        tctx.fillStyle = "#171717";
+        tctx.font = `500 ${15 * q}px ${FONT}`;
+        tctx.textAlign = "center";
+        tctx.textBaseline = "middle";
+        tctx.fillText("Sign in", left + 70 * q, by + 22 * q);
+        tctx.restore();
+      }
+
+      // ---------------------------------------------------------------------------
+      // Layout
+      // ---------------------------------------------------------------------------
+      const viewport = document.getElementById("viewport");
+      const frame = document.getElementById("frame");
+      function layout() {
+        const box = viewport.getBoundingClientRect();
+        const pad = 24;
+        let w = box.width - pad * 2,
+          h = w / aspect;
+        if (h > box.height - pad * 2) {
+          h = box.height - pad * 2;
+          w = h * aspect;
+        }
+        w = Math.max(80, Math.floor(w));
+        h = Math.max(50, Math.floor(w / aspect));
+        frame.style.width = w + "px";
+        frame.style.height = h + "px";
+        const dpr = Math.min(2, window.devicePixelRatio || 1);
+        for (const c of [glCanvas, textCanvas]) {
+          c.width = Math.round(w * dpr);
+          c.height = Math.round(h * dpr);
+        }
+        updateMarks();
+      }
+      new ResizeObserver(layout).observe(viewport);
+
+      // ---------------------------------------------------------------------------
+      // Transport
+      // ---------------------------------------------------------------------------
+      const playBtn = document.getElementById("play");
+      const scrub = document.getElementById("scrub");
+      const timeLabel = document.getElementById("time");
+      const marks = document.getElementById("marks");
+      const PLAY =
+        '<svg viewBox="0 0 256 256"><path d="M240 128a15.7 15.7 0 0 1-7.6 13.5L88.3 229.7a16 16 0 0 1-24.3-13.5V39.8a16 16 0 0 1 24.3-13.5l144.1 88.2A15.7 15.7 0 0 1 240 128Z"/></svg>';
+      const PAUSE =
+        '<svg viewBox="0 0 256 256"><path d="M216 48v160a16 16 0 0 1-16 16h-40a16 16 0 0 1-16-16V48a16 16 0 0 1 16-16h40a16 16 0 0 1 16 16ZM96 32H56a16 16 0 0 0-16 16v160a16 16 0 0 0 16 16h40a16 16 0 0 0 16-16V48a16 16 0 0 0-16-16Z"/></svg>';
+      function setPlaying(v) {
+        playing = v;
+        playBtn.innerHTML = v ? PAUSE : PLAY;
+      }
+      setPlaying(true);
+      playBtn.onclick = () => {
+        if (!playing && T && time >= T.end) time = 0;
+        setPlaying(!playing);
+      };
+      document.getElementById("restart").onclick = () => {
+        time = 0;
+        setPlaying(true);
+      };
+      document.getElementById("rate").onchange = (e) => {
+        rate = +e.target.value;
+      };
+      document.getElementById("loop").onchange = (e) => {
+        loop = e.target.checked;
+      };
+      scrub.oninput = () => {
+        time = +scrub.value * (T ? T.end : 1);
+        setPlaying(false);
+      };
+
+      function updateMarks() {
+        if (!glCanvas.width) return;
+        const t = timeline(state, glCanvas.width, glCanvas.height);
+        const seen = new Set();
+        marks.innerHTML = "";
+        for (const s of t.starts) {
+          const key = s.toFixed(3);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          const i = document.createElement("i");
+          i.style.left = (s / t.end) * 100 + "%";
+          i.title = `Ripple at ${s.toFixed(2)} s`;
+          marks.append(i);
+        }
+        const tx = document.createElement("i");
+        tx.className = "text";
+        tx.style.left = (t.textStart / t.end) * 100 + "%";
+        tx.title = `Text starts at ${t.textStart.toFixed(2)} s`;
+        marks.append(tx);
+        if (isFinite(t.actStart)) {
+          const act = document.createElement("i");
+          act.className = "text";
+          act.style.left = (t.actStart / t.end) * 100 + "%";
+          act.title = `What happens next starts at ${t.actStart.toFixed(2)} s`;
+          marks.append(act);
+        }
+      }
+
+      let last = performance.now();
+      function tick(now) {
+        const dt = Math.min(0.1, (now - last) / 1000);
+        last = now;
+        if (playing && T) {
+          time += dt * rate;
+          if (time >= T.end + (loop ? 0.6 : 0)) {
+            if (loop) time = 0;
+            else {
+              time = T.end;
+              setPlaying(false);
+            }
+          }
+        }
+        // Schedule the next frame first, so a frame that throws can't stop
+        // the loop for good.
+        requestAnimationFrame(tick);
+        try {
+          render();
+        } catch (error) {
+          if (!tick.reported) console.error("Playground frame failed:", error);
+          tick.reported = true;
+          return;
+        }
+        if (T) {
+          scrub.value = Math.min(1, time / T.end);
+          timeLabel.textContent = `${Math.min(time, T.end).toFixed(2)} / ${T.end.toFixed(2)} s`;
+        }
+      }
+
+      // ---------------------------------------------------------------------------
+      // Controls
+      // ---------------------------------------------------------------------------
+      const inputs = {};
+      function decimals(step) {
+        const s = String(step);
+        return s.includes(".") ? s.split(".")[1].length : 0;
+      }
+
+      function buildPresets() {
+        const box = document.getElementById("presets");
+        box.innerHTML = "";
+        for (const p of PRESETS) {
+          const b = document.createElement("button");
+          b.className = "preset" + (p.id === presetId ? " active" : "");
+          b.innerHTML = `<b></b><span></span>`;
+          b.querySelector("b").textContent = p.name;
+          b.querySelector("span").textContent = p.desc;
+          b.onclick = () => applyPreset(p.id);
+          box.append(b);
+        }
+      }
+
+      function buildNexts() {
+        const box = document.getElementById("nexts");
+        box.innerHTML = "";
+        for (const n of NEXTS) {
+          const b = document.createElement("button");
+          b.className = "preset next" + (n.id === state.next ? " active" : "");
+          b.dataset.id = n.id;
+          b.innerHTML = `<b></b><span></span>`;
+          b.querySelector("b").textContent = n.name;
+          b.querySelector("span").textContent = n.desc;
+          b.onclick = () => {
+            set("next", n.id);
+            time = 0;
+            setPlaying(true);
+          };
+          box.append(b);
+        }
+      }
+
+      function buildGroups() {
+        const root = document.getElementById("groups");
+        for (const g of GROUPS) {
+          const d = document.createElement("details");
+          d.open = !!g.open;
+          d.innerHTML = `<summary></summary>`;
+          d.querySelector("summary").textContent = g.title;
+          for (const p of g.params) d.append(buildParam(p));
+          root.append(d);
+        }
+      }
+
+      function buildParam(p) {
+        const row = document.createElement("div");
+        row.className = "param" + (p.type === "select" || p.type === "text" ? " wide" : "");
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = p.label;
+        name.title = "Double-click to reset";
+        name.ondblclick = () => set(p.k, presetValues()[p.k]);
+        row.append(name);
+        let el, num;
+        if (p.type === "select") {
+          el = document.createElement("select");
+          for (const [v, l] of p.options) {
+            const o = document.createElement("option");
+            o.value = v;
+            o.textContent = l;
+            el.append(o);
+          }
+          el.onchange = () => set(p.k, el.value);
+        } else if (p.type === "text") {
+          el = document.createElement("input");
+          el.type = "text";
+          el.oninput = () => set(p.k, el.value);
+        } else if (p.type === "color") {
+          el = document.createElement("input");
+          el.type = "color";
+          el.oninput = () => set(p.k, el.value);
+        } else if (p.type === "check") {
+          el = document.createElement("input");
+          el.type = "checkbox";
+          el.style.justifySelf = "end";
+          el.style.gridRow = "1";
+          el.style.gridColumn = "2";
+          el.onchange = () => set(p.k, el.checked);
+        } else {
+          el = document.createElement("input");
+          el.type = "range";
+          Object.assign(el, { min: p.min, max: p.max, step: p.step });
+          num = document.createElement("input");
+          num.type = "number";
+          Object.assign(num, { min: p.min, step: p.step });
+          el.oninput = () => set(p.k, +el.value);
+          num.onchange = () => {
+            if (num.value !== "" && isFinite(+num.value)) set(p.k, +num.value);
+          };
+        }
+        row.append(el);
+        if (num) row.append(num);
+        if (p.hint) {
+          const h = document.createElement("span");
+          h.className = "hint";
+          h.textContent = p.hint;
+          row.append(h);
+        }
+        inputs[p.k] = { p, el, num, name };
+        return row;
+      }
+
+      function syncInputs() {
+        const pv = presetValues();
+        let modified = false;
+        for (const { p, el, num, name } of Object.values(inputs)) {
+          const v = state[p.k];
+          if (p.type === "check") el.checked = !!v;
+          else if (document.activeElement !== el) el.value = v;
+          if (num && document.activeElement !== num) num.value = (+v).toFixed(decimals(p.step));
+          const changed = v !== pv[p.k];
+          name.classList.toggle("changed", changed);
+          if (!NEXT_KEYS.includes(p.k)) modified ||= changed;
+        }
+        document
+          .querySelectorAll(".preset.next")
+          .forEach((b) => b.classList.toggle("active", b.dataset.id === state.next));
+        document.querySelectorAll("#presets .preset").forEach((b, i) => {
+          b.classList.toggle("active", PRESETS[i].id === presetId);
+          const old = b.querySelector(".modified");
+          if (old) old.remove();
+          if (PRESETS[i].id === presetId && modified) {
+            const m = document.createElement("span");
+            m.className = "modified";
+            m.textContent = "edited";
+            b.querySelector("b").append(m);
+          }
+        });
+        document.getElementById("json").value = JSON.stringify(
+          { preset: presetId, ...state },
+          null,
+          2,
+        );
+      }
+
+      function set(k, v) {
+        state[k] = cleanValue(k, v);
+        syncInputs();
+        updateMarks();
+        save();
+      }
+
+      function applyPreset(id) {
+        presetId = id;
+        const keep = Object.fromEntries(NEXT_KEYS.map((key) => [key, state[key]]));
+        state = { ...presetValues(), ...keep };
+        time = 0;
+        setPlaying(true);
+        syncInputs();
+        updateMarks();
+        save();
+      }
+
+      // Copy
+      const toast = document.getElementById("toast");
+      function say(msg) {
+        toast.textContent = msg;
+        toast.classList.add("show");
+        clearTimeout(say.t);
+        say.t = setTimeout(() => toast.classList.remove("show"), 1600);
+      }
+      async function copy(text, msg) {
+        try {
+          await navigator.clipboard.writeText(text);
+          say(msg);
+        } catch {
+          document.getElementById("json").value = text;
+          say("Clipboard blocked: copied into Settings JSON instead");
+        }
+      }
+      function f(n) {
+        return String(+(+n).toFixed(4));
+      }
+      function swiftColor(hex) {
+        return `[${hexToRgb(hex)
+          .map((x) => f(x))
+          .join(", ")}, 1]`;
+      }
+      document.getElementById("copySwift").onclick = () => {
+        const c = state;
+        const starts = Array.from({ length: c.count }, (_, i) => f(i * c.spacing));
+        const strengths = Array.from({ length: c.count }, (_, i) =>
+          f(i === 0 ? c.firstStrength : c.otherStrength),
+        );
+        const extras = [];
+        if (c.source !== "single" || Math.abs(c.stoneX - 0.5) > 1e-6)
+          extras.push(`source ${c.source}, stoneX ${f(c.stoneX)}`);
+        if (c.wobble) extras.push(`wobble ${f(c.wobble)}`);
+        if (c.lens) extras.push(`lens ${f(c.lens)}`);
+        if (c.breath) extras.push(`breath ${f(c.breath)}`);
+        if (Math.abs(c.textDuration - c.travel) > 1e-3 || c.textDelay) extras.push("text timing");
+        if (c.hold !== 1) extras.push(`hold ${f(c.hold)}`);
+        if (c.next !== "none") extras.push(`continuation "${c.next}"`);
+        const lines = [
+          `// IntroConfig in native/launch-intro/Sources/LaunchIntroCore/Timeline.swift`,
+          `public var text = ${JSON.stringify(c.text)}`,
+          `public var fontSize: Double = ${f(c.fontSize)}`,
+          `public var textColor: SIMD4<Float> = ${swiftColor(c.textColor)}`,
+          `public var rippleStarts: [Double] = [${starts.join(", ")}]`,
+          `public var rippleStrengths: [Float] = [${strengths.join(", ")}]`,
+          `public var travel: Double = ${f(c.travel)}`,
+          `public var stoneDepth: Double = ${f(-c.stoneY)}`,
+          `public var wavelength: Double = ${f(c.wavelength)}`,
+          `public var pack: Double = ${f(c.pack)}`,
+          `public var soft: Double = ${f(c.soft)}`,
+          `public var amplitude: Double = ${f(c.amplitude)}`,
+          `public var decay: Double = ${f(c.decay)}`,
+          `public var refraction: Double = ${f(c.refraction)}`,
+          `public var push: Double = ${f(c.push)}`,
+          `public var pushPeriod: Double = ${f(c.pushPeriod)}`,
+          `public var pushDamping: Double = ${f(c.pushDamping)}`,
+          `public var pushOnset: Double = ${f(c.pushOnset)}`,
+          `public var stageWash: Double = ${f(c.stageWash)}`,
+          `public var maxTextBlur: Double = ${f(c.maxTextBlur)}`,
+          `public var darkBottom: Double = ${f(c.darkBottom)}`,
+          `public var darkTop: Double = ${f(c.darkTop)}`,
+        ];
+        if (extras.length)
+          lines.push(`// Playground-only, needs shader work in Swift: ${extras.join("; ")}`);
+        copy(lines.join("\n"), "Swift settings copied");
+      };
+      document.getElementById("copyJson").onclick = () =>
+        copy(JSON.stringify({ preset: presetId, ...state }, null, 2), "JSON copied");
+      document.getElementById("applyJson").onclick = () => {
+        try {
+          const { preset, ...rest } = JSON.parse(document.getElementById("json").value);
+          if (preset && PRESETS.some((p) => p.id === preset)) presetId = preset;
+          state = cleanState(rest);
+          syncInputs();
+          updateMarks();
+          save();
+          time = 0;
+          setPlaying(true);
+          say("Settings applied");
+        } catch (e) {
+          say("That isn't valid JSON");
+        }
+      };
+      document.getElementById("reset").onclick = () => applyPreset(presetId);
+
+      // Scene controls
+      const fileInput = document.getElementById("file");
+      let fileTarget = "screen";
+      function loadFile(file, target) {
+        const img = new Image();
+        img.onload = () => {
+          images[target] = img;
+          if (target === "stage") {
+            stageMode = "file";
+            document.getElementById("stageSrc").value = "file";
+          } else document.getElementById("screenSrc").value = "file";
+          composeScene();
+          say(target === "stage" ? "Wallpaper loaded" : "Screen loaded");
+        };
+        img.src = URL.createObjectURL(file);
+      }
+      fileInput.onchange = () => {
+        if (fileInput.files[0]) loadFile(fileInput.files[0], fileTarget);
+        fileInput.value = "";
+      };
+      document.getElementById("screenSrc").onchange = (e) => {
+        if (e.target.value === "file") {
+          fileTarget = "screen";
+          fileInput.click();
+          e.target.value = images.screen ? "file" : "demo";
+        } else {
+          images.screen = null;
+          composeScene();
+        }
+      };
+      document.getElementById("stageSrc").onchange = (e) => {
+        if (e.target.value === "file") {
+          fileTarget = "stage";
+          fileInput.click();
+          // Show what is rendering; loadFile switches to "file" once one loads.
+          e.target.value = stageMode;
+          return;
+        }
+        stageMode = e.target.value;
+        composeScene();
+      };
+      document.getElementById("aspect").onchange = (e) => {
+        aspect = +e.target.value;
+        layout();
+        composeScene();
+      };
+      document.getElementById("theme").onchange = (e) => {
+        if (e.target.value) document.documentElement.dataset.theme = e.target.value;
+        else delete document.documentElement.dataset.theme;
+      };
+      viewport.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        viewport.classList.add("dragging");
+      });
+      viewport.addEventListener("dragleave", () => viewport.classList.remove("dragging"));
+      viewport.addEventListener("drop", (e) => {
+        e.preventDefault();
+        viewport.classList.remove("dragging");
+        const file = e.dataTransfer.files[0];
+        if (!file || !file.type.startsWith("image/")) return;
+        const box = viewport.getBoundingClientRect();
+        loadFile(file, e.clientX < box.left + box.width / 2 ? "screen" : "stage");
+      });
+
+      // Keyboard
+      document.addEventListener("keydown", (e) => {
+        // Sliders and colour pickers keep their own keys (arrows step them,
+        // Space toggles), like text fields.
+        if (
+          e.target.matches(
+            "input[type=text], input[type=number], input[type=range], input[type=color], textarea, select",
+          )
+        )
+          return;
+        const i = PRESETS.findIndex((p) => p.id === presetId);
+        if (e.code === "Space") {
+          e.preventDefault();
+          playBtn.click();
+        } else if (e.key === "r" || e.key === "R") {
+          time = 0;
+          setPlaying(true);
+        } else if (e.key === "ArrowRight") {
+          e.preventDefault();
+          setPlaying(false);
+          time = Math.min(T.end, time + 1 / 30);
+        } else if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          setPlaying(false);
+          time = Math.max(0, time - 1 / 30);
+        } else if (e.key === "]") applyPreset(PRESETS[(i + 1) % PRESETS.length].id);
+        else if (e.key === "[") applyPreset(PRESETS[(i - 1 + PRESETS.length) % PRESETS.length].id);
+      });
+
+      buildPresets();
+      buildNexts();
+      buildGroups();
+      // ?preset=tide&t=1.2 opens a preset paused at a moment, for sharing a frame.
+      const query = new URLSearchParams(location.search);
+      if (PRESETS.some((p) => p.id === query.get("preset"))) applyPreset(query.get("preset"));
+      if (NEXTS.some((n) => n.id === query.get("next"))) state.next = query.get("next");
+      if (query.has("t")) {
+        time = Math.max(0, +query.get("t") || 0);
+        setPlaying(false);
+      }
+      syncInputs();
+      layout();
+      composeScene();
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>

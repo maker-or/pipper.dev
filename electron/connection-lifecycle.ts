@@ -126,6 +126,18 @@ export interface LiveConnection {
   closed: Promise<void>;
 }
 
+/**
+ * One in-flight spawn+initialize for an agent id, shared by every concurrent
+ * `acquire`. `close` abandons it: the attempt never becomes the cached
+ * connection, and its process (once spawned) is terminated.
+ */
+interface SpawnAttempt {
+  promise: Promise<LiveConnection>;
+  child: ChildProcessWithoutNullStreams | null;
+  connectionId: string | null;
+  abandoned: boolean;
+}
+
 /** Client capabilities the manager hosts for every spawned agent process. */
 export interface ConnectionClientHooks {
   onSessionUpdate(sessionId: string, update: acp.SessionUpdate): Promise<void>;
@@ -176,7 +188,7 @@ export class ConnectionLifecycle {
    */
   private readonly connections = new Map<string, LiveConnection>();
   /** In-flight spawn per agentId, so concurrent callers share one spawn instead of racing. */
-  private readonly spawning = new Map<string, Promise<LiveConnection>>();
+  private readonly spawning = new Map<string, SpawnAttempt>();
   private readonly intentionalConnectionIds = new Set<string>();
   private readonly lastConnectionIds = new Map<string, string>();
   private readonly connectionSpawnedAt = new Map<string, number>();
@@ -220,28 +232,43 @@ export class ConnectionLifecycle {
     if (this.terminated) throw new Error("Agent connections are shut down");
     const cached = this.connections.get(descriptor.id);
     if (cached) return cached;
-    let pending = this.spawning.get(descriptor.id);
-    const isNewSpawn = !pending;
+    let attempt = this.spawning.get(descriptor.id);
+    const isNewSpawn = !attempt;
     const spawnStartedAt = Date.now();
-    if (!pending) {
-      pending = this.spawnAndInitialize(descriptor).finally(() =>
-        this.spawning.delete(descriptor.id),
-      );
-      this.spawning.set(descriptor.id, pending);
+    if (!attempt) {
+      const created: SpawnAttempt = {
+        promise: Promise.resolve(null as never),
+        child: null,
+        connectionId: null,
+        abandoned: false,
+      };
+      created.promise = this.spawnAndInitialize(descriptor, created).finally(() => {
+        // close() may already have replaced this attempt with a newer one.
+        if (this.spawning.get(descriptor.id) === created) this.spawning.delete(descriptor.id);
+      });
+      this.spawning.set(descriptor.id, created);
+      attempt = created;
     }
     try {
-      const live = await pending;
+      const live = await attempt.promise;
       // terminateAll already reaped this process while its handshake finished.
       if (this.terminated) throw new Error("Agent connections are shut down");
+      // close() ran while it was starting (its account was removed, or idle
+      // release): it must not come back as this agent's cached connection.
+      if (attempt.abandoned) throw new Error(`${descriptor.id} was closed while it was starting`);
       this.connections.set(descriptor.id, live);
       if (isNewSpawn) {
         this.deps.onConnected?.(descriptor.id, Date.now() - spawnStartedAt, descriptor.installKind);
       }
       return live;
     } catch (err) {
-      // A spawn cut short by shutdown is not a connection failure.
-      if (isNewSpawn && !this.terminated) {
+      // A spawn cut short by shutdown or close is not a connection failure.
+      if (isNewSpawn && !this.terminated && !attempt.abandoned) {
         this.deps.onConnectFailed?.(descriptor.id, err instanceof Error ? err.name : undefined);
+      }
+      // Killing an abandoned handshake surfaces as a transport error; report why.
+      if (attempt.abandoned && !this.terminated) {
+        throw new Error(`${descriptor.id} was closed while it was starting`, { cause: err });
       }
       throw err;
     }
@@ -274,8 +301,20 @@ export class ConnectionLifecycle {
    * without touching other instances of the same driver.
    */
   async close(agentId: string): Promise<void> {
+    const attempt = this.spawning.get(agentId);
+    if (attempt) {
+      // Still starting: abandon it so later acquires spawn fresh, and stop its
+      // process now rather than after a handshake that may take minutes.
+      this.spawning.delete(agentId);
+      attempt.abandoned = true;
+      if (attempt.connectionId) this.intentionalConnectionIds.add(attempt.connectionId);
+      if (attempt.child) await terminateProviderProcess(attempt.child);
+    }
     const live = this.connections.get(agentId);
-    if (!live) return;
+    if (!live) {
+      if (attempt) this.deps.invalidateAgentSessions(agentId);
+      return;
+    }
     this.connections.delete(agentId);
     this.intentionalConnectionIds.add(live.connectionId);
     if (this.activeConnection === live) this.activeConnection = null;
@@ -288,7 +327,10 @@ export class ConnectionLifecycle {
     this.deps.invalidateAgentSessions(agentId);
   }
 
-  private async spawnAndInitialize(descriptor: AcpAgentDescriptor): Promise<LiveConnection> {
+  private async spawnAndInitialize(
+    descriptor: AcpAgentDescriptor,
+    attempt: SpawnAttempt,
+  ): Promise<LiveConnection> {
     if (descriptor.id === "antigravity-acp") {
       // First use downloads Google's server (~107 MiB). Bound the wait to the
       // download's own budget so a slow install fails with a retryable message
@@ -311,10 +353,13 @@ export class ConnectionLifecycle {
     // Checked after the install wait and right before spawning, with no await
     // in between, so nothing can start once terminateAll has taken its list.
     if (this.terminated) throw new Error("Agent connections are shut down");
+    if (attempt.abandoned) throw new Error(`${descriptor.id} was closed while it was starting`);
     const { command, args, env } = resolveAgentSpawn(descriptor);
     const useShell = process.platform === "win32" && /\.cmd$/i.test(command);
     const child = spawnProviderProcess(command, args, { env, shell: useShell });
     const connectionId = randomUUID();
+    attempt.child = child;
+    attempt.connectionId = connectionId;
     if (child.pid !== undefined) {
       this.processes.set(child, connectionId);
       child.once("exit", () => this.processes.delete(child));

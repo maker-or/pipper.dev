@@ -1,0 +1,26 @@
+.states { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 13px; padding-top: 21px; border-top: 1px solid var(--line); }
+.state { min-width: 0; padding: 0; border: 0; border-radius: 12px; background: transparent; font: inherit; color: var(--muted); cursor: pointer; text-align: left; transition: color 160ms ease-out; }
+/* No border, no fill change: the picked moment is told by its darker caption */
+.preview { position: relative; height: 89px; overflow: hidden; border-radius: 12px; background: var(--field); }
+.state[aria-pressed='true'] { color: var(--ink); }
+.state[aria-pressed='true'] .caption { font-weight: 500; }
+@media (hover: hover) { .state:hover { color: var(--ink); } }
+.state:focus-visible { outline: 2px solid var(--accent); outline-offset: 5px; }
+.model { position: absolute; left: 50%; top: 50%; transform-origin: center; pointer-events: none; user-select: none; }
+.caption { display: flex; justify-content: space-between; gap: 5px; padding: 8px 0 0; font-size: 11px; line-height: 13px; user-select: none; }
+.caption > span { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+@media (max-width: 700px) { .states { gap: 8px; } .caption { display: block; } .caption > span { display: block; margin-top: 3px; } }
+.compact { grid-template-columns: repeat(3, 144px); gap: 34px; padding-top: 0; border-top: 0; }
+/* (no housing: each moment sits on a faint 8px drafting grid, centred on the frame so its lines fall evenly round the
+   component, on a layer behind it that fades out at its edges) */
+.compact .preview { height: var(--thumb-h, 55px); border-radius: 0; background: none; }
+.compact .preview::before { content: ''; position: absolute; inset: 0; pointer-events: none; background:
+  linear-gradient(90deg, var(--grid-strong, oklch(0.25 0 0 / 0.07)) 1px, transparent 1px) calc(50% + 0.5px) calc(50% + 0.5px) / 8px 8px,
+  linear-gradient(var(--grid-strong, oklch(0.25 0 0 / 0.07)) 1px, transparent 1px) calc(50% + 0.5px) calc(50% + 0.5px) / 8px 8px;
+  mask-image: radial-gradient(closest-side, #000 40%, transparent); }
+.bare .caption { display: none; }
+/* in the compact row, the moment on the stage is the one at full strength; the others step back, and come up a
+   little under the pointer */
+.compact .preview .model { transition: opacity 160ms ease-out, filter 160ms ease-out; }
+.compact .state:not([aria-pressed='true']) .preview .model { opacity: 0.4; filter: blur(0.5px); }
+@media (hover: hover) { .compact .state:not([aria-pressed='true']):hover .preview .model { opacity: 0.7; filter: none; } }

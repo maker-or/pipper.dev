@@ -137,7 +137,7 @@ export function AgentSelector({
               await onContinue?.();
             }}
           >
-            Continue to Pipper
+            Continue
           </Button>
         </div>
       </div>
@@ -155,7 +155,11 @@ export function AgentSelector({
 
   return (
     <div className={cn("flex flex-col gap-4", className)}>
-      <h3 className="text-sm text-muted-foreground">Choose agents</h3>
+      {/* data-intro-outline: drawn by the first-launch intro before it hands
+          over to this window (electron/launch-intro.ts). */}
+      <h3 className="text-sm text-muted-foreground" data-intro-outline="text">
+        Choose agents
+      </h3>
 
       <ScrollArea className="max-h-[420px]" viewportClassName="max-h-[420px] pr-2">
         {visibleAgents.length > 0 ? (
@@ -203,6 +207,7 @@ export function AgentSelector({
             type="button"
             size="md"
             data-pipper-id="agent-selector-continue"
+            data-intro-outline="button"
             className="shrink-0 sm:min-w-[140px]"
             disabled={!canContinue}
             onClick={async () => {
@@ -249,11 +254,11 @@ function AgentOption({
   );
 
   return (
-    <Card selected={selected} data-pipper-id={`agent-option-${agent.id}`}>
+    <Card selected={selected} data-pipper-id={`agent-option-${agent.id}`} data-intro-outline="card">
       {/* Inline anatomy: media leading, header center, footer trailing (Switch). */}
       <CardMedia icon={BrandIcon} />
       <CardHeader>
-        <CardTitle>{agent.displayName}</CardTitle>
+        <CardTitle data-intro-outline="text">{agent.displayName}</CardTitle>
       </CardHeader>
       <CardFooter>
         <Switch
@@ -264,6 +269,7 @@ function AgentOption({
           // switch root — Base UI renders it as a span too.
           className="px-0 py-0 gap-0 [&>span:last-of-type]:sr-only"
           data-pipper-id={`agent-option-switch-${agent.id}`}
+          data-intro-outline="toggle"
         />
       </CardFooter>
     </Card>
@@ -292,6 +298,21 @@ const SETUP_GUIDE_DOC_IDS: Record<string, string> = {
 function setupGuideUrl(agentId: string): string | null {
   const docId = SETUP_GUIDE_DOC_IDS[agentId];
   return docId ? `${SETUP_GUIDE_BASE_URL}#${docId}` : null;
+}
+
+/** Antigravity advertises personal, API-key, and enterprise auth options. */
+function antigravityIndividualAuthMethod(methods: AgentProbeResult["authMethods"]) {
+  return (methods ?? []).find((method) => {
+    const id = method.id.toLowerCase();
+    const name = (method.name ?? "").toLowerCase();
+    const description = (method.description ?? "").toLowerCase();
+    const details = `${id} ${name} ${description}`;
+    return (
+      !("type" in method && method.type === "terminal") &&
+      !/api[\s_-]?key|enterprise|workspace|organization|organisation/.test(details) &&
+      /individual|personal|google|browser|oauth/.test(details)
+    );
+  });
 }
 
 /**
@@ -323,11 +344,23 @@ function AgentSetupCard({
     result.status === "needs-auth"
       ? `Sign in required for ${descriptor.displayName}. Retry after authenticating`
       : `Retry ${descriptor.displayName}`;
-  // Antigravity signs in through Pipper's own auth buttons, not a docs page.
+  // Antigravity signs in through Pipper's own auth buttons, not a docs page:
+  // its individual sign-in when it offers one, else whatever methods it
+  // reported. With none at all, it falls back to the setup guide like the
+  // other agents, so a needs-auth card always offers a way forward.
   const isAntigravity = (descriptor.driverId ?? descriptor.id) === "antigravity-acp";
+  const individualAuthMethod = isAntigravity
+    ? antigravityIndividualAuthMethod(result.authMethods)
+    : undefined;
+  const authMethods =
+    isAntigravity && result.status === "needs-auth"
+      ? individualAuthMethod
+        ? [individualAuthMethod]
+        : (result.authMethods ?? [])
+      : [];
   // Instances carry `driverId`; the setup guide is keyed by driver.
   const guideUrl =
-    status === "ready" || isAntigravity
+    status === "ready" || authMethods.length > 0
       ? null
       : setupGuideUrl(descriptor.driverId ?? descriptor.id);
 
@@ -345,13 +378,6 @@ function AgentSetupCard({
       <CardMedia icon={BrandIcon} />
       <CardHeader>
         <CardTitle>{descriptor.displayName}</CardTitle>
-        {isAntigravity && (
-          <AgentAuthActions
-            agentId={descriptor.id}
-            methods={result.authMethods}
-            onAuthenticated={onRetry}
-          />
-        )}
       </CardHeader>
       <CardFooter>
         {status === "probing" ? (
@@ -370,17 +396,25 @@ function AgentSetupCard({
           />
         ) : (
           <span className="inline-flex items-center gap-2">
-            {guideUrl && (
-              <button
-                type="button"
-                onClick={() => void openSetupGuide()}
-                title={`Open setup steps for ${descriptor.displayName}`}
-                aria-label={`Open setup guide for ${descriptor.displayName}`}
-                data-pipper-id={`agent-setup-guide-${descriptor.id}`}
-                className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                Setup guide
-              </button>
+            {status === "retry" && authMethods.length > 0 ? (
+              <AgentAuthActions
+                agentId={descriptor.id}
+                methods={authMethods}
+                onAuthenticated={onRetry}
+              />
+            ) : (
+              guideUrl && (
+                <button
+                  type="button"
+                  onClick={() => void openSetupGuide()}
+                  title={`Open setup steps for ${descriptor.displayName}`}
+                  aria-label={`Open setup guide for ${descriptor.displayName}`}
+                  data-pipper-id={`agent-setup-guide-${descriptor.id}`}
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                >
+                  Setup guide
+                </button>
+              )
             )}
             <button
               type="button"

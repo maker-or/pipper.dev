@@ -392,7 +392,16 @@ interface AccordionProps extends HTMLAttributes<HTMLDivElement> {
   defaultValue?: string | string[];
   value?: string | string[];
   onValueChange?: ((value: string) => void) | ((value: string[]) => void);
+  /**
+   * `plain` sits flush in its parent: no fill behind open or hovered items
+   * and no inset, for an accordion that is a section of a page rather than a
+   * list of cards.
+   */
+  variant?: AccordionVariant;
 }
+
+type AccordionVariant = "default" | "plain";
+const AccordionVariantContext = createContext<AccordionVariant>("default");
 
 const Accordion = forwardRef<HTMLDivElement, AccordionProps>(
   (
@@ -403,6 +412,7 @@ const Accordion = forwardRef<HTMLDivElement, AccordionProps>(
       defaultValue,
       value,
       onValueChange,
+      variant = "default",
       className,
       ...props
     },
@@ -486,11 +496,13 @@ const Accordion = forwardRef<HTMLDivElement, AccordionProps>(
           />
         }
       >
-        <StandaloneOpenContext.Provider value={openValues}>
-          <StandaloneToggleContext.Provider value={standaloneToggle}>
-            {children}
-          </StandaloneToggleContext.Provider>
-        </StandaloneOpenContext.Provider>
+        <AccordionVariantContext.Provider value={variant}>
+          <StandaloneOpenContext.Provider value={openValues}>
+            <StandaloneToggleContext.Provider value={standaloneToggle}>
+              {children}
+            </StandaloneToggleContext.Provider>
+          </StandaloneOpenContext.Provider>
+        </AccordionVariantContext.Provider>
       </AccordionPrimitive.Root>
     );
   },
@@ -517,6 +529,7 @@ const AccordionItem = forwardRef<HTMLDivElement, AccordionItemProps>(
     const groupCtx = useAccordionGroup();
     const standaloneOpen = useContext(StandaloneOpenContext);
     const standaloneToggle = useContext(StandaloneToggleContext);
+    const plain = useContext(AccordionVariantContext) === "plain";
     const shape = useShape();
 
     const isOpen = groupCtx?.grouped ? groupCtx.openValues.has(value) : standaloneOpen.has(value);
@@ -566,7 +579,7 @@ const AccordionItem = forwardRef<HTMLDivElement, AccordionItemProps>(
           {...props}
         >
           {/* Standalone expanded background */}
-          {!groupCtx?.grouped && (
+          {!groupCtx?.grouped && !plain && (
             <AnimatePresence>
               {isOpen && (
                 <motion.div
@@ -592,12 +605,15 @@ AccordionItem.displayName = "AccordionItem";
 
 interface AccordionTriggerProps extends HTMLAttributes<HTMLButtonElement> {
   children: ReactNode;
+  /** Hide the chevron, for rows whose open neighbour already shows they fold. */
+  hideChevron?: boolean;
 }
 
 const AccordionTrigger = forwardRef<HTMLButtonElement, AccordionTriggerProps>(
-  ({ children, className, ...props }, ref) => {
+  ({ children, className, hideChevron = false, ...props }, ref) => {
     const groupCtx = useAccordionGroup();
     const { index, isOpen, triggerRef } = useAccordionItemContext();
+    const plain = useContext(AccordionVariantContext) === "plain";
     const shape = useShape();
     const [isHovered, setIsHovered] = useState(false);
 
@@ -608,7 +624,8 @@ const AccordionTrigger = forwardRef<HTMLButtonElement, AccordionTriggerProps>(
         <AccordionPrimitive.Trigger
           ref={ref}
           className={cn(
-            `relative z-10 flex items-center gap-2.5 ${shape.item} px-3 py-2 w-full cursor-pointer outline-none select-none`,
+            `relative z-10 flex items-center gap-2.5 ${shape.item} py-2 w-full cursor-pointer outline-none select-none`,
+            plain ? "px-0" : "px-3",
             !groupCtx?.grouped &&
               "focus-visible:ring-1 focus-visible:ring-[#6B97FF] focus-visible:ring-offset-0",
             className,
@@ -616,7 +633,9 @@ const AccordionTrigger = forwardRef<HTMLButtonElement, AccordionTriggerProps>(
           {...(props as React.ComponentProps<typeof AccordionPrimitive.Trigger>)}
         >
           {/* Label with dual-layer text */}
-          <span className="inline-grid text-[13px] flex-1 text-left">
+          {/* One shrinkable column: a long label truncates instead of
+              widening the row past its container. */}
+          <span className="inline-grid min-w-0 grid-cols-1 text-[13px] flex-1 text-left">
             <span
               className="col-start-1 row-start-1 invisible"
               style={{ fontVariationSettings: fontWeights.semibold }}
@@ -638,21 +657,23 @@ const AccordionTrigger = forwardRef<HTMLButtonElement, AccordionTriggerProps>(
           </span>
 
           {/* Chevron — right when collapsed, rotates 90° down when expanded */}
-          <motion.span
-            className="shrink-0 inline-flex items-center justify-center"
-            animate={{ rotate: isOpen ? 90 : 0 }}
-            transition={springs.fast}
-          >
-            <Icon
-              name="chevron-right"
-              size={16}
-              strokeWidth={isOpen || isActive ? 2 : 1.5}
-              className={cn(
-                "transition-[color,stroke-width] duration-80",
-                isOpen || isActive ? "text-foreground" : "text-muted-foreground",
-              )}
-            />
-          </motion.span>
+          {hideChevron ? null : (
+            <motion.span
+              className="shrink-0 inline-flex items-center justify-center"
+              animate={{ rotate: isOpen ? 90 : 0 }}
+              transition={springs.fast}
+            >
+              <Icon
+                name="chevron-right"
+                size={16}
+                strokeWidth={isOpen || isActive ? 2 : 1.5}
+                className={cn(
+                  "transition-[color,stroke-width] duration-80",
+                  isOpen || isActive ? "text-foreground" : "text-muted-foreground",
+                )}
+              />
+            </motion.span>
+          )}
         </AccordionPrimitive.Trigger>
       </AccordionPrimitive.Header>
     );
@@ -670,7 +691,7 @@ const AccordionTrigger = forwardRef<HTMLButtonElement, AccordionTriggerProps>(
         onMouseLeave={() => setIsHovered(false)}
       >
         <AnimatePresence>
-          {isHovered && (
+          {isHovered && !plain && (
             <motion.div
               className={`absolute inset-0 ${shape.bg} bg-hover pointer-events-none`}
               initial={{ opacity: 0 }}
@@ -698,6 +719,7 @@ const AccordionContent = forwardRef<HTMLDivElement, AccordionContentProps>(
   ({ children, className, ...props }, ref) => {
     const groupCtx = useAccordionGroup();
     const { isOpen } = useAccordionItemContext();
+    const plain = useContext(AccordionVariantContext) === "plain";
 
     return (
       <AnimatePresence initial={false}>
@@ -722,7 +744,11 @@ const AccordionContent = forwardRef<HTMLDivElement, AccordionContentProps>(
               />
             }
           >
-            <div className="px-3 pb-3 pt-1 text-[13px] text-muted-foreground">{children}</div>
+            <div
+              className={cn("pb-3 pt-1 text-[13px] text-muted-foreground", plain ? "px-0" : "px-3")}
+            >
+              {children}
+            </div>
           </AccordionPrimitive.Content>
         )}
       </AnimatePresence>

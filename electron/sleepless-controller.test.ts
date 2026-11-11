@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import {
   helperFailureOutput,
@@ -172,6 +173,80 @@ describe("SleeplessController", () => {
     await controller.dispose();
   });
 });
+
+/** A stand-in for the native daemon: answers every request, records ARMs. */
+async function startFakeDaemon(socketPath: string) {
+  const clients = new Set<Socket>();
+  const commands: string[] = [];
+  const server: Server = createServer((socket) => {
+    clients.add(socket);
+    socket.on("close", () => clients.delete(socket));
+    let buffer = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      buffer += chunk;
+      let newline = buffer.indexOf("\n");
+      while (newline >= 0) {
+        const { id, command } = JSON.parse(buffer.slice(0, newline)) as {
+          id: string;
+          command: string;
+        };
+        buffer = buffer.slice(newline + 1);
+        commands.push(command);
+        socket.write(`${JSON.stringify({ id, ok: true, armedAt: Date.now() })}\n`);
+        newline = buffer.indexOf("\n");
+      }
+    });
+  });
+  await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+  return {
+    commands,
+    /** The daemon restarts: every client connection drops. */
+    dropClients: () => {
+      for (const client of clients) client.destroy();
+    },
+    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+  };
+}
+
+test.skipIf(process.platform === "win32")(
+  "stays armed for a paired phone with no tasks when the daemon connection drops",
+  async () => {
+    const { helperPath, settingsPath } = paths();
+    const socketPath = join(root, "d.sock");
+    const daemon = await startFakeDaemon(socketPath);
+    mkdirSync(join(root, "settings"), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ enabled: true }));
+    const controller = new SleeplessController({
+      platform: "darwin",
+      helperPath,
+      settingsPath,
+      socketPath,
+      broadcast: vi.fn(),
+      runHelper: async () => JSON.stringify({ status: "enabled" }),
+    });
+    try {
+      await controller.initialize();
+      expect(controller.getStatus().phase).toBe("disarmed");
+
+      controller.setRemoteActive(true);
+      await vi.waitFor(() => expect(controller.getStatus().phase).toBe("armed"));
+      const armsBefore = daemon.commands.filter((command) => command === "ARM").length;
+
+      daemon.dropClients();
+
+      await vi.waitFor(() => expect(controller.getStatus().phase).toBe("connecting"));
+      await vi.waitFor(() => expect(controller.getStatus().phase).toBe("armed"), {
+        timeout: 5_000,
+      });
+      expect(daemon.commands.filter((command) => command === "ARM").length).toBe(armsBefore + 1);
+    } finally {
+      await controller.dispose();
+      await daemon.close();
+    }
+  },
+  10_000,
+);
 
 test("helperFailureOutput preserves native JSON emitted with a non-zero exit", () => {
   const output = JSON.stringify({ status: "not-registered", error: "Administrator denied." });

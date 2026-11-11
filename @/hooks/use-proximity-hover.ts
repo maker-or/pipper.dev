@@ -35,6 +35,24 @@ interface UseProximityHoverReturn {
   measureItems: () => void;
 }
 
+/**
+ * An item's layout offset within `container`. A wrapper between them that is
+ * positioned or transformed (a sortable or motion.div with any `transform`,
+ * even `scale(1)`) becomes the item's offsetParent, so its own offset reads
+ * as ~0; walk up and add each intermediate parent's offset and border.
+ */
+function offsetWithin(element: HTMLElement, container: HTMLElement) {
+  let left = element.offsetLeft;
+  let top = element.offsetTop;
+  let parent = element.offsetParent as HTMLElement | null;
+  while (parent && parent !== container && container.contains(parent)) {
+    left += parent.offsetLeft + parent.clientLeft;
+    top += parent.offsetTop + parent.clientTop;
+    parent = parent.offsetParent as HTMLElement | null;
+  }
+  return { left, top };
+}
+
 export function useProximityHover<T extends HTMLElement>(
   containerRef: RefObject<T | null>,
   options: UseProximityHoverOptions = {},
@@ -56,12 +74,13 @@ export function useProximityHover<T extends HTMLElement>(
       // Use offset* instead of getBoundingClientRect so measurements are
       // unaffected by CSS transforms (e.g. scaleY animation on the parent
       // motion.div). offsetTop/offsetLeft are layout values relative to the
-      // offsetParent (the scroll container), matching the coordinate space
-      // used by `position: absolute` children.
+      // offsetParent, matching the coordinate space used by `position:
+      // absolute` children of the container.
+      const { left, top } = offsetWithin(element, container);
       rects[index] = {
-        top: element.offsetTop,
+        top,
         height: element.offsetHeight,
-        left: element.offsetLeft,
+        left,
         width: element.offsetWidth,
       };
     });

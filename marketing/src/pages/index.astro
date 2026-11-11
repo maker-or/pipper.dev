@@ -14,7 +14,9 @@ const logoFiles = import.meta.glob<{ default: { src: string } }>(
 const logoFor = (id: string) =>
     logoFiles[`../../../src/assets/connector-logos/${id}-light.svg`] ??
     logoFiles[`../../../src/assets/connector-logos/${id}.svg`];
+const STALE_LOGOS = new Set(["canva", "huggingface"]);
 const connectorLogos = CONNECTOR_CATALOG.flatMap((entry) => {
+    if (STALE_LOGOS.has(entry.id)) return [];
     const file = logoFor(entry.id);
     return file ? [{ name: entry.name, src: file.default.src }] : [];
 });
@@ -336,13 +338,13 @@ const connectorLogos = CONNECTOR_CATALOG.flatMap((entry) => {
 
     .hero-demo {
         width: 100%;
-        max-width: 96rem;
+        max-width: 112rem;
         margin: 0.5rem auto 0;
     }
     .hero-demo > section {
         box-sizing: border-box;
-        height: min(140svh, 78rem) !important;
-        min-height: 44rem;
+        height: auto !important;
+        min-height: 0;
         width: 100% !important;
         padding: 0 !important;
         background: transparent !important;

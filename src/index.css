@@ -31,6 +31,8 @@
 
   --primary: oklch(0.205 0 0);
   --primary-foreground: oklch(0.985 0 0);
+  /* Links in prose: primary is the text colour, so links need their own ink. */
+  --link: oklch(0.52 0.17 255);
 
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
@@ -179,6 +181,7 @@
 
   --primary: oklch(0.922 0 0);
   --primary-foreground: oklch(0.205 0 0);
+  --link: oklch(0.74 0.12 255);
 
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
@@ -324,6 +327,7 @@
   --color-muted-foreground: var(--muted-foreground);
 
   --color-primary: var(--primary);
+  --color-link: var(--link);
   --color-primary-foreground: var(--primary-foreground);
 
   --color-accent: var(--accent);
@@ -542,9 +546,9 @@
   overflow-wrap: anywhere;
 }
 
+/* Lines stay inline: Shiki already puts a newline between them, which
+ * `pre-wrap` renders, so block lines would show a blank line after each. */
 .markdown-shiki .shiki .line {
-  display: block;
-  min-height: 1.25rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }

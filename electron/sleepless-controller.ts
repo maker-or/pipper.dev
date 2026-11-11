@@ -214,7 +214,8 @@ export class SleeplessController {
       if (this.disposed) return;
       this.stopHeartbeat();
       this.armedAt = null;
-      if (this.preferences.enabled && this.runningTaskCount > 0) {
+      // Same demand as reconcile(): remote standby keeps it armed with no tasks.
+      if (this.preferences.enabled && this.hasDemand()) {
         this.phase = "connecting";
         this.error = socketError?.message ?? "Sleepless daemon disconnected.";
         this.scheduleReconnect();
@@ -416,12 +417,8 @@ export class SleeplessController {
 
   private async reconcile(): Promise<void> {
     if (this.disposed) return;
-    if (
-      !this.preferences.enabled ||
-      this.serviceStatus !== "enabled" ||
-      (this.runningTaskCount === 0 && !this.remoteActive)
-    ) {
-      await this.disarm(this.runningTaskCount === 0 && !this.remoteActive);
+    if (!this.preferences.enabled || this.serviceStatus !== "enabled" || !this.hasDemand()) {
+      await this.disarm(!this.hasDemand());
       this.phase = this.idlePhase();
       this.publish();
       return;
@@ -520,6 +517,11 @@ export class SleeplessController {
 
   private publish(): void {
     this.options.broadcast(this.getStatus());
+  }
+
+  /** Something wants the Mac awake: a running task, or a paired phone on standby. */
+  private hasDemand(): boolean {
+    return this.runningTaskCount > 0 || this.remoteActive;
   }
 
   private idlePhase(): SleeplessStatus["phase"] {

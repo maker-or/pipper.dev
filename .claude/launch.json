@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "intro-playground",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["-m", "http.server", "4791", "--directory", "native/launch-intro/playground"],
+      "port": 4791
+    },
+    {
+      "name": "specs",
+      "runtimeExecutable": "bunx",
+      "runtimeArgs": ["--bun", "vite", "--port", "5199", "--strictPort"],
+      "port": 5199,
+      "url": "http://localhost:5199"
+    }
+  ]
+}

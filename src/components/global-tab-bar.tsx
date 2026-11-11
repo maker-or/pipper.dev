@@ -21,6 +21,8 @@ import { Dropdown, DropdownSeparator } from "@/components/ui/dropdown";
 import { MenuItem } from "@/components/ui/menu-item";
 import { ThreadTabMenu } from "@/components/thread-tab-menu";
 import { Tabs, TabsList, TabItem } from "@/components/ui/tabs";
+import { LayoutTab, SortableTab } from "@/components/sortable-tabs";
+import { dragItemSelector, useDragReorder, type DragGroupMeasure } from "@/components/drag-reorder";
 import { threadsNeedingUser } from "@/lib/agent-task-tree";
 import { ProjectMark } from "@/components/project-shape";
 import { PixelGridLoader } from "@/components/ui/pixel-grid-loader";
@@ -60,7 +62,6 @@ import {
   tabIndexFromShortcutEvent,
   tabValueAfterSwipe,
   tabValueAtShortcutIndex,
-  tabValuesInBarOrder,
 } from "@/lib/tab-shortcuts";
 
 const TERMINAL_TAB_PREFIX = "terminal:";
@@ -150,9 +151,13 @@ export function GlobalTabBar() {
   const terminalTabsRevision = useTerminalStore((state) => state.tabsRevision);
   const terminalTabs = useMemo(
     () =>
-      useTerminalStore
-        .getState()
-        .sessions.map(({ id, title, status, cwd }) => ({ id, title, status, cwd })),
+      useTerminalStore.getState().sessions.map(({ id, title, status, cwd, anchorThreadId }) => ({
+        id,
+        title,
+        status,
+        cwd,
+        anchorThreadId: anchorThreadId ?? null,
+      })),
     [terminalTabsRevision],
   );
   const activeTerminalId = useWorkspaceViewStore((state) => state.activeTerminalId);
@@ -475,7 +480,12 @@ export function GlobalTabBar() {
     if (workspace) {
       terminals.setWorkspace(makeWorkspaceKey(workspace.projectId, workspace.cwd), workspace.cwd);
     }
-    const id = useTerminalStore.getState().createSession(workspace?.cwd);
+    // Anchor to the thread on screen so the terminal tab renders left of it
+    // (screen left) instead of in the terminal section at the far end.
+    const anchorThreadId = useWorkspaceViewStore.getState().draft
+      ? null
+      : (useAgentStore.getState().snapshot?.threadId ?? null);
+    const id = useTerminalStore.getState().createSession(workspace?.cwd, anchorThreadId);
     showTerminal(id);
   };
 
@@ -545,18 +555,110 @@ export function GlobalTabBar() {
             ? "__draft__"
             : selectedThreadId;
 
-  const orderedTabValues = useMemo(
-    () => [
-      ...tabValuesInBarOrder(
-        visibleOpenThreads.map((thread) => thread.id),
-        terminalTabs.map((session) => session.id),
-        TERMINAL_TAB_PREFIX,
-      ),
-      ...(previewPath ? [PREVIEW_TAB_VALUE] : []),
-      ...(showDiffTab ? [DIFF_TAB_VALUE] : []),
-    ],
-    [visibleOpenThreads, terminalTabs, previewPath, showDiffTab],
+  // Bar order: anchored terminals sit left of their thread; unanchored ones
+  // (or anchors not visible here) fall back to the end of the thread row.
+  const visibleThreadIds = useMemo(
+    () => new Set(visibleOpenThreads.map((thread) => thread.id)),
+    [visibleOpenThreads],
   );
+  const terminalsByAnchor = useMemo(() => {
+    const map = new Map<string, typeof terminalTabs>();
+    for (const session of terminalTabs) {
+      if (!session.anchorThreadId || !visibleThreadIds.has(session.anchorThreadId)) continue;
+      const list = map.get(session.anchorThreadId) ?? [];
+      list.push(session);
+      map.set(session.anchorThreadId, list);
+    }
+    return map;
+  }, [terminalTabs, visibleThreadIds]);
+  const unanchoredTerminals = useMemo(
+    () =>
+      terminalTabs.filter(
+        (session) => !session.anchorThreadId || !visibleThreadIds.has(session.anchorThreadId),
+      ),
+    [terminalTabs, visibleThreadIds],
+  );
+
+  const orderedTabValues = useMemo(() => {
+    const values: string[] = [];
+    for (const thread of visibleOpenThreads) {
+      for (const session of terminalsByAnchor.get(thread.id) ?? []) {
+        values.push(`${TERMINAL_TAB_PREFIX}${session.id}`);
+      }
+      values.push(thread.id);
+    }
+    for (const session of unanchoredTerminals) {
+      values.push(`${TERMINAL_TAB_PREFIX}${session.id}`);
+    }
+    if (previewPath) values.push(PREVIEW_TAB_VALUE);
+    if (showDiffTab) values.push(DIFF_TAB_VALUE);
+    return values;
+  }, [visibleOpenThreads, terminalsByAnchor, unanchoredTerminals, previewPath, showDiffTab]);
+
+  const tabsListRef = useRef<HTMLDivElement>(null);
+  const threadOrder = useMemo(
+    () => visibleOpenThreads.map((thread) => thread.id),
+    [visibleOpenThreads],
+  );
+  // A terminal tied to a thread sits before it and moves with it as one.
+  const measureThreadGroup: DragGroupMeasure = (list, threadId, gap) => {
+    const lead = (terminalsByAnchor.get(threadId) ?? []).reduce((sum, session) => {
+      const terminal = list.querySelector<HTMLElement>(
+        `[data-pipper-id="anchored-${TERMINAL_TAB_PREFIX}${session.id}"]`,
+      );
+      return sum + (terminal?.offsetWidth ?? 0) + gap;
+    }, 0);
+    const tab = list.querySelector<HTMLElement>(dragItemSelector(threadId));
+    return { lead, size: lead + (tab?.offsetWidth ?? 0) };
+  };
+  const reorder = useDragReorder({
+    axis: "x",
+    ids: threadOrder,
+    listRef: tabsListRef,
+    measure: measureThreadGroup,
+    onCommit: async (order) => {
+      try {
+        const allIds = (openTabsState?.openThreadIds ?? []).filter((id) =>
+          threadOrder.includes(id),
+        );
+        const result = await window.omni.tabs.reorder([
+          ...order,
+          ...allIds.filter((id) => !order.includes(id)),
+        ]);
+        queryClient.setQueryData(OPEN_TABS_QUERY_KEY, result);
+      } catch (err) {
+        toast({
+          icon: <WarningIcon className="size-5 text-red-500" />,
+          title: "Could not reorder tabs",
+          description: err instanceof Error ? err.message : "The tab order was not saved.",
+        });
+      }
+    },
+  });
+  const displayedThreads = useMemo(() => {
+    const byId = new Map(visibleOpenThreads.map((thread) => [thread.id, thread]));
+    return reorder.order.flatMap((id) => byId.get(id) ?? []);
+  }, [reorder.order, visibleOpenThreads]);
+  // The active tab's highlight steps aside while that tab is off its slot:
+  // the tab carries its own raised surface until it lands. A terminal
+  // anchored to a thread moves with that thread, so it is off its slot
+  // whenever its anchor is.
+  const selectedDragId = useMemo(() => {
+    if (!selectedTabValue.startsWith(TERMINAL_TAB_PREFIX)) return selectedTabValue;
+    const terminalId = selectedTabValue.slice(TERMINAL_TAB_PREFIX.length);
+    const anchor = terminalTabs.find((session) => session.id === terminalId)?.anchorThreadId;
+    return anchor && visibleThreadIds.has(anchor) ? anchor : selectedTabValue;
+  }, [selectedTabValue, terminalTabs, visibleThreadIds]);
+  const quietTabValue =
+    reorder.heldId === selectedDragId || reorder.liftedIds.includes(selectedDragId)
+      ? selectedTabValue
+      : reorder.heldId;
+
+  const threadTabIcon = (thread: Thread) => {
+    if (runningThreadIds.includes(thread.id)) return TabWorkingIcon;
+    const project = projectsList.find((item) => item.id === thread.project_id);
+    return project ? getProjectIconComponent(project) : undefined;
+  };
 
   const handleTabChangeRef = useRef<(value: string) => void>(() => {});
   const handleNewThreadRef = useRef(handleNewThread);
@@ -721,6 +823,33 @@ export function GlobalTabBar() {
     };
   }, [orderedTabValues]);
 
+  const renderTerminalTab = (session: (typeof terminalTabs)[number], index: number) => (
+    <TabItem
+      key={session.id}
+      index={index}
+      value={`${TERMINAL_TAB_PREFIX}${session.id}`}
+      label={session.title}
+      scrollLabelOnHover
+      icon={
+        session.status === "exited" || session.status === "error" ? WarningIcon : TerminalWindowIcon
+      }
+      onClose={() => handleCloseTerminal(session.id)}
+      title={
+        session.status === "exited"
+          ? "Terminal process exited"
+          : session.status === "error"
+            ? "Terminal failed to start"
+            : undefined
+      }
+      className={
+        session.status === "exited" || session.status === "error"
+          ? "[&_svg]:!text-red-500"
+          : undefined
+      }
+      data-pipper-id={`terminal-tab-${session.id}`}
+    />
+  );
+
   return (
     <Tabs className="w-full min-w-0" value={selectedTabValue} onValueChange={handleTabChange}>
       {threadMenu && (
@@ -738,73 +867,65 @@ export function GlobalTabBar() {
         data-pipper-id="global-tab-bar"
       >
         <TabsList
+          ref={tabsListRef}
+          heldValue={quietTabValue}
           data-pipper-id="global-tabs"
-          className="min-w-0 max-w-full flex-[0_1_auto] gap-1 overflow-x-auto p-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1 [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-thumb]:bg-muted-foreground/40"
+          className="min-w-0 max-w-full flex-[0_1_auto] gap-1 overflow-x-auto p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
-          {visibleOpenThreads.map((thread, idx) => {
+          {displayedThreads.flatMap((thread, idx) => {
             const project = projectsList.find((item) => item.id === thread.project_id);
-            const isThreadWorking = runningThreadIds.includes(thread.id);
-            const Icon = isThreadWorking
-              ? TabWorkingIcon
-              : project
-                ? getProjectIconComponent(project)
-                : undefined;
+            const Icon = threadTabIcon(thread);
             const isEditing = editingThreadId === thread.id;
             const tabTitle = thread.title ?? "New thread";
-            return (
-              <TabItem
+            const anchored = terminalsByAnchor.get(thread.id) ?? [];
+            return [
+              ...anchored.map((session, i) => (
+                <LayoutTab
+                  key={session.id}
+                  reorder={reorder}
+                  followId={thread.id}
+                  value={`${TERMINAL_TAB_PREFIX}${session.id}`}
+                  data-pipper-id={`anchored-${TERMINAL_TAB_PREFIX}${session.id}`}
+                >
+                  {renderTerminalTab(session, idx + i)}
+                </LayoutTab>
+              )),
+              <SortableTab
                 key={thread.id}
-                index={idx}
+                reorder={reorder}
+                id={thread.id}
                 value={thread.id}
-                label={tabTitle}
-                scrollLabelOnHover
-                icon={Icon}
-                attention={threadsWaitingOnUser.has(thread.id)}
-                title={threadsWaitingOnUser.has(thread.id) ? "A subthread needs you" : undefined}
-                onClose={() => handleCloseThreadTab(thread.id)}
-                editing={isEditing}
-                editValue={isEditing ? editingThreadTitle : tabTitle}
-                onEditValueChange={setEditingThreadTitle}
-                onEditCommit={commitRenameThread}
-                onEditCancel={cancelRenameThread}
-                onDoubleClick={() => startRenameThread(thread.id, tabTitle)}
-                onContextMenu={(event) => {
-                  if (!project) return;
-                  event.preventDefault();
-                  setThreadMenu({ thread, position: { x: event.clientX, y: event.clientY } });
-                }}
-                data-pipper-id={`thread-tab-${thread.id}`}
-              />
-            );
+                disabled={isEditing}
+                data-pipper-id={`sortable-thread-tab-${thread.id}`}
+              >
+                <TabItem
+                  index={idx}
+                  value={thread.id}
+                  label={tabTitle}
+                  scrollLabelOnHover
+                  icon={Icon}
+                  attention={threadsWaitingOnUser.has(thread.id)}
+                  title={threadsWaitingOnUser.has(thread.id) ? "A subthread needs you" : undefined}
+                  onClose={() => handleCloseThreadTab(thread.id)}
+                  editing={isEditing}
+                  editValue={isEditing ? editingThreadTitle : tabTitle}
+                  onEditValueChange={setEditingThreadTitle}
+                  onEditCommit={commitRenameThread}
+                  onEditCancel={cancelRenameThread}
+                  onDoubleClick={() => startRenameThread(thread.id, tabTitle)}
+                  onContextMenu={(event) => {
+                    if (!project) return;
+                    event.preventDefault();
+                    setThreadMenu({ thread, position: { x: event.clientX, y: event.clientY } });
+                  }}
+                  data-pipper-id={`thread-tab-${thread.id}`}
+                />
+              </SortableTab>,
+            ];
           })}
-          {terminalTabs.map((session, idx) => (
-            <TabItem
-              key={session.id}
-              index={visibleOpenThreads.length + idx}
-              value={`${TERMINAL_TAB_PREFIX}${session.id}`}
-              label={session.title}
-              scrollLabelOnHover
-              icon={
-                session.status === "exited" || session.status === "error"
-                  ? WarningIcon
-                  : TerminalWindowIcon
-              }
-              onClose={() => handleCloseTerminal(session.id)}
-              title={
-                session.status === "exited"
-                  ? "Terminal process exited"
-                  : session.status === "error"
-                    ? "Terminal failed to start"
-                    : undefined
-              }
-              className={
-                session.status === "exited" || session.status === "error"
-                  ? "[&_svg]:!text-red-500"
-                  : undefined
-              }
-              data-pipper-id={`terminal-tab-${session.id}`}
-            />
-          ))}
+          {unanchoredTerminals.map((session, idx) =>
+            renderTerminalTab(session, visibleOpenThreads.length + idx),
+          )}
           {previewPath && (
             <TabItem
               key={PREVIEW_TAB_VALUE}
