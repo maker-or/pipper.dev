@@ -300,10 +300,12 @@ export function HybridShell() {
                   inert={!sessionPanelOpen}
                   className={cn(
                     "shrink-0 overflow-hidden border-l border-border transition-[width] duration-160 ease-out",
-                    sessionPanelOpen ? "w-[22rem]" : "w-0 border-l-0",
+                    sessionPanelOpen ? "w-[26rem]" : "w-0 border-l-0",
                   )}
                 >
-                  <div className="h-full w-[22rem]">
+                  {/* The panel paints nothing of its own; it sits on the inset
+                      card (INSET_SURFACE), which the file tree reads to fill. */}
+                  <div className="h-full w-[26rem]">
                     {sessionPanelOpen ? <SessionPanel session={session} /> : null}
                   </div>
                 </aside>

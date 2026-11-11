@@ -36,3 +36,21 @@ describe("MarkdownRenderer list formatting", () => {
     expect(html).toContain("Second paragraph");
   });
 });
+
+describe("MarkdownRenderer links", () => {
+  test("renders web and file links in the link colour, without a new-window target", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownRenderer>
+        {"See [docs](https://example.com) and [app.ts](src/app.ts:4)."}
+      </MarkdownRenderer>,
+    );
+    expect(html).toContain('href="https://example.com"');
+    expect(html).toContain('href="src/app.ts:4"');
+    expect(html).toContain("text-link");
+    expect(html).not.toContain('target="_blank"');
+    // File links read as code.
+    expect(html).toMatch(
+      /class="[^"]*font-mono[^"]*"[^>]*href="src\/app\.ts:4"|href="src\/app\.ts:4"[^>]*class="[^"]*font-mono/,
+    );
+  });
+});

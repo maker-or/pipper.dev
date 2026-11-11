@@ -2632,7 +2632,8 @@ function registerIpc(): void {
   );
 
   // Links surfaced from the workspace's own PR (CI runs, preview deploys,
-  // review comments) live on arbitrary hosts. Scheme-gated only: never file:,
+  // review comments) and from agent replies (often a local dev server on
+  // http://localhost) live on arbitrary hosts. Scheme-gated only: never file:,
   // javascript:, or app-internal URLs.
   ipcMain.handle("shell:openHttps", async (_event, url: string) => {
     let parsed: URL;
@@ -2641,7 +2642,9 @@ function registerIpc(): void {
     } catch {
       throw new Error("Invalid URL.");
     }
-    if (parsed.protocol !== "https:") throw new Error("Only https links can be opened.");
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      throw new Error("Only web links can be opened.");
+    }
     await shell.openExternal(parsed.toString());
   });
 

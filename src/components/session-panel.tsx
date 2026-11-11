@@ -531,11 +531,7 @@ export function SessionPanel({ session }: { session: SessionWorkspace }) {
             {git && !onBase ? (
               <Section>
                 {git.pr ? (
-                  <WorkspacePrDetail
-                    status={git}
-                    items={actions.prStatusItems}
-                    onAddComments={git.pr.state === "open" ? actions.addCommentsToChat : undefined}
-                  />
+                  <WorkspacePrDetail status={git} items={actions.prStatusItems} />
                 ) : (
                   <p className="text-[12px] text-muted-foreground">
                     {git.openPrNumber

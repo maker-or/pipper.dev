@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ClipFade } from "@/components/clip-fade";
-import { ArrowUpRight, CaretDown, ChatCircle } from "@phosphor-icons/react";
+import { CaretDown } from "@phosphor-icons/react";
 import type { WorkspacePrComment } from "../../contracts/git.ts";
 import { MarkdownRenderer } from "@/components/ui/markdown-renderer";
 import {
@@ -10,23 +9,17 @@ import {
   AccordionTrigger,
 } from "@/components/ui/accordion";
 import { Elevated } from "@/lib/elevated";
+import { fontWeights } from "@/lib/font-weight";
 import {
-  commentSeverity,
-  commentTitle,
-  commentToMarkdown,
-  type CommentSeverity,
+  type CommentFinding,
   groupCommentsByAuthor,
   highestSeverity,
-  isInlineComment,
-  sortComments,
+  orderFindings,
+  SEVERITY_RANK,
 } from "@/lib/pr-comment-text";
-import { useContentOverflow } from "@/lib/use-content-overflow";
 import { cn } from "@/lib/utils";
 
 type SortOrder = "latest" | "oldest";
-
-const BODY_COLLAPSED_PX = 160;
-const SEVERITY_RANK: Record<CommentSeverity, number> = { high: 3, medium: 2, low: 1 };
 
 function Avatar({
   url,
@@ -57,17 +50,6 @@ function Avatar({
     >
       {name.slice(0, 1)}
     </span>
-  );
-}
-
-function SeverityDot({ level }: { level: CommentSeverity }) {
-  const tone = level === "high" ? "bg-red-500" : level === "medium" ? "bg-amber-500" : "bg-sky-500";
-  return (
-    <span
-      title={`${level} severity`}
-      className={cn("size-1.5 shrink-0 rounded-full", tone)}
-      aria-label={`${level} severity`}
-    />
   );
 }
 
@@ -154,96 +136,90 @@ function SortMenu({ value, onChange }: { value: SortOrder; onChange: (v: SortOrd
   );
 }
 
-function CommentCard({
-  comment,
-  onAdd,
-}: {
-  comment: WorkspacePrComment;
-  onAdd?: (comment: WorkspacePrComment) => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const markdown = useMemo(() => commentToMarkdown(comment.body), [comment.body]);
-  const title = useMemo(() => commentTitle(comment), [comment]);
-  const severity = useMemo(() => commentSeverity(comment), [comment]);
-  const inline = isInlineComment(comment);
-  const bodyRef = useRef<HTMLDivElement | null>(null);
-  // Rendered height, not character count, decides whether anything is clipped.
-  const clipped = useContentOverflow(bodyRef, [markdown, expanded]);
-  return (
-    <article className="flex flex-col gap-1.5 py-3">
-      <header className="flex items-center gap-2">
-        {severity ? (
-          <SeverityDot level={severity} />
-        ) : (
-          <span
-            className={cn(
-              "size-1.5 shrink-0 rounded-full",
-              inline ? "bg-amber-500/70" : "bg-muted-foreground/30",
-            )}
-            title={inline ? "Inline review comment" : "Comment"}
-          />
-        )}
-        <h4
-          className={cn(
-            "min-w-0 flex-1 truncate text-[13px] font-semibold text-foreground",
-            inline && "font-mono",
-          )}
-          title={title}
-        >
-          {title}
-        </h4>
-        {onAdd ? (
-          <button
-            type="button"
-            onClick={() => onAdd(comment)}
-            title="Add this comment to chat"
-            className="shrink-0 text-muted-foreground/70 transition-colors hover:text-foreground"
-            aria-label="Add to chat"
-          >
-            <ChatCircle size={14} />
-          </button>
-        ) : null}
-        {comment.url ? (
-          <button
-            type="button"
-            onClick={() => void window.omni.shell.openHttps(comment.url!).catch(() => {})}
-            className="shrink-0 text-muted-foreground/70 transition-colors hover:text-foreground"
-            aria-label="Open comment on GitHub"
-          >
-            <ArrowUpRight size={14} />
-          </button>
-        ) : null}
-      </header>
-      <div
-        ref={bodyRef}
-        className="relative overflow-hidden"
-        style={expanded ? undefined : { maxHeight: BODY_COLLAPSED_PX }}
-      >
-        <MarkdownRenderer className="text-[13px] leading-6 text-muted-foreground">
-          {markdown}
-        </MarkdownRenderer>
-        {clipped && !expanded ? <ClipFade /> : null}
-      </div>
-      {clipped && !expanded ? (
-        <button
-          type="button"
-          onClick={() => setExpanded(true)}
-          className="self-start text-[11px] text-muted-foreground/70 transition-colors hover:text-foreground"
-        >
-          Show more
-        </button>
-      ) : null}
-    </article>
+/** Title text with its inline code set as code, the way GitHub shows it. */
+function InlineTitle({ text }: { text: string }) {
+  return text.split(/(`[^`]+`)/).map((part, index) =>
+    part.length > 2 && part.startsWith("`") && part.endsWith("`") ? (
+      <code key={index} className="rounded bg-hover px-1 font-mono text-[12px]">
+        {part.slice(1, -1)}
+      </code>
+    ) : (
+      part
+    ),
   );
 }
 
-export function WorkspacePrComments({
-  comments,
-  onAddComments,
+/** `launch.json:15` first, its folder after, so the file reads at a glance. */
+function CommentLocation({ path, line }: { path: string; line: number | null }) {
+  const slash = path.lastIndexOf("/");
+  const file = path.slice(slash + 1);
+  const folder = slash > 0 ? path.slice(0, slash) : "";
+  return (
+    <span
+      className="flex min-w-0 items-baseline gap-1.5 font-mono text-[11px] text-muted-foreground"
+      // The trigger bolds its label when open; the location stays regular.
+      style={{ fontVariationSettings: fontWeights.normal }}
+      title={`${path}${line ? `:${line}` : ""}`}
+    >
+      <span className="shrink-0">
+        {file}
+        {line ? `:${line}` : ""}
+      </span>
+      {folder ? <span className="min-w-0 truncate text-muted-foreground/60">{folder}</span> : null}
+    </span>
+  );
+}
+
+function CommentItem({
+  comment,
+  finding,
+  index,
 }: {
-  comments: WorkspacePrComment[];
-  onAddComments?: (comments: WorkspacePrComment[]) => void;
+  comment: WorkspacePrComment;
+  finding: CommentFinding;
+  index: number;
 }) {
+  return (
+    <AccordionItem value={comment.id} index={index}>
+      <AccordionTrigger className="items-start" hideChevron>
+        <span className="flex min-w-0 flex-col gap-1">
+          {/* A fixed weight and ink: the trigger's open/hover restyle would
+              make the title jump; addressed findings recede instead. */}
+          <span
+            className={cn(
+              "line-clamp-2 text-[14px] leading-5",
+              finding.addressed ? "text-muted-foreground/70" : "text-foreground",
+            )}
+            style={{ fontVariationSettings: fontWeights.medium }}
+          >
+            <InlineTitle text={finding.title} />
+          </span>
+          {comment.path ? <CommentLocation path={comment.path} line={comment.line} /> : null}
+        </span>
+      </AccordionTrigger>
+      <AccordionContent>
+        <div className="flex flex-col gap-2">
+          {finding.body ? (
+            <MarkdownRenderer className="text-[13px] leading-6 text-muted-foreground">
+              {finding.body}
+            </MarkdownRenderer>
+          ) : null}
+          {comment.url ? (
+            <button
+              type="button"
+              onClick={() => void window.omni.shell.openHttps(comment.url!).catch(() => {})}
+              className="self-start text-[11px] text-muted-foreground/70 transition-colors hover:text-foreground"
+            >
+              View on GitHub
+            </button>
+          ) : null}
+        </div>
+      </AccordionContent>
+    </AccordionItem>
+  );
+}
+
+export function WorkspacePrComments({ comments }: { comments: WorkspacePrComment[] }) {
   const groups = useMemo(() => groupCommentsByAuthor(comments), [comments]);
   const [order, setOrder] = useState<SortOrder>("latest");
 
@@ -271,16 +247,12 @@ export function WorkspacePrComments({
 
       <Accordion
         type="multiple"
+        variant="plain"
         className="w-full"
         defaultValue={orderedGroups[0] ? [orderedGroups[0].author] : []}
       >
         {orderedGroups.map((group, index) => {
-          const severity = highestSeverity(group.comments);
-          const inlineCount = group.comments.filter(isInlineComment).length;
-          // Findings (inline, with a file) first, then the bot's general notes.
-          const ordered = sortComments(group.comments, order).sort(
-            (a, b) => Number(isInlineComment(b)) - Number(isInlineComment(a)),
-          );
+          const findings = orderFindings(group.comments, order);
           return (
             <AccordionItem
               key={group.author}
@@ -297,24 +269,26 @@ export function WorkspacePrComments({
                   <span className="shrink-0 tabular-nums text-muted-foreground/70">
                     {group.comments.length}
                   </span>
-                  {severity ? <SeverityDot level={severity} /> : null}
-                  {inlineCount > 0 ? (
-                    <span className="shrink-0 text-[10px] text-muted-foreground/60">
-                      {inlineCount} inline
-                    </span>
-                  ) : null}
                 </span>
               </AccordionTrigger>
-              <AccordionContent>
-                <div className="flex flex-col divide-y divide-border/50">
-                  {ordered.map((comment) => (
-                    <CommentCard
+              <AccordionContent className="-mt-1">
+                {/* One row per finding; open one to read it. */}
+                {/* The first finding starts open, so the rows read as foldable. */}
+                <Accordion
+                  type="multiple"
+                  variant="plain"
+                  className="w-full gap-0"
+                  defaultValue={findings[0] ? [findings[0].comment.id] : []}
+                >
+                  {findings.map(({ comment, finding }, commentIndex) => (
+                    <CommentItem
                       key={comment.id}
                       comment={comment}
-                      onAdd={onAddComments ? (item) => onAddComments([item]) : undefined}
+                      finding={finding}
+                      index={commentIndex}
                     />
                   ))}
-                </div>
+                </Accordion>
               </AccordionContent>
             </AccordionItem>
           );

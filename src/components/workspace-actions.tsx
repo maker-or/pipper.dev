@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { CheckCircle, WarningCircle } from "@phosphor-icons/react";
 import type { Project } from "../../contracts/projects.ts";
-import type { WorkspaceGitStatus, WorkspacePrComment } from "../../contracts/git.ts";
+import type { WorkspaceGitStatus } from "../../contracts/git.ts";
 import { toast } from "@/components/ui/toast";
 import {
   buildCommitPrompt,
   buildGetLatestPrompt,
-  buildPrCommentsPrompt,
   sendWorkspaceAgentPrompt,
 } from "@/lib/workspace-agent-prompt";
 import type { PrStatusItem } from "@/components/workspace-pr-detail";
@@ -92,7 +91,6 @@ export interface WorkspaceActions {
   /** Push if needed, then open the PR. Resolves `true` when it was created. */
   createPr: (input: { title: string }) => Promise<boolean>;
   delegateGetLatest: () => void;
-  addCommentsToChat: (comments: WorkspacePrComment[]) => void;
   /** What blocks the PR, each with the button that clears it. */
   prStatusItems: PrStatusItem[];
   /**
@@ -337,31 +335,6 @@ export function useWorkspaceActions({
     void runAction("ready", () =>
       window.omni.git.markPrReady({ projectId: project.id, path: worktreePath }),
     );
-  };
-
-  const addCommentsToChat = (comments: WorkspacePrComment[]) => {
-    if (!project || !worktreePath || !status?.pr || comments.length === 0) return;
-    void sendWorkspaceAgentPrompt({
-      project,
-      worktreePath,
-      title: workspaceName ? `${workspaceName}: review comments` : "Review comments",
-      message: buildPrCommentsPrompt({ prNumber: status.pr.number, comments }),
-    })
-      .then(() =>
-        notify(
-          "ok",
-          comments.length === 1
-            ? "Comment added to chat"
-            : `${comments.length} comments added to chat`,
-        ),
-      )
-      .catch((err) =>
-        notify(
-          "error",
-          "Could not add to chat",
-          err instanceof Error ? err.message : "Could not reach the agent.",
-        ),
-      );
   };
 
   /** Git-status checklist under the PR: each blocker with the button that clears it. */
@@ -612,7 +585,6 @@ export function useWorkspaceActions({
     runAction,
     createPr,
     delegateGetLatest,
-    addCommentsToChat,
     prStatusItems: ready ? buildPrStatusItems(ready) : [],
     quickAction: ready
       ? tone === "merged"

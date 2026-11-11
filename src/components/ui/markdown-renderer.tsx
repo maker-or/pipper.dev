@@ -12,6 +12,8 @@ import {
 } from "react";
 import ReactMarkdown, { type Components, type ExtraProps } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { openMarkdownLink } from "@/lib/file-preview-actions";
+import { classifyMarkdownHref } from "@/lib/markdown-links";
 import rehypeSanitize from "rehype-sanitize";
 import {
   Table,
@@ -199,6 +201,40 @@ function MarkdownHeading({
   );
 }
 
+/**
+ * Links are followed in-app, not by a new window: main only lets a fixed
+ * allowlist of hosts open that way, so agent links did nothing. Web pages
+ * open in the browser, file paths in the workspace's preview.
+ */
+function MarkdownLink({
+  className,
+  href,
+  onClick,
+  ...props
+}: WithNode<ComponentPropsWithoutRef<"a">>) {
+  const rest = omitNode(props);
+  const target = classifyMarkdownHref(href);
+  return (
+    <a
+      className={cn(
+        "cursor-pointer text-link underline decoration-link/40 underline-offset-2 break-words [overflow-wrap:anywhere] hover:decoration-link",
+        target.kind === "file" && "font-mono text-[0.9em]",
+        className,
+      )}
+      href={href}
+      rel="noreferrer"
+      title={target.kind === "web" ? target.url : target.kind === "file" ? target.path : undefined}
+      onClick={(event) => {
+        onClick?.(event);
+        if (event.defaultPrevented) return;
+        event.preventDefault();
+        openMarkdownLink(href);
+      }}
+      {...rest}
+    />
+  );
+}
+
 const defaultMarkdownComponents = {
   table: MarkdownTable,
   thead: MarkdownTableHeader,
@@ -303,20 +339,7 @@ const defaultMarkdownComponents = {
   ),
   code: MarkdownCode,
   pre: ({ children }: WithNode<ComponentPropsWithoutRef<"pre">>) => <>{children}</>,
-  a: ({ className, ...props }: WithNode<ComponentPropsWithoutRef<"a">>) => {
-    const rest = omitNode(props);
-    return (
-      <a
-        className={cn(
-          "font-medium text-primary underline break-words [overflow-wrap:anywhere]",
-          className,
-        )}
-        rel="noreferrer"
-        target="_blank"
-        {...rest}
-      />
-    );
-  },
+  a: MarkdownLink,
 } satisfies Components;
 
 function MarkdownRendererBase({
