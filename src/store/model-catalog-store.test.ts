@@ -41,6 +41,49 @@ describe("model-catalog-store", () => {
     ]);
   });
 
+  test("an account with no known models gets its catalog fetched once, on demand", async () => {
+    const getModelCatalogs = vi.fn(async () => ({
+      "codex-acp:pujitha": [{ modelId: "gpt-5", name: "GPT-5" }],
+    }));
+    vi.stubGlobal("window", { omni: { agent: { getModelCatalogs } } });
+    const { useModelCatalogStore } = await import("./model-catalog-store");
+    useModelCatalogStore.setState({
+      byAgentId: { "codex-acp": [{ agentId: "codex-acp", modelId: "o3", name: "o3" }] },
+    });
+
+    // Opening the picker twice while the first fetch runs starts one fetch.
+    const first = useModelCatalogStore.getState().ensure("codex-acp:pujitha");
+    expect(useModelCatalogStore.getState().loading["codex-acp:pujitha"]).toBe(true);
+    await Promise.all([first, useModelCatalogStore.getState().ensure("codex-acp:pujitha")]);
+    // An account that already has models starts nothing.
+    await useModelCatalogStore.getState().ensure("codex-acp");
+
+    expect(getModelCatalogs).toHaveBeenCalledTimes(1);
+    expect(getModelCatalogs).toHaveBeenCalledWith({ refresh: ["codex-acp:pujitha"] });
+    expect(useModelCatalogStore.getState().modelsForAgents(["codex-acp:pujitha"])).toEqual([
+      { agentId: "codex-acp:pujitha", modelId: "gpt-5", name: "GPT-5" },
+    ]);
+    expect(useModelCatalogStore.getState().loading["codex-acp:pujitha"]).toBeUndefined();
+    vi.unstubAllGlobals();
+  });
+
+  test("a failed fetch clears loading so picking the provider again retries", async () => {
+    const getModelCatalogs = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("spawn failed"))
+      .mockResolvedValueOnce({ "codex-acp:ui": [{ modelId: "gpt-5", name: "GPT-5" }] });
+    vi.stubGlobal("window", { omni: { agent: { getModelCatalogs } } });
+    const { useModelCatalogStore } = await import("./model-catalog-store");
+    useModelCatalogStore.setState({ byAgentId: {} });
+
+    await useModelCatalogStore.getState().ensure("codex-acp:ui");
+    expect(useModelCatalogStore.getState().loading["codex-acp:ui"]).toBeUndefined();
+    await useModelCatalogStore.getState().ensure("codex-acp:ui");
+
+    expect(useModelCatalogStore.getState().modelsForAgents(["codex-acp:ui"])).toHaveLength(1);
+    vi.unstubAllGlobals();
+  });
+
   test("persists across store reloads", async () => {
     const { useModelCatalogStore } = await import("./model-catalog-store");
     useModelCatalogStore.setState({ byAgentId: {} });

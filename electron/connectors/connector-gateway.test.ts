@@ -186,6 +186,52 @@ describe("ConnectorStore", () => {
     expect(testDb.current!.prepare("SELECT * FROM connector_secrets").all()).toEqual([]);
     expect(plain.snapshot(row).headerNames).toEqual(["Authorization"]);
   });
+
+  test("launching with nothing sealed never asks the keychain", () => {
+    // On macOS the first ask can show a password prompt, before any window.
+    testDb
+      .current!.prepare(
+        `INSERT INTO mcp_servers (id, name, transport_type, command, created_at, updated_at)
+       VALUES ('fs', 'fs', 'stdio', 'fs-mcp', 1, 1)`,
+      )
+      .run();
+    let asks = 0;
+    const launch = new ConnectorStore(() => testDb.current!, {
+      ...fakeKeychain,
+      available: () => {
+        asks += 1;
+        return true;
+      },
+    });
+    launch.sealPlainEnv();
+    const row = launch.get("fs")!;
+    expect(toAcpMcpServers(launch.list(), (r) => launch.env(r))).toHaveLength(1);
+    expect(launch.snapshot(row).envNames).toEqual([]);
+    expect(asks).toBe(0);
+  });
+
+  test("asks the keychain once per launch, even when the user denies it", () => {
+    for (const id of ["a", "b"]) {
+      testDb
+        .current!.prepare(
+          `INSERT INTO mcp_servers (id, name, transport_type, command, env, created_at, updated_at)
+         VALUES (?, ?, 'stdio', 'run', '{"TOKEN":"abc"}', 1, 1)`,
+        )
+        .run(id, id);
+    }
+    let asks = 0;
+    const denied = new ConnectorStore(() => testDb.current!, {
+      ...fakeKeychain,
+      available: () => {
+        asks += 1;
+        return false;
+      },
+    });
+    denied.sealPlainEnv();
+    expect(denied.env(denied.get("a")!)).toEqual({ TOKEN: "abc" });
+    expect(denied.env(denied.get("b")!)).toEqual({ TOKEN: "abc" });
+    expect(asks).toBe(1);
+  });
 });
 
 test("local connectors reach every agent, remote and turned-off ones don't", () => {

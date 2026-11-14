@@ -8,6 +8,7 @@ import { MenuItem } from "@/components/ui/menu-item";
 import { createProviderLogoIcon } from "@/components/provider-logos";
 import { Elevated } from "@/lib/elevated";
 import { useAnchoredPopoverPosition } from "@/lib/anchored-popover";
+import { useModelCatalogStore } from "@/store/model-catalog-store";
 import type { ComposerMentionKind } from "../../contracts/composer.ts";
 
 export type MentionItem = {
@@ -104,6 +105,18 @@ export function MentionPopover({
     el?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
+  // A provider with no known models (an account never used yet) has its
+  // catalog fetched when the user picks its tab, instead of looking empty.
+  const needsCatalog = kind === "model" && Boolean(selectedProviderId) && items.length === 0;
+  const loadingModels = useModelCatalogStore((state) =>
+    needsCatalog && selectedProviderId ? Boolean(state.loading[selectedProviderId]) : false,
+  );
+  useEffect(() => {
+    if (needsCatalog && selectedProviderId) {
+      void useModelCatalogStore.getState().ensure(selectedProviderId);
+    }
+  }, [needsCatalog, selectedProviderId]);
+
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
@@ -189,7 +202,7 @@ export function MentionPopover({
         >
           {items.length === 0 ? (
             <div className="px-3 py-5 text-center text-[12px] text-muted-foreground">
-              No {KIND_LABEL[kind].toLowerCase()} found
+              {loadingModels ? "Loading models…" : `No ${KIND_LABEL[kind].toLowerCase()} found`}
             </div>
           ) : (
             items.map((item, index) => {

@@ -41,6 +41,7 @@ import { normalizeWorkspacePath, pickWorkspaceThread } from "../contracts/worksp
 import { isLiveWorktree } from "./worktree-manager.ts";
 import { getAgentDescriptor, getDefaultAgentId, listRegisteredAgents } from "./agents/registry.ts";
 import { fullAccessOption, fullAccessPermissionResponse } from "./agents/full-access.ts";
+import { sessionMeta } from "./agents/hidden-tools.ts";
 import { listAgentInstanceDescriptors, hasAgentInstances } from "./agent-instances.ts";
 import {
   ACP_SWITCH_PHASE_TIMEOUT_MS,
@@ -834,6 +835,7 @@ export class AgentConnectionManager {
       const request = live.agent.request(acp.methods.agent.session.new, {
         cwd,
         mcpServers: attached.servers as never,
+        ...sessionMeta(live.driverId),
       }) as Promise<{
         sessionId: string;
         configOptions?: SessionConfigOption[] | null;
@@ -2485,6 +2487,7 @@ export class AgentConnectionManager {
     const request = live.agent.request(acp.methods.agent.session.new, {
       cwd,
       mcpServers: attached.servers as never,
+      ...sessionMeta(live.driverId),
     });
     let result: {
       sessionId: string;
@@ -2616,6 +2619,7 @@ export class AgentConnectionManager {
       cwd,
       sessionId,
       mcpServers: attached.servers as never,
+      ...sessionMeta(live.driverId),
     }) as Promise<{
       sessionId?: string;
       configOptions?: SessionConfigOption[] | null;
@@ -2658,6 +2662,7 @@ export class AgentConnectionManager {
       sessionId: prevSessionId,
       cwd,
       mcpServers: attached.servers as never,
+      ...sessionMeta(live.driverId),
     } as never) as Promise<{
       sessionId?: string;
       configOptions?: SessionConfigOption[] | null;

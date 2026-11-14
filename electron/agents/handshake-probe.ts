@@ -52,10 +52,48 @@ function isAuthRequiredError(err: unknown): boolean {
   );
 }
 
-/** Spawns `descriptor`, runs ACP `initialize` + throwaway `session/new`, then kills the process. */
-export async function probeAgentHandshake(
+/** Tail of the probe chain per driver, so probes of one driver never overlap. */
+const probeQueues = new Map<string, Promise<unknown>>();
+
+/**
+ * Run `task` after every earlier probe of the same driver has finished.
+ *
+ * Accounts of one driver launch the same command — for npx-backed drivers the
+ * same `npx -y <pkg>`. Concurrent npx runs of one package race on the shared
+ * npx cache and can leave it half-installed (e.g. Codex's platform binary
+ * package without its package.json), which then breaks every later launch.
+ * Different drivers stay parallel.
+ */
+function serializeByDriver<T>(driverId: string, task: () => Promise<T>): Promise<T> {
+  const previous = probeQueues.get(driverId) ?? Promise.resolve();
+  const next = previous.then(task, task);
+  const tail = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  probeQueues.set(driverId, tail);
+  void tail.then(() => {
+    if (probeQueues.get(driverId) === tail) probeQueues.delete(driverId);
+  });
+  return next;
+}
+
+/**
+ * Spawns `descriptor`, runs ACP `initialize` + throwaway `session/new`, then
+ * kills the process. Probes of the same driver run one at a time.
+ */
+export function probeAgentHandshake(
   descriptor: AcpAgentDescriptor,
   options: ProbeOptions = {},
+): Promise<AgentProbeResult> {
+  return serializeByDriver(descriptor.driverId ?? descriptor.id, () =>
+    runProbe(descriptor, options),
+  );
+}
+
+async function runProbe(
+  descriptor: AcpAgentDescriptor,
+  options: ProbeOptions,
 ): Promise<AgentProbeResult> {
   if (descriptor.available === false) {
     return {

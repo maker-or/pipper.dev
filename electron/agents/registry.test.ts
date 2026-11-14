@@ -5,9 +5,12 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import {
   BUILTIN_ACP_AGENTS,
   listRegisteredAgents,
+  nodeRuntimeCommand,
   probeAgentAvailability,
   resolveAgentSpawn,
 } from "./registry.ts";
+import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 
 describe("ACP agent registry", () => {
   test("catalog includes Cursor, Codex, Claude, Gemini, Copilot, Devin, and Antigravity adapters", () => {
@@ -95,6 +98,21 @@ describe("ACP agent registry", () => {
     const mock = BUILTIN_ACP_AGENTS.find((a) => a.id === "pipper-mock")!;
     const probed = probeAgentAvailability(mock);
     expect(probed.available).toBe(true);
+  });
+
+  test("inside Electron, a bundled script runs as Node instead of opening another app instance", () => {
+    const electronBinary = createRequire(import.meta.url)("electron") as unknown as string;
+    if (typeof electronBinary !== "string" || !existsSync(electronBinary)) return;
+    const { command, env } = nodeRuntimeCommand({ ...process.env } as Record<string, string>, {
+      execPath: electronBinary,
+      electron: "test",
+    });
+    // Would print nothing and open an app window if it launched as the GUI app.
+    const output = execFileSync(command, ["-e", "process.stdout.write(process.versions.node)"], {
+      env,
+      timeout: 30_000,
+    }).toString();
+    expect(output).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
   test("resolveAgentSpawn for mock returns node + mock-agent.mjs", () => {

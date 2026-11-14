@@ -88,6 +88,15 @@ interface ModelCatalogState {
   ) => void;
   /** Flat list for one or more agents (order preserved by agentIds then catalog). */
   modelsForAgents: (agentIds: readonly string[]) => CatalogModel[];
+  /** Agents whose catalog is being fetched by `ensure`. */
+  loading: Record<string, boolean>;
+  /**
+   * Fetch an agent's catalog when none is known yet — e.g. an account that
+   * was added in Settings but never used, picked in the model picker. This
+   * starts that agent once (the user is about to use it); agents with a
+   * catalog, or a fetch already running, start nothing.
+   */
+  ensure: (agentId: string) => Promise<void>;
 }
 
 export const useModelCatalogStore = create<ModelCatalogState>((set, get) => ({
@@ -108,6 +117,29 @@ export const useModelCatalogStore = create<ModelCatalogState>((set, get) => ({
       persist(byAgentId);
       return { byAgentId };
     });
+  },
+
+  loading: {},
+
+  ensure: async (agentId) => {
+    const { byAgentId, loading } = get();
+    if (!agentId || byAgentId[agentId]?.length || loading[agentId]) return;
+    const getModelCatalogs =
+      typeof window === "undefined" ? undefined : window.omni?.agent?.getModelCatalogs;
+    if (!getModelCatalogs) return;
+    set((state) => ({ loading: { ...state.loading, [agentId]: true } }));
+    try {
+      const catalogs = await getModelCatalogs({ refresh: [agentId] });
+      for (const [id, models] of Object.entries(catalogs ?? {})) get().remember(id, models);
+    } catch {
+      // The picker shows "no models" again; choosing the provider retries.
+    } finally {
+      set((state) => {
+        const next = { ...state.loading };
+        delete next[agentId];
+        return { loading: next };
+      });
+    }
   },
 
   modelsForAgents: (agentIds) => {

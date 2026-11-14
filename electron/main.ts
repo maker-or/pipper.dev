@@ -170,6 +170,7 @@ import {
 } from "./open-tabs";
 import { isActivationSuperseded } from "./activation.ts";
 import { activateProjectSelection } from "./project-activation.ts";
+import { parseOpenFolderLink, projectForFolder } from "./open-folder-link.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
 import {
   captureAnalytics,
@@ -863,9 +864,11 @@ async function consumePendingSiriRequests(): Promise<void> {
 }
 
 /**
- * Route a `pipper://siri/<requestId>` deep link (opened by the Swift
- * StartThreadIntent): focus the main window, consume the staged request, and
- * land the user on the new thread. Returns true when the URL was handled.
+ * Route a `pipper://` deep link. `pipper://open?path=<folder>` opens a folder
+ * as the active project (electron/open-folder-link.ts). `pipper://siri/<id>`
+ * (opened by the Swift StartThreadIntent) focuses the main window, consumes
+ * the staged request, and lands the user on the new thread. Returns true when
+ * the URL was handled.
  */
 async function handlePipperDeepLink(url: string): Promise<boolean> {
   let parsed: URL;
@@ -874,7 +877,28 @@ async function handlePipperDeepLink(url: string): Promise<boolean> {
   } catch {
     return false;
   }
-  if (parsed.protocol !== "pipper:" || !SIRI_ENABLED) return false;
+  if (parsed.protocol !== "pipper:") return false;
+  const folder = parseOpenFolderLink(parsed);
+  if (folder) {
+    if (!agentManager) {
+      // Cold launch: queued like the Siri links below.
+      if (!pendingDeepLinks.includes(url)) pendingDeepLinks.push(url);
+      return true;
+    }
+    if (!getAuthenticatedUserForLaunch()) {
+      console.warn("[Main] Ignored pipper://open: sign in is required before opening a project.");
+      return false;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    const project = projectForFolder(folder, { listProjects, createProject });
+    await activateProjectAndAnnounce(project.id);
+    return true;
+  }
+  if (!SIRI_ENABLED) return false;
   const match = /^siri\/([A-Za-z0-9-]{1,128})\/?$/.exec(`${parsed.host}${parsed.pathname}`);
   if (!match?.[1]) return false;
   if (!agentManager) {
@@ -1216,6 +1240,28 @@ function requireAuthenticatedUserForLaunch() {
   const user = getAuthenticatedUserForLaunch();
   if (!user) throw new Error("Sign in is required before opening a project.");
   return user;
+}
+
+/** Make `projectId` the active project and tell every window, as a sidebar click does. */
+async function activateProjectAndAnnounce(projectId: string): Promise<void> {
+  const project = getProject(projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  try {
+    const { superseded } = await activateProjectSelection({
+      projectId,
+      getActiveProjectId,
+      setActiveProjectId,
+      activate: (id) => requireAgentManager().activateProject(id),
+    });
+    // A newer click took over; it announces its own project.
+    if (superseded) return;
+  } catch (err) {
+    console.error(`[Main] Failed to activate project ${projectId} in agent manager:`, err);
+    throw err;
+  }
+  broadcastToWindows("projects:activeChanged", projectId);
 }
 
 async function prepareBenchmarkLaunchState(): Promise<string | null> {
@@ -2813,24 +2859,7 @@ function registerIpc(): void {
 
   ipcMain.handle("projects:setActive", async (_event, projectId: string) => {
     requireAuthenticatedUserForLaunch();
-    const project = getProject(projectId);
-    if (!project) {
-      throw new Error(`Project not found: ${projectId}`);
-    }
-    try {
-      const { superseded } = await activateProjectSelection({
-        projectId,
-        getActiveProjectId,
-        setActiveProjectId,
-        activate: (id) => requireAgentManager().activateProject(id),
-      });
-      // A newer click took over; it announces its own project.
-      if (superseded) return;
-    } catch (err) {
-      console.error(`[Main] Failed to activate project ${projectId} in agent manager:`, err);
-      throw err;
-    }
-    broadcastToWindows("projects:activeChanged", projectId);
+    await activateProjectAndAnnounce(projectId);
   });
 
   ipcMain.handle("threads:list", () => {

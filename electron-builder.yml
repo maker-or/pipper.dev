@@ -1,5 +1,11 @@
 appId: com.maker-or.omni
 productName: Pipper Code (Alpha)
+# CFBundleURLTypes, so `open pipper://...` reaches the app even before it has
+# registered itself at runtime (electron/main.ts handlePipperDeepLink).
+protocols:
+  - name: Pipper
+    schemes:
+      - pipper
 directories:
   output: release
 afterPack: scripts/after-pack.js

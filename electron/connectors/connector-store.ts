@@ -93,12 +93,18 @@ const STATUSES = new Set<ConnectorStatus>(["unknown", "connected", "needs_sign_i
  * Connector rows (`mcp_servers`) and their secrets. Secrets are sealed with
  * the OS keychain (`safeStorage`); without one they live in memory only, so
  * a sign-in lasts until Pipper quits, and `env` stays in the row as before.
+ *
+ * The keychain is asked only when a secret is read or written. On macOS the
+ * first ask reads the app's safe-storage key, which can show a password
+ * prompt, so it must never happen on launch for a profile with nothing sealed.
  */
 export class ConnectorStore {
   private readonly memorySecrets = new Map<string, ConnectorSecretData>();
 
   private readonly getDb: () => DatabaseSync;
   private readonly box: SecretBox | null;
+  /** Asked once per process: a denied prompt is not shown again on every read. */
+  private keychainAvailable: boolean | null = null;
 
   constructor(getDb: () => DatabaseSync, box: SecretBox | null) {
     this.getDb = getDb;
@@ -106,7 +112,8 @@ export class ConnectorStore {
   }
 
   private get sealing(): boolean {
-    return Boolean(this.box?.available());
+    this.keychainAvailable ??= Boolean(this.box?.available());
+    return this.keychainAvailable;
   }
 
   list(): ConnectorRow[] {
@@ -208,11 +215,15 @@ export class ConnectorStore {
   }
 
   secrets(id: string): ConnectorSecretData {
-    if (!this.sealing) return this.memorySecrets.get(id) ?? {};
+    // Memory holds secrets only when there is no keychain.
+    const remembered = this.memorySecrets.get(id);
+    if (remembered) return remembered;
+    // Look for a sealed row before asking the keychain: a connector with
+    // nothing sealed never needs it.
     const row = this.getDb()
       .prepare("SELECT sealed FROM connector_secrets WHERE connector_id = ?")
       .get(id) as { sealed: Uint8Array } | undefined;
-    if (!row) return {};
+    if (!row || !this.sealing) return {};
     try {
       return JSON.parse(this.box!.decrypt(Buffer.from(row.sealed))) as ConnectorSecretData;
     } catch {
@@ -237,9 +248,10 @@ export class ConnectorStore {
 
   /** Moves `env` values saved in plain text before connectors into the keychain. */
   sealPlainEnv(): void {
-    if (!this.sealing) return;
-    for (const row of this.list()) {
-      if (!row.env) continue;
+    // Runs on every launch: ask the keychain only when there is plain text to seal.
+    const plain = this.list().filter((row) => row.env);
+    if (plain.length === 0 || !this.sealing) return;
+    for (const row of plain) {
       const env = parseJson<Record<string, string>>(row.env, {});
       this.updateSecrets(row.id, (data) => ({ ...data, env: { ...env, ...data.env } }));
       this.getDb().prepare("UPDATE mcp_servers SET env = NULL WHERE id = ?").run(row.id);
