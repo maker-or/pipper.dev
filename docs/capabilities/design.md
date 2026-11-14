@@ -33,7 +33,7 @@ appear in a tool result.
 
 ## Pipper sits on top of harnesses
 
-Pipper is not a harness. Claude Code, Codex, OpenCode, Gemini and the rest
+Pipper is not a harness. Claude Code, Codex, OpenCode, Antigravity and the rest
 run the model loop, own the system prompt and native tools, and decide when to
 call a tool. Pipper is the ACP client around them. Every decision here has to
 hold for agents Pipper doesn't control.
@@ -119,7 +119,7 @@ are no longer Pipper concepts (see _Subthreads and new threads_).
 
 ## Subthreads and new threads
 
-Pipper can start work on any harness — Claude Code, Codex, Gemini, Cursor,
+Pipper can start work on any harness — Claude Code, Codex, Antigravity, Cursor,
 Antigravity — which a harness's own subagents can't. Over ACP every thread is
 started the same way: `session/new` with a working directory and Pipper's MCP
 servers, `session/set_config_option` for the model, `session/prompt` with the

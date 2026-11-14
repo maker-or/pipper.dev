@@ -108,6 +108,8 @@ import {
   type ToolCallPayload,
 } from "../src/lib/tool-call-payload.ts";
 import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema.ts";
+import { agentAnalyticsIdentity } from "./analytics-sanitize.ts";
+import { startRecoveryProperties } from "./agents/start-recovery.ts";
 import type {
   MonitorProcessDescriptor,
   MonitorSwitchPhase,
@@ -532,16 +534,31 @@ export class AgentConnectionManager {
             agentSessionId: session.agentSessionId,
           })),
       invalidateAgentSessions: (agentId) => this.invalidateAgentSessions(agentId),
-      onConnected: (agentId, connectDurationMs, installKind) =>
+      onConnected: (agentId, connectDurationMs, installKind, recovery) =>
         this.captureAnalytics?.("agent_connected", {
           ...this.agentProps(agentId),
           connect_duration_ms: connectDurationMs,
           install_kind: installKind,
+          ...(recovery && {
+            recovered_from: recovery.from,
+            recovery_action: recovery.action,
+          }),
         } as AnalyticsProperties),
-      onConnectFailed: (agentId, errorName) =>
+      onStartRecovery: (agentId, report) =>
+        this.captureAnalytics?.("agent_start_recovery", {
+          ...this.agentProps(agentId),
+          ...startRecoveryProperties(report, "connection"),
+        } as AnalyticsProperties),
+      onConnectFailed: (agentId, failure) =>
         this.captureAnalytics?.("agent_connection_failed", {
           ...this.agentProps(agentId),
-          error_type: errorName,
+          error_type: failure.errorName,
+          failure_reason: failure.reason,
+          ...(failure.exitCode != null && { exit_code: failure.exitCode }),
+          ...(failure.recovery && {
+            recovered_from: failure.recovery.from,
+            recovery_action: failure.recovery.action,
+          }),
         } as AnalyticsProperties),
     });
     this.scheduleIdleSweep();
@@ -4012,8 +4029,13 @@ export class AgentConnectionManager {
   }
 
   /** Build the standard agent-identity properties for an event from an agent id. */
+  /**
+   * Agent identity for analytics. Account ids are `<driver>:<label>` with a
+   * label the user typed, so only the driver id is sent, plus whether this is
+   * the driver's default account or an added one.
+   */
   private agentProps(agentId: string): AnalyticsProperties {
-    return { agent_id: agentId, agent_name: getAgentDescriptor(agentId)?.name };
+    return agentAnalyticsIdentity(agentId, getAgentDescriptor(agentId)?.name);
   }
 
   /**

@@ -7,6 +7,7 @@ import { useDiffStore } from "@/store/diff-store";
 import { Button } from "@/components/ui/button";
 import { useTheme } from "@/lib/theme";
 import { Elevated } from "@/lib/elevated";
+import { useSurface } from "@/lib/surface-context";
 import { workerFactory } from "@/lib/diff-worker";
 import { CODE_HIGHLIGHTER_OPTIONS, CODE_THEMES } from "@/lib/code-highlighting";
 
@@ -16,11 +17,11 @@ import { CODE_HIGHLIGHTER_OPTIONS, CODE_THEMES } from "@/lib/code-highlighting";
 // fighting the cascade with plain custom properties.
 const DIFF_UNSAFE_CSS = `
   :host {
-    --diffs-bg: var(--surface-2) !important;
-    --diffs-bg-buffer: var(--surface-2) !important;
-    --diffs-bg-context: var(--surface-2) !important;
-    --diffs-bg-context-gutter: var(--surface-2) !important;
-    --diffs-bg-separator: var(--surface-2) !important;
+    --diffs-bg: var(--review-surface) !important;
+    --diffs-bg-buffer: var(--review-surface) !important;
+    --diffs-bg-context: var(--review-surface) !important;
+    --diffs-bg-context-gutter: var(--review-surface) !important;
+    --diffs-bg-separator: var(--review-surface) !important;
     --diffs-fg: var(--foreground) !important;
   }
 `;
@@ -33,6 +34,7 @@ export const DiffView = memo(function DiffView() {
   const order = useDiffStore((state) => state.order);
   const [layout, setLayout] = useState<"split" | "unified">("split");
   const { resolvedTheme } = useTheme();
+  const surface = useSurface();
 
   // Cache parsed diffs per path so a change to one file doesn't force every
   // other item to be recomputed and handed to CodeView as a new object —
@@ -110,6 +112,7 @@ export const DiffView = memo(function DiffView() {
       style={
         {
           "--diffs-font-family": "var(--font-mono)",
+          "--review-surface": `var(--surface-${Math.min(surface + 1, 8)})`,
           colorScheme: resolvedTheme,
         } as CSSProperties
       }

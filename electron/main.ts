@@ -156,6 +156,9 @@ import { isMonitorEnabled } from "./monitor/enabled.ts";
 import { emptyMonitorRecordedSession } from "./monitor/timeline.ts";
 import { buildMonitorInventory } from "./monitor/inventory.ts";
 import { probeAgentById } from "./agents/handshake-probe.ts";
+import { getAgentDescriptor, selectedDriverIds } from "./agents/registry.ts";
+import { startRecoveryProperties } from "./agents/start-recovery.ts";
+import { agentAnalyticsIdentity } from "./analytics-sanitize.ts";
 import {
   broadcastOpenTabsChanged,
   closeThreadTab,
@@ -172,6 +175,7 @@ import { isActivationSuperseded } from "./activation.ts";
 import { activateProjectSelection } from "./project-activation.ts";
 import { parseOpenFolderLink, projectForFolder } from "./open-folder-link.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
+import { shellPathReady } from "./shell-path.ts";
 import {
   captureAnalytics,
   captureAnalyticsException,
@@ -218,6 +222,9 @@ import type {
 
 // Initialize PATH prepend early for child process resolutions
 prependStandardPaths();
+// Then the user's login-shell PATH (nvm, Volta, fnm…), which a Finder/Dock
+// launch doesn't get. Agent launches wait for it.
+void shellPathReady();
 
 import { getPipperLibraryPath } from "./paths";
 import { LauncherUpdateManager } from "./launcher-update-manager";
@@ -2773,12 +2780,20 @@ function registerIpc(): void {
       const cleanStep = String(step ?? "").slice(0, 80);
       const cleanStatus = String(status ?? "").slice(0, 24);
       if (!ONBOARDING_STEPS.has(cleanStep) || !ONBOARDING_STATUSES.has(cleanStatus)) return;
+      // Which agents the user picked: driver ids only. Account ids carry the
+      // name the user typed, so they are never sent.
+      const selectedAgents =
+        cleanStep === "agent_pick_completed" ? selectedDriverIds(getSelectedAgentIds()) : null;
       captureAnalytics("onboarding_step", {
         windowType: "launch",
         properties: {
           step: cleanStep,
           status: cleanStatus,
           success: success ?? (cleanStatus !== "skipped" && cleanStatus !== "failed"),
+          ...(selectedAgents && {
+            selected_agents: selectedAgents,
+            selected_agent_count: selectedAgents.length,
+          }),
         },
       });
     },
@@ -3139,7 +3154,16 @@ function registerIpc(): void {
     }),
   );
   ipcMain.handle("agent:probeAgent", async (_event, agentId: string) => {
-    const result = await probeAgentById(agentId, { clientVersion: app.getVersion() });
+    const result = await probeAgentById(agentId, {
+      clientVersion: app.getVersion(),
+      onRecovery: (report) =>
+        captureAnalytics("agent_start_recovery", {
+          properties: {
+            ...agentAnalyticsIdentity(agentId, getAgentDescriptor(agentId)?.name),
+            ...startRecoveryProperties(report, "readiness_check"),
+          },
+        }),
+    });
     if (result.status !== "ready") {
       console.warn(
         `[probe] ${agentId}: ${result.status}${result.message ? ` — ${result.message}` : ""}`,

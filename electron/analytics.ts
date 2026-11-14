@@ -9,7 +9,11 @@ import type {
   AnalyticsProperties,
   AnalyticsWindowType,
 } from "./analytics-schema.ts";
-import { sanitizeAnalyticsProperties, sanitizeIdentifier } from "./analytics-sanitize.ts";
+import {
+  sanitizeAgentId,
+  sanitizeAnalyticsProperties,
+  sanitizeIdentifier,
+} from "./analytics-sanitize.ts";
 import { buildPersonProperties, type AnalyticsUserIdentity } from "./analytics-person.ts";
 
 export type { AnalyticsUserIdentity } from "./analytics-person.ts";
@@ -100,7 +104,8 @@ export function setActiveAgentContext(
     return;
   }
   const next: { agent_id?: string; agent_name?: string; model_id?: string } = {};
-  const agentId = sanitizeIdentifier(ctx.agentId);
+  // Driver id only: account ids carry a label the user typed.
+  const agentId = sanitizeAgentId(ctx.agentId);
   const agentName = sanitizeIdentifier(ctx.agentName);
   const modelId = sanitizeIdentifier(ctx.modelId);
   if (agentId) next.agent_id = agentId;

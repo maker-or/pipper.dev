@@ -21,14 +21,27 @@ import type { AcpAgentDescriptor, AgentProbeResult } from "../../contracts/acp.t
 import { getAgentDescriptor, resolveAgentSpawn } from "./registry.ts";
 import { ensureAntigravityInstalled } from "./antigravity-official.ts";
 import { spawnProviderProcess, terminateProviderProcess } from "../provider-processes.ts";
+import { shellPathReady } from "../shell-path.ts";
+import { classifyAgentStartFailure, type AgentStartFailureReason } from "./start-failure.ts";
+import {
+  applyStartRecovery,
+  npxPackageFor,
+  planStartRecovery,
+  withNpxPackageLock,
+  type StartRecoveryReport,
+} from "./start-recovery.ts";
 
 /** Covers initialize + throwaway session/new (Codex init alone can take a few seconds). */
 const DEFAULT_PROBE_TIMEOUT_MS = 20_000;
+/** npx may download the package on first run. */
+const NPX_PROBE_TIMEOUT_MS = 120_000;
 
 export interface ProbeOptions {
   timeoutMs?: number;
   /** App version for ACP `clientInfo`; callers pass `app.getVersion()`. */
   clientVersion?: string;
+  /** Told about a check that needed a repair, once its outcome is known. */
+  onRecovery?: (report: StartRecoveryReport) => void;
 }
 
 /**
@@ -86,16 +99,104 @@ export function probeAgentHandshake(
   descriptor: AcpAgentDescriptor,
   options: ProbeOptions = {},
 ): Promise<AgentProbeResult> {
-  return serializeByDriver(descriptor.driverId ?? descriptor.id, () =>
-    runProbe(descriptor, options),
-  );
+  return serializeByDriver(descriptor.driverId ?? descriptor.id, async () => {
+    await shellPathReady();
+    const npmPackage = npxPackageFor(descriptor);
+    // Chat connections of the same npx package take the same turns.
+    return withNpxPackageLock(npmPackage, () => probeWithRecovery(descriptor, options, npmPackage));
+  });
+}
+
+/**
+ * Probe once; when the launch failed for a reason a repair can fix (the same
+ * repairs chat connections use, agents/start-recovery.ts), repair and probe
+ * once more. Sign-in problems are answers, not failures, and get no retry.
+ */
+async function probeWithRecovery(
+  descriptor: AcpAgentDescriptor,
+  options: ProbeOptions,
+  npmPackage: string | null,
+): Promise<AgentProbeResult> {
+  const failure: ProbeFailure = {};
+  const first = await runProbe(descriptor, options, failure);
+  if (first.status === "ready" || first.status === "needs-auth" || !failure.error) return first;
+  const reason = classifyAgentStartFailure({
+    error: failure.error,
+    stderr: failure.stderr,
+    exitCode: failure.exitCode,
+  });
+  const action = planStartRecovery({
+    reason,
+    stderr: failure.stderr,
+    message: failure.error instanceof Error ? failure.error.message : String(failure.error),
+    npmPackage,
+  });
+  if (!action) return first;
+  const failedAt = Date.now();
+  const report = (
+    outcome: "recovered" | "failed",
+    retried: boolean,
+    finalFailureReason?: AgentStartFailureReason,
+  ) =>
+    options.onRecovery?.({
+      failureReason: reason,
+      action,
+      outcome,
+      retried,
+      ...(finalFailureReason && { finalFailureReason }),
+      exitCode: failure.exitCode ?? null,
+      durationMs: Date.now() - failedAt,
+    });
+  if (!(await applyStartRecovery(action, { npmPackage }))) {
+    report("failed", false);
+    return first;
+  }
+  const timeoutMs =
+    action === "retry_longer"
+      ? (options.timeoutMs ?? (npmPackage ? NPX_PROBE_TIMEOUT_MS : DEFAULT_PROBE_TIMEOUT_MS)) * 2
+      : options.timeoutMs;
+  // Availability was decided before the repair (e.g. before PATH changed);
+  // let the retry resolve the command afresh.
+  const retryFailure: ProbeFailure = {};
+  const retry = () =>
+    runProbe({ ...descriptor, available: undefined }, { ...options, timeoutMs }, retryFailure);
+  const retryPackage = npxPackageFor(descriptor);
+  const second = await (retryPackage && retryPackage !== npmPackage
+    ? withNpxPackageLock(retryPackage, retry)
+    : retry());
+  // Signed in or not, an agent that answered has started: the repair worked.
+  if (second.status === "ready" || second.status === "needs-auth") {
+    report("recovered", true);
+  } else {
+    report(
+      "failed",
+      true,
+      retryFailure.error
+        ? classifyAgentStartFailure({
+            error: retryFailure.error,
+            stderr: retryFailure.stderr,
+            exitCode: retryFailure.exitCode,
+          })
+        : undefined,
+    );
+  }
+  return second;
+}
+
+/** What a failed probe saw, read locally to pick a repair. */
+interface ProbeFailure {
+  error?: unknown;
+  stderr?: string;
+  exitCode?: number | null;
 }
 
 async function runProbe(
   descriptor: AcpAgentDescriptor,
   options: ProbeOptions,
+  failure: ProbeFailure = {},
 ): Promise<AgentProbeResult> {
   if (descriptor.available === false) {
+    failure.error = new Error(`${descriptor.displayName} is not installed`);
     return {
       agentId: descriptor.id,
       status: "needs-install",
@@ -113,6 +214,7 @@ async function runProbe(
     const useShell = process.platform === "win32" && /\.cmd$/i.test(command);
     child = spawnProviderProcess(command, args, { env, shell: useShell });
   } catch (err) {
+    failure.error = err;
     return {
       agentId: descriptor.id,
       status: "needs-install",
@@ -164,7 +266,9 @@ async function runProbe(
           reject(new Error("__pipper_probe_timeout__"));
         },
         options.timeoutMs ??
-          (/\bnpx(?:\.cmd)?$/i.test(spawnCommand) ? 120_000 : DEFAULT_PROBE_TIMEOUT_MS),
+          (/\bnpx(?:\.cmd)?$/i.test(spawnCommand)
+            ? NPX_PROBE_TIMEOUT_MS
+            : DEFAULT_PROBE_TIMEOUT_MS),
       );
     });
 
@@ -218,6 +322,9 @@ async function runProbe(
         authMethods,
       };
     }
+    failure.error = err;
+    failure.stderr = stderrText;
+    failure.exitCode = child.exitCode;
     const message = err instanceof Error ? err.message : String(err);
     if (message === "__pipper_probe_timeout__") {
       return {
@@ -246,6 +353,8 @@ export async function probeAgentById(
   agentId: string,
   options: ProbeOptions = {},
 ): Promise<AgentProbeResult> {
+  // Availability is decided at lookup, so look up with the full PATH.
+  await shellPathReady();
   const descriptor = getAgentDescriptor(agentId);
   if (!descriptor) {
     return { agentId, status: "error", message: "Unknown agent." };

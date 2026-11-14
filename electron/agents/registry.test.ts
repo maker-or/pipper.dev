@@ -6,6 +6,7 @@ import {
   BUILTIN_ACP_AGENTS,
   listRegisteredAgents,
   nodeRuntimeCommand,
+  selectedDriverIds,
   probeAgentAvailability,
   resolveAgentSpawn,
 } from "./registry.ts";
@@ -13,12 +14,13 @@ import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 
 describe("ACP agent registry", () => {
-  test("catalog includes Cursor, Codex, Claude, Gemini, Copilot, Devin, and Antigravity adapters", () => {
+  test("catalog includes Cursor, Codex, Claude, Copilot, Devin, and Antigravity adapters, and no Gemini CLI", () => {
     const ids = BUILTIN_ACP_AGENTS.map((a) => a.id);
     expect(ids).toContain("cursor-acp");
     expect(ids).toContain("codex-acp");
     expect(ids).toContain("claude-agent-acp");
-    expect(ids).toContain("gemini-acp");
+    // Google retired the Gemini CLI in favour of Antigravity.
+    expect(ids).not.toContain("gemini-acp");
     expect(ids).toContain("copilot-acp");
     expect(ids).toContain("devin-acp");
     expect(ids).toContain("antigravity-acp");
@@ -37,12 +39,6 @@ describe("ACP agent registry", () => {
     const claude = BUILTIN_ACP_AGENTS.find((a) => a.id === "claude-agent-acp")!;
     expect(claude.npmPackage).toBe("@agentclientprotocol/claude-agent-acp");
     expect(claude.docsUrl).toContain("claude-agent-acp");
-
-    const gemini = BUILTIN_ACP_AGENTS.find((a) => a.id === "gemini-acp")!;
-    expect(gemini.command).toBe("gemini");
-    expect(gemini.args).toEqual(["--acp"]);
-    expect(gemini.npmPackage).toBe("@google/gemini-cli");
-    expect(gemini.docsUrl).toContain("geminicli.com/docs/cli/acp-mode");
 
     const copilot = BUILTIN_ACP_AGENTS.find((a) => a.id === "copilot-acp")!;
     expect(copilot.command).toBe("copilot");
@@ -113,6 +109,15 @@ describe("ACP agent registry", () => {
       timeout: 30_000,
     }).toString();
     expect(output).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+
+  test("analytics gets the drivers behind selected agents, never account names", () => {
+    expect(
+      selectedDriverIds(
+        ["codex-acp", "codex-acp:pujitha", "claude-agent-acp:work", "gemini-acp", "custom:x"],
+        ["codex-acp", "claude-agent-acp"],
+      ),
+    ).toEqual(["claude-agent-acp", "codex-acp"]);
   });
 
   test("resolveAgentSpawn for mock returns node + mock-agent.mjs", () => {

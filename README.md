@@ -1,5 +1,7 @@
 # Pipper
 
+Created by Harshith Pasupuleti
+
 Pipper is a single interface to control your agents.
 
 ## Purpose

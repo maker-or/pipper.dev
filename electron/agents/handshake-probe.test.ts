@@ -272,6 +272,59 @@ describe("probeAgentHandshake", () => {
     expect(realpathSync(readFileSync(out, "utf8"))).toBe(realpathSync(homedir()));
   });
 
+  test("an agent that crashes on its first launch is retried and reported ready", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const marker = join(dir, "started");
+    const script = writeScript(
+      dir,
+      "flaky-agent.mjs",
+      `
+      import { existsSync, writeFileSync } from "node:fs";
+      if (!existsSync(${JSON.stringify(marker)})) {
+        writeFileSync(${JSON.stringify(marker)}, "1");
+        process.exit(1);
+      }
+      ${scriptedAgentBody({})}
+      `,
+    );
+
+    const reports: unknown[] = [];
+    const result = await probeAgentHandshake(nodeScriptDescriptor(script), {
+      onRecovery: (report) => reports.push(report),
+    });
+    expect(result.status).toBe("ready");
+    expect(reports).toEqual([
+      expect.objectContaining({
+        failureReason: "exited_early",
+        action: "retry",
+        outcome: "recovered",
+        retried: true,
+      }),
+    ]);
+  });
+
+  test("a sign-in problem is reported as is, without a retry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const launches = join(dir, "launches.txt");
+    const script = writeScript(
+      dir,
+      "auth-agent.mjs",
+      `
+      import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(launches)}, "x");
+      ${scriptedAgentBody({ sessionNewAuthRequired: true })}
+      `,
+    );
+
+    const reports: unknown[] = [];
+    const result = await probeAgentHandshake(nodeScriptDescriptor(script), {
+      onRecovery: (report) => reports.push(report),
+    });
+    expect(result.status).toBe("needs-auth");
+    expect(readFileSync(launches, "utf8")).toBe("x");
+    expect(reports).toEqual([]);
+  });
+
   test("probeAgentById returns an error for an unknown agent id", async () => {
     const result = await probeAgentById("not-a-real-agent-id");
     expect(result.status).toBe("error");

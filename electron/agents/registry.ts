@@ -120,21 +120,6 @@ export const BUILTIN_ACP_AGENTS: AcpAgentDescriptor[] = [
     detectCommands: ["grok"],
   },
   {
-    id: "gemini-acp",
-    name: "gemini-cli",
-    displayName: "Gemini",
-    description: "Gemini CLI in ACP mode (stdio JSON-RPC).",
-    command: "gemini",
-    args: ["--acp"],
-    icon: "gemini",
-    docsUrl: "https://geminicli.com/docs/cli/acp-mode/",
-    authHint: "Sign in with your Google account on first run (or set GEMINI_API_KEY).",
-    installHint: "npm install -g @google/gemini-cli  (or use npx on first launch)",
-    installKind: "npx",
-    npmPackage: "@google/gemini-cli",
-    detectCommands: ["gemini"],
-  },
-  {
     id: "copilot-acp",
     name: "copilot-cli",
     displayName: "Copilot",
@@ -378,7 +363,7 @@ export function probeAgentAvailability(agent: AcpAgentDescriptor): AcpAgentDescr
 
   // Prefer a globally installed binary when listed in detectCommands.
   // `base.args` holds the flags needed to enter ACP mode (e.g. `["--acp"]` for
-  // Gemini, `[]` for adapters that speak ACP by default) — reused as-is here,
+  // Copilot, `[]` for adapters that speak ACP by default) — reused as-is here,
   // and prefixed with `-y <pkg>` below for the npx fallback.
   const detectList = base.detectCommands?.length ? base.detectCommands : [base.command];
   for (const cmd of detectList) {
@@ -464,6 +449,24 @@ export function getAgentDescriptor(agentId: string): AcpAgentDescriptor | null {
   // uninitialized/legacy state with no provider installed.
   if (instanceDescriptorProvider) return null;
   return listRegisteredAgents().find((a) => a.id === agentId) ?? null;
+}
+
+/**
+ * The drivers behind a list of selected agent ids, for analytics. Account ids
+ * are `<driver>:<label>` with a label the user typed, so only the driver part
+ * is kept, and ids that aren't a known driver are dropped.
+ */
+export function selectedDriverIds(
+  selectedIds: readonly string[],
+  knownDriverIds: readonly string[] = listRegisteredAgents().map((agent) => agent.id),
+): string[] {
+  const known = new Set(knownDriverIds);
+  const out = new Set<string>();
+  for (const id of selectedIds) {
+    const driver = id.split(":")[0] ?? "";
+    if (known.has(driver)) out.add(driver);
+  }
+  return [...out].sort();
 }
 
 export function getDefaultAgentId(): string {
