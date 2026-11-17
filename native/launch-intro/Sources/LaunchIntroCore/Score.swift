@@ -8,10 +8,8 @@ import Foundation
 ///   that ripple's strength. The first also carries the unseen splash.
 /// - Each front crossing the display: a wash that brightens as it climbs and
 ///   flutters at the rings' own rate (speed ÷ wavelength).
-/// - The text: a pad that swells with its opacity and brightens as it
-///   sharpens, then holds while the @ surfaces.
-/// - The surfacing: a low open fifth that swells as the @ rises and opens up
-///   as it comes into focus. Nothing that sounds like water.
+/// - The welcome: a pad that swells with its opacity and brightens as it
+///   sharpens, holds, and eases away as the reveal opens onto the window.
 public struct SoundConfig: Sendable {
   public var sampleRate: Double = 48_000
   /// Seconds rendered past the held frame so the reverb can ring out.
@@ -21,8 +19,6 @@ public struct SoundConfig: Sendable {
   public var dropNotes: [Double] = [659.26, 493.88, 440.0]
   /// D3 A3 E4 F♯4: open and unresolved.
   public var padNotes: [Double] = [146.83, 220.0, 329.63, 369.99]
-  /// D2 A2: the depth the @ rises from, under the pad's D.
-  public var surfaceNotes: [Double] = [73.42, 110.0]
   public var reverbMix: Double = 0.3
 
   public init() {}
@@ -43,40 +39,28 @@ public func renderScore(_ c: IntroConfig, sound s: SoundConfig = SoundConfig()) 
   // The rings pass a point at this rate; the wash flutters with them.
   let flutter = reference.speed / reference.q / c.wavelength
 
-  // The bloom: a low open fifth that swells as the colour spreads and
-  // eases away once it is full. Nothing that sounds like water.
-  if c.opening == .bloom {
-    for (index, note) in s.surfaceNotes.enumerated() {
-      mix.add(at: c.bloomStart, for: c.bloomDuration + 2.5, pan: index == 0 ? -0.2 : 0.2) { t in
-        let swell = sin(.pi / 2 * min(1, t / c.bloomDuration))
-        let release = exp(-max(0, t - c.bloomDuration) / 0.9)
-        return pad(t, frequency: note * 2, brightness: min(1, t / c.bloomDuration)) * swell * swell * release * 0.07
+  for (index, start) in c.rippleStarts.enumerated() {
+    let strength = Double(c.rippleStrengths[index])
+    let note = s.dropNotes[min(index, s.dropNotes.count - 1)]
+    let pan = index == 0 ? 0 : (index.isMultiple(of: 2) ? 0.25 : -0.25)
+    mix.add(at: start, for: 0.8, pan: pan) { t in drop(t, frequency: note, strength: strength) }
+    mix.add(at: start, for: 2.0) { t in thump(t, strength: strength) }
+    if index == 0 {
+      var band = Bandpass(frequency: 2_400, q: 1.2, sampleRate: s.sampleRate)
+      mix.add(at: start, for: 0.12) { t in
+        band.process(noise.next()) * 0.5 * attackDecay(t, attack: 0.001, decay: 0.025)
       }
     }
-  } else {
-    for (index, start) in c.rippleStarts.enumerated() {
-      let strength = Double(c.rippleStrengths[index])
-      let note = s.dropNotes[min(index, s.dropNotes.count - 1)]
-      let pan = index == 0 ? 0 : (index.isMultiple(of: 2) ? 0.25 : -0.25)
-      mix.add(at: start, for: 0.8, pan: pan) { t in drop(t, frequency: note, strength: strength) }
-      mix.add(at: start, for: 2.0) { t in thump(t, strength: strength) }
-      if index == 0 {
-        var band = Bandpass(frequency: 2_400, q: 1.2, sampleRate: s.sampleRate)
-        mix.add(at: start, for: 0.12) { t in
-          band.process(noise.next()) * 0.5 * attackDecay(t, attack: 0.001, decay: 0.025)
-        }
-      }
-      var lowL = OnePole(), lowR = OnePole()
-      mix.addStereo(at: start, for: c.travel + 0.6) { t in
-        let p = min(1, t / c.travel)
-        let swell = pow(sin(.pi * p), 2) * exp(-t * c.decay) * strength * 0.16
-        let shimmer = 0.7 + 0.3 * sin(2 * .pi * flutter * t)
-        let cutoff = 250 + 2_200 * p
-        return (
-          lowL.process(noise.next(), cutoff: cutoff, sampleRate: s.sampleRate) * swell * shimmer,
-          lowR.process(noise.next(), cutoff: cutoff, sampleRate: s.sampleRate) * swell * shimmer
-        )
-      }
+    var lowL = OnePole(), lowR = OnePole()
+    mix.addStereo(at: start, for: c.travel + 0.6) { t in
+      let p = min(1, t / c.travel)
+      let swell = pow(sin(.pi * p), 2) * exp(-t * c.decay) * strength * 0.16
+      let shimmer = 0.7 + 0.3 * sin(2 * .pi * flutter * t)
+      let cutoff = 250 + 2_200 * p
+      return (
+        lowL.process(noise.next(), cutoff: cutoff, sampleRate: s.sampleRate) * swell * shimmer,
+        lowR.process(noise.next(), cutoff: cutoff, sampleRate: s.sampleRate) * swell * shimmer
+      )
     }
   }
 
@@ -87,31 +71,11 @@ public func renderScore(_ c: IntroConfig, sound s: SoundConfig = SoundConfig()) 
       // Follows the line in, then holds once it is sharp.
       let absolute = min(c.textFadeStart + t, c.textFadeEnd)
       let text = textFrame(time: absolute, q: 1, config: c)
-      let release = exp(-max(0, c.textFadeStart + t - c.end - 0.3) / 0.9)
+      // Eases away as the reveal opens onto the window.
+      let release = exp(-max(0, c.textFadeStart + t - c.revealStart) / 0.9)
       let sharpness = 1 - text.blur / c.maxTextBlur
       let breathe = 1 + 0.15 * sin(2 * .pi * (0.2 + 0.05 * Double(index)) * t)
       return pad(t, frequency: note, brightness: sharpness) * text.opacity * release * breathe * 0.045
-    }
-  }
-
-  let surfaceLength = c.end + s.tail - c.surfaceStart
-  for (index, note) in s.surfaceNotes.enumerated() {
-    mix.add(at: c.surfaceStart, for: surfaceLength, pan: index == 0 ? -0.15 : 0.15) { t in
-      let absolute = c.surfaceStart + t
-      let frame = surfaceFrame(time: absolute, config: c)
-      let release = exp(-max(0, absolute - c.end - 0.3) / 1.2)
-      return pad(t, frequency: note, brightness: frame.focus) * frame.presence * release * 0.06
-    }
-  }
-
-  // The name: a pop as each tile springs in, a higher one as each pops out
-  // into its letter, rising along the row.
-  if let brand = c.brand {
-    for i in 0 ..< brand.name.count {
-      let pan = -0.35 + 0.7 * Double(i) / Double(max(1, brand.name.count - 1))
-      let rise = Double(i) * 40
-      mix.add(at: brand.popIn(i), for: 0.2, pan: pan) { t in pop(t, frequency: 520 + rise) }
-      mix.add(at: brand.popOutTime(i), for: 0.2, pan: pan) { t in pop(t, frequency: 760 + rise) }
     }
   }
 
@@ -130,16 +94,6 @@ func drop(_ t: Double, frequency: Double, strength: Double) -> Double {
   let phase = 2 * .pi * frequency * (t + 0.6 * (t - glide * (1 - exp(-t / glide))))
   let body = sin(phase) + 0.25 * sin(2.76 * phase)
   return body * attackDecay(t, attack: 0.002, decay: 0.09 * (0.7 + 0.3 * strength)) * 0.3 * strength
-}
-
-/// A pop: a sine that drops sharply in pitch as it dies away, like a bubble.
-func pop(_ t: Double, frequency: Double) -> Double {
-  let fall = 0.03
-  // Pitch falls from `frequency` to a third of it; the phase is its integral.
-  let phase = 2 * .pi * frequency * (t / 3 + (2.0 / 3) * fall * (1 - exp(-t / fall)))
-  // Loud and crisp enough to cut through the bed: a fast attack, a bright
-  // second harmonic, a short body.
-  return (sin(phase) + 0.35 * sin(2 * phase)) * attackDecay(t, attack: 0.0008, decay: 0.05) * 1.1
 }
 
 /// The weight of the stone: a sub that falls from 58 to 38 Hz.

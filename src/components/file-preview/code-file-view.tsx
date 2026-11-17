@@ -3,6 +3,7 @@ import { File, Virtualizer, WorkerPoolContextProvider } from "@pierre/diffs/reac
 import type { LineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import type { FilePreviewInfo } from "../../../contracts/file-preview.ts";
 import { useTheme } from "@/lib/theme";
+import { useSurface } from "@/lib/surface-context";
 import { workerFactory } from "@/lib/diff-worker";
 import { CODE_HIGHLIGHTER_OPTIONS, CODE_THEMES } from "@/lib/code-highlighting";
 import { isCommentOutdated, quoteLines } from "@/lib/file-preview-actions";
@@ -19,10 +20,10 @@ const EMPTY_COMMENTS: FileComment[] = [];
 // otherwise paint its own background over ours.
 const CODE_UNSAFE_CSS = `
   :host {
-    --diffs-bg: var(--surface-1) !important;
-    --diffs-bg-buffer: var(--surface-1) !important;
-    --diffs-bg-context: var(--surface-1) !important;
-    --diffs-bg-context-gutter: var(--surface-1) !important;
+    --diffs-bg: var(--preview-surface) !important;
+    --diffs-bg-buffer: var(--preview-surface) !important;
+    --diffs-bg-context: var(--preview-surface) !important;
+    --diffs-bg-context-gutter: var(--preview-surface) !important;
     --diffs-fg: var(--foreground) !important;
   }
 `;
@@ -45,6 +46,7 @@ export function CodeFileView({
   onSendNow: (comment: FileComment) => void;
 }) {
   const { resolvedTheme } = useTheme();
+  const surface = useSurface();
   const text = info.text ?? "";
   const comments =
     usePreviewStore((state) => state.workspaces[workspaceKey]?.comments[info.path]) ??
@@ -131,7 +133,12 @@ export function CodeFileView({
     >
       <Virtualizer
         className="h-full w-full overflow-auto"
-        style={{ "--diffs-font-family": "var(--font-mono)" } as CSSProperties}
+        style={
+          {
+            "--diffs-font-family": "var(--font-mono)",
+            "--preview-surface": `var(--surface-${surface})`,
+          } as CSSProperties
+        }
       >
         <File
           file={file}

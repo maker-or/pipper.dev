@@ -666,7 +666,7 @@ const AskUserQuestions = forwardRef<HTMLDivElement, AskUserQuestionsProps>(
           ref={ref}
           className={cn(
             "w-full max-w-[520px] p-5 bg-card border border-border",
-            shape.container,
+            "rounded-xl",
             className,
           )}
           {...rest}
@@ -1123,7 +1123,7 @@ const AskUserQuestions = forwardRef<HTMLDivElement, AskUserQuestionsProps>(
           // bounds, so a button animating out (e.g. Continue on exit) is
           // clipped at the edge instead of visibly flying outside the card.
           "relative w-full max-w-[520px] overflow-hidden bg-card border border-border",
-          shape.container,
+          "rounded-xl",
           className,
         )}
         {...rest}

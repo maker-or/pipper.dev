@@ -11,21 +11,23 @@ private func rms(_ audio: StereoAudio, from a: Double, to b: Double) -> Double {
   return (sum / Double(last - first)).squareRoot()
 }
 
-@Test func theScoreLastsThroughTheHeldFrameAndRingsOut() {
+@Test func theScoreLastsThroughTheRevealAndRingsOut() {
   let config = IntroConfig()
   let audio = renderScore(config)
   #expect(audio.duration >= config.end + 2)
-  #expect(rms(audio, from: config.end - 0.2, to: config.end) > 0.01)
-  #expect(rms(audio, from: audio.duration - 0.05, to: audio.duration) < rms(audio, from: config.end - 0.2, to: config.end) / 4)
+  let opening = rms(audio, from: config.revealStart, to: config.revealStart + 0.4)
+  #expect(opening > 0.005)
+  #expect(rms(audio, from: audio.duration - 0.05, to: audio.duration) < opening / 4)
 }
 
-@Test func theMusicHoldsThroughTheSurfacingAndSwellsWithIt() {
+@Test func theWelcomeIsHeardAsItSharpensAndEasesAwayWithTheReveal() {
   let config = IntroConfig()
   let audio = renderScore(config)
-  let early = rms(audio, from: config.surfaceStart + 0.3, to: config.surfaceStart + 0.8)
-  let surfaced = rms(audio, from: config.surfaceEnd - 0.5, to: config.surfaceEnd)
-  #expect(early > 0.01)
-  #expect(surfaced > early)
+  // Swells in with the line…
+  let held = rms(audio, from: config.textFadeEnd + 0.3, to: config.textFadeEnd + 0.8)
+  #expect(held > 0.01)
+  // …and has eased away once the window is revealed.
+  #expect(rms(audio, from: config.revealEnd + 1.2, to: config.revealEnd + 1.7) < held / 2)
 }
 
 @Test func theScoreNeverClipsAndIsTheSameEveryTime() {
@@ -66,31 +68,9 @@ private func rms(_ audio: StereoAudio, from a: Double, to b: Double) -> Double {
   #expect(fronts.map(\.pulse.firm) == [true, false, false])
   #expect(fronts.map(\.time) == fronts.map(\.time).sorted())
   #expect(felt.filter { $0.pulse.kind == .settle }.count == 1)
-  // Once, softly, when the @ has surfaced, after everything else.
-  let surfaced = felt.filter { $0.pulse.kind == .surfaced }
-  #expect(surfaced.count == 1)
-  #expect(surfaced.first?.pulse.firm == false)
-  #expect(surfaced.first!.time >= felt.map(\.time).max()!)
-
   // Farther from the stone, the same front arrives later.
   let near = hapticPulses(at: [720, 50], from: 0, to: 0.5, geometry: g, config: config)
   let far = hapticPulses(at: [0, 900], from: 0, to: 0.5, geometry: g, config: config)
   #expect(near.contains { $0.kind == .front })
   #expect(!far.contains { $0.kind == .front })
-}
-
-@Test func eachBrandTileIsHeardAsItPopsInAndOut() throws {
-  let c = IntroConfig(version: .two)
-  let brand = try #require(c.brand)
-  let audio = renderScore(c)
-  var silent = c
-  silent.brand = nil
-  let without = renderScore(silent)
-  // A pop lands on every tile, in and out: clearly louder than the music
-  // would be there without the name.
-  for i in 0 ..< brand.name.count {
-    for at in [brand.popIn(i), brand.popOutTime(i)] {
-      #expect(rms(audio, from: at, to: at + 0.04) > rms(without, from: at, to: at + 0.04) * 1.8)
-    }
-  }
 }

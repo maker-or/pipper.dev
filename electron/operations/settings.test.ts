@@ -170,7 +170,7 @@ describe("settings", () => {
     expect(narrower.status).toBe("done");
     const wider = await callAsAgent(
       updateSettings,
-      { agent_tasks: { allowed_agents: ["codex", "gemini"] } },
+      { agent_tasks: { allowed_agents: ["codex", "claude"] } },
       agent(),
     );
     expect(wider.status).toBe("needs_grant");

@@ -96,7 +96,6 @@ const SETUP_GUIDE_DOC_IDS: Record<string, string> = {
   "claude-agent-acp": "claude",
   "opencode-acp": "opencode",
   "grok-acp": "grok",
-  "gemini-acp": "gemini",
   "copilot-acp": "copilot",
   "antigravity-acp": "antigravity",
   "devin-acp": "devin",

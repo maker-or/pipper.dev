@@ -26,7 +26,7 @@ interface AgentInstanceRow {
 /**
  * The environment variable that points a given CLI at an isolated credential
  * root. Providers absent from this map are isolated with explicit keys/tokens
- * instead of a directory (e.g. Cursor's CURSOR_API_KEY, Gemini's API key).
+ * instead of a directory (e.g. Cursor's CURSOR_API_KEY).
  */
 export const PROFILE_ENV_BY_DRIVER: Record<string, string> = {
   "codex-acp": "CODEX_HOME",
@@ -43,7 +43,6 @@ export const PROFILE_ENV_BY_DRIVER: Record<string, string> = {
  */
 export const AUTH_ENV_BY_DRIVER: Record<string, string> = {
   "cursor-acp": "CURSOR_API_KEY",
-  "gemini-acp": "GEMINI_API_KEY",
 };
 
 /**
@@ -57,7 +56,6 @@ const CREDENTIAL_ENV_BY_DRIVER: Record<string, string[]> = {
   "claude-agent-acp": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
   "grok-acp": ["XAI_API_KEY"],
   "copilot-acp": ["GH_TOKEN", "GITHUB_TOKEN"],
-  "gemini-acp": ["GEMINI_API_KEY", "GOOGLE_API_KEY"],
   "cursor-acp": ["CURSOR_API_KEY"],
   "antigravity-acp": ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS"],
 };

@@ -64,16 +64,11 @@ export const BROWSER_SERVER_INSTRUCTIONS = [
   "This client (Pipper) shows inline visual widgets in the user's thread and gives you a headless browser.",
   "",
   "Widgets (default for reports and analysis):",
-  `- If the user asks for any of these, your answer must include a widget: ${WIDGET_TRIGGERS.join("; ")}. This applies whether or not they say "visual", "inline" or "widget".`,
-  "- Also use a widget whenever your answer has numbers, scores, counts, rankings, steps or structure that read better as cards, tables, bars or a diagram.",
-  "- Steps: call widget_guide once per conversation, draft the widget, call preview_widget until it reports clean, then call show_widget. The widget appears in the thread at the point in your reply where you call show_widget.",
-  "- show_widget is the only way to put a visual in front of the user. Do not write an HTML file, Markdown report or other artifact for the same content, and do not link one instead of showing the widget, unless the user explicitly asks for a file. If they do ask for a file, write it and also show the widget.",
-  "- Keep explanations in your reply text, not inside the widget. After show_widget, don't describe what the widget shows; add only what the visual can't say.",
-  "- To change a widget you showed, call update_widget with its id instead of showing a new one.",
-  "- Skip widgets only for short factual answers, conversation, code the user will copy, and edits to files.",
+  `- Your answer must include a widget when the user asks for any of these, whether or not they say "visual" or "widget": ${WIDGET_TRIGGERS.join("; ")}. Also whenever numbers, rankings, steps or structure read better as cards, tables, bars or a diagram. Skip it for short factual answers, conversation, code the user will copy and file edits.`,
+  "- Call widget_guide once per conversation, preview_widget until clean, then show_widget at the point in your reply where the visual belongs. It is the only way to show a visual: don't write an HTML or Markdown file instead unless the user asks for a file, and then show the widget too.",
+  "- Explain in your reply, not inside the widget, and don't describe what it shows. Change a widget with update_widget.",
   "",
-  "Browser:",
-  "- Use browser_open, browser_snapshot, browser_click, browser_type and browser_screenshot to read web pages, check a local dev server (localhost works) or test a web app. Each session has its own private pages.",
+  "Browser: browser_open, browser_snapshot, browser_click, browser_type and browser_screenshot read pages (localhost works) and test web apps, in pages private to your session.",
 ].join("\n");
 
 export const BROWSER_TOOLS: McpToolDefinition[] = [

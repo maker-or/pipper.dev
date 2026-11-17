@@ -3,7 +3,7 @@ import Foundation
 import ImageIO
 import LaunchIntroCore
 
-/// pipper-launch-intro [--intro-version 1|2] [--text <line>] [--font-size <units>] [--start-at <s>]
+/// pipper-launch-intro [--text <line>] [--font-size <units>] [--start-at <s>]
 ///                     [--silent] [--no-haptics]
 ///   Plays the intro over the main display and reports on stdout.
 ///
@@ -11,7 +11,7 @@ import LaunchIntroCore
 ///   Writes the score, to listen to it without the overlay.
 ///
 /// pipper-launch-intro --render-frames <dir> --times 0,1.5,3 [--size 2880x1800]
-///                     [--background <image>] [--screen <image>] [--layout <json>]
+///                     [--background <image>] [--screen <image>]
 ///   Writes frames as PNGs. --background is the stage (the wallpaper); the
 ///   frames are composited over --screen, what was on screen before the first
 ///   ripple, which defaults to the background itself.
@@ -26,9 +26,6 @@ struct Options {
   var silent = false
   var haptics = true
   var audioPath: String?
-  /// For --render-frames: a window to draw, as the host's `layout` JSON, in
-  /// the rendered frame's pixels.
-  var layout: String?
 
   init(_ arguments: [String]) {
     var iterator = arguments.dropFirst().makeIterator()
@@ -41,7 +38,6 @@ struct Options {
       let value = iterator.next() ?? ""
       switch flag {
       case "--render-audio": audioPath = value
-      case "--intro-version": config.use(IntroConfig.Version(rawValue: Int(value) ?? 1) ?? .one)
       case "--text": config.text = value
       case "--font-size": config.fontSize = Double(value) ?? config.fontSize
       case "--start-at": startAt = Double(value) ?? 0
@@ -49,7 +45,6 @@ struct Options {
       case "--times": times = value.split(separator: ",").compactMap { Double($0) }
       case "--background": background = value
       case "--screen": screen = value
-      case "--layout": layout = value
       case "--size":
         let parts = value.split(separator: "x").compactMap { Int($0) }
         if parts.count == 2 { size = (parts[0], parts[1]) }
@@ -78,10 +73,6 @@ func renderFrames(_ options: Options, to directory: String) -> Int32 {
       return try renderer.makeTexture(from: fitted)
     }
     renderer.backdrop = try texture(options.background)
-    if let path = options.layout {
-      let json = try String(contentsOfFile: path, encoding: .utf8)
-      renderer.drawing = WindowDrawing(command: "layout \(json)", origin: .zero, scale: 1, config: options.config)
-    }
     let screen = try texture(options.screen) ?? renderer.backdrop
     try FileManager.default.createDirectory(atPath: directory, withIntermediateDirectories: true)
     for time in options.times {
@@ -115,16 +106,10 @@ if let path = options.audioPath {
 let app = NSApplication.shared
 app.setActivationPolicy(.accessory)
 var controller: OverlayController?
-/// Layouts that arrive before the overlay exists, applied once it does.
-var pendingLayouts: [String] = []
 
 listenForCommands({ command in
   if command == "dismiss" {
     controller?.dismiss()
-  } else if let target = CloseTarget(command: command) {
-    controller?.close(into: target)
-  } else if command.hasPrefix("layout ") {
-    if let controller { controller.draw(layout: command) } else { pendingLayouts.append(command) }
   }
 }, onClose: { exit(0) })
 
@@ -164,8 +149,6 @@ Task { @MainActor in
     )
     controller = overlay
     overlay.start()
-    for layout in pendingLayouts { overlay.draw(layout: layout) }
-    pendingLayouts = []
   } catch {
     emit("error", ["message": String(describing: error)])
     exit(1)

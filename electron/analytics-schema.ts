@@ -1,3 +1,6 @@
+import type { AgentStartFailureReason } from "./agents/start-failure.ts";
+import type { StartRecoveryAction } from "./agents/start-recovery.ts";
+
 export type AnalyticsWindowType = "launch" | "main" | "background";
 
 export type AnalyticsSource =
@@ -47,7 +50,9 @@ export type AnalyticsEventName =
   | "agent_connected"
   | "agent_connection_failed"
   | "agent_switched"
-  | "onboarding_step";
+  | "onboarding_step"
+  // An agent failed to start and Pipper tried a repair (agents/start-recovery.ts).
+  | "agent_start_recovery";
 
 export interface AnalyticsBaseProperties {
   app_version: string;
@@ -71,6 +76,30 @@ export interface AnalyticsProperties {
   files_changed_count?: number;
   error_type?: string;
   error_code?: string;
+  /** agent_connection_failed: why the agent didn't start (see agents/start-failure.ts). */
+  failure_reason?: AgentStartFailureReason;
+  /** agent_connection_failed: the agent process's exit code, when it exited. */
+  exit_code?: number;
+  /**
+   * agent_connected / agent_connection_failed: the first launch failed with
+   * this reason and `recovery_action` was tried (agents/start-recovery.ts).
+   * On agent_connected the retry worked; on agent_connection_failed it didn't.
+   */
+  recovered_from?: AgentStartFailureReason;
+  recovery_action?: StartRecoveryAction;
+  /** onboarding_step agent_pick_completed: driver ids the user picked. */
+  selected_agents?: string[];
+  selected_agent_count?: number;
+  /** Whether the agent ran on the driver's default account or an added one. */
+  agent_account?: "default" | "additional";
+  /** agent_start_recovery: whether the repair got the agent started. */
+  recovery_outcome?: "recovered" | "failed";
+  /** agent_start_recovery: false when the repair found nothing to change. */
+  recovery_retried?: boolean;
+  /** agent_start_recovery: why the retry failed too (outcome "failed"). */
+  final_failure_reason?: AgentStartFailureReason;
+  /** agent_start_recovery: a chat connection, or a readiness check. */
+  start_context?: "connection" | "readiness_check";
   success?: boolean;
 
   // v2 — agent identity (also promoted onto base properties when available)

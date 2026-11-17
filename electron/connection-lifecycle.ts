@@ -11,6 +11,16 @@ import type {
 } from "../contracts/monitor.ts";
 import type { AcpAgentDescriptor } from "../contracts/acp.ts";
 import { resolveAgentSpawn } from "./agents/registry.ts";
+import { classifyAgentStartFailure, type AgentStartFailureReason } from "./agents/start-failure.ts";
+import {
+  applyStartRecovery,
+  npxPackageFor,
+  planStartRecovery,
+  withNpxPackageLock,
+  type StartRecoveryAction,
+  type StartRecoveryReport,
+} from "./agents/start-recovery.ts";
+import { shellPathReady } from "./shell-path.ts";
 import {
   ANTIGRAVITY_INSTALL_WAIT_MS,
   waitForAntigravityInstall,
@@ -131,11 +141,37 @@ export interface LiveConnection {
  * `acquire`. `close` abandons it: the attempt never becomes the cached
  * connection, and its process (once spawned) is terminated.
  */
+/** A failed agent start, as reported to analytics (no raw text). */
+export interface AgentStartFailure {
+  errorName?: string;
+  reason: AgentStartFailureReason;
+  exitCode: number | null;
+  /** The repair tried before giving up, if any. */
+  recovery?: AgentStartRecovery;
+}
+
+/** A repair-and-retry made while an agent was starting. */
+export interface AgentStartRecovery {
+  action: StartRecoveryAction;
+  /** Why the first launch failed. */
+  from: AgentStartFailureReason;
+  /** The first launch's exit code, when it exited. */
+  exitCode: number | null;
+  /** When the first launch failed. */
+  failedAt: number;
+  /** False when the repair found nothing to change, so no retry was made. */
+  retried: boolean;
+}
+
 interface SpawnAttempt {
   promise: Promise<LiveConnection>;
   child: ChildProcessWithoutNullStreams | null;
   connectionId: string | null;
   abandoned: boolean;
+  /** The process's stderr so far, read locally to classify a failed start. */
+  readStderr?: () => string;
+  /** Set when the first launch failed and a repair-and-retry was made. */
+  recovery?: AgentStartRecovery;
 }
 
 /** Client capabilities the manager hosts for every spawned agent process. */
@@ -168,8 +204,15 @@ export interface ConnectionLifecycleDeps {
   /** Drop cached sessions whose agent process died or transport closed. */
   invalidateAgentSessions(agentId: string): void;
   /** Analytics fire for first-time spawns only (deduped callers stay silent). */
-  onConnected?(agentId: string, connectDurationMs: number, installKind?: string): void;
-  onConnectFailed?(agentId: string, errorName?: string): void;
+  onConnected?(
+    agentId: string,
+    connectDurationMs: number,
+    installKind?: string,
+    recovery?: AgentStartRecovery,
+  ): void;
+  onConnectFailed?(agentId: string, failure: AgentStartFailure): void;
+  /** A start that needed a repair, once its outcome is known. */
+  onStartRecovery?(agentId: string, report: StartRecoveryReport): void;
 }
 
 /**
@@ -242,7 +285,7 @@ export class ConnectionLifecycle {
         connectionId: null,
         abandoned: false,
       };
-      created.promise = this.spawnAndInitialize(descriptor, created).finally(() => {
+      created.promise = this.startWithRecovery(descriptor, created).finally(() => {
         // close() may already have replaced this attempt with a newer one.
         if (this.spawning.get(descriptor.id) === created) this.spawning.delete(descriptor.id);
       });
@@ -258,13 +301,33 @@ export class ConnectionLifecycle {
       if (attempt.abandoned) throw new Error(`${descriptor.id} was closed while it was starting`);
       this.connections.set(descriptor.id, live);
       if (isNewSpawn) {
-        this.deps.onConnected?.(descriptor.id, Date.now() - spawnStartedAt, descriptor.installKind);
+        this.deps.onConnected?.(
+          descriptor.id,
+          Date.now() - spawnStartedAt,
+          descriptor.installKind,
+          attempt.recovery,
+        );
+        if (attempt.recovery) this.reportRecovery(descriptor.id, attempt.recovery, "recovered");
       }
       return live;
     } catch (err) {
       // A spawn cut short by shutdown or close is not a connection failure.
       if (isNewSpawn && !this.terminated && !attempt.abandoned) {
-        this.deps.onConnectFailed?.(descriptor.id, err instanceof Error ? err.name : undefined);
+        const exitCode = attempt.child?.exitCode ?? null;
+        const reason = classifyAgentStartFailure({
+          error: err,
+          stderr: attempt.readStderr?.(),
+          exitCode,
+        });
+        this.deps.onConnectFailed?.(descriptor.id, {
+          errorName: err instanceof Error ? err.name : undefined,
+          reason,
+          exitCode,
+          recovery: attempt.recovery,
+        });
+        if (attempt.recovery) {
+          this.reportRecovery(descriptor.id, attempt.recovery, "failed", reason);
+        }
       }
       // Killing an abandoned handshake surfaces as a transport error; report why.
       if (attempt.abandoned && !this.terminated) {
@@ -272,6 +335,24 @@ export class ConnectionLifecycle {
       }
       throw err;
     }
+  }
+
+  private reportRecovery(
+    agentId: string,
+    recovery: AgentStartRecovery,
+    outcome: "recovered" | "failed",
+    finalFailureReason?: AgentStartFailureReason,
+  ): void {
+    this.deps.onStartRecovery?.(agentId, {
+      failureReason: recovery.from,
+      action: recovery.action,
+      outcome,
+      retried: recovery.retried,
+      // A repair that found nothing to change ends with the first failure.
+      ...(outcome === "failed" && recovery.retried && { finalFailureReason }),
+      exitCode: recovery.exitCode,
+      durationMs: Date.now() - recovery.failedAt,
+    });
   }
 
   /**
@@ -327,9 +408,64 @@ export class ConnectionLifecycle {
     this.deps.invalidateAgentSessions(agentId);
   }
 
+  /**
+   * Start an agent; when the launch fails for a reason a repair can fix (see
+   * agents/start-recovery.ts), repair it and launch once more. Waits for the
+   * login-shell PATH first, and launches of one npx package take turns so
+   * parallel installs can't corrupt the npx cache.
+   */
+  private async startWithRecovery(
+    descriptor: AcpAgentDescriptor,
+    attempt: SpawnAttempt,
+  ): Promise<LiveConnection> {
+    await shellPathReady();
+    const npmPackage = npxPackageFor(descriptor);
+    return withNpxPackageLock(npmPackage, async () => {
+      try {
+        return await this.spawnAndInitialize(descriptor, attempt);
+      } catch (err) {
+        if (this.terminated || attempt.abandoned) throw err;
+        const stderr = attempt.readStderr?.();
+        const reason = classifyAgentStartFailure({
+          error: err,
+          stderr,
+          exitCode: attempt.child?.exitCode ?? null,
+        });
+        const action = planStartRecovery({
+          reason,
+          stderr,
+          message: err instanceof Error ? err.message : String(err),
+          npmPackage,
+        });
+        if (!action) throw err;
+        attempt.recovery = {
+          action,
+          from: reason,
+          exitCode: attempt.child?.exitCode ?? null,
+          failedAt: Date.now(),
+          retried: false,
+        };
+        console.warn(`[acp-agent:${descriptor.id}] start failed (${reason}); trying ${action}`);
+        if (!(await applyStartRecovery(action, { npmPackage }))) throw err;
+        if (this.terminated || attempt.abandoned) throw err;
+        attempt.recovery.retried = true;
+        // A PATH refresh can turn "not installed" into an npx launch: take
+        // that package's turn too (never the one already held).
+        const retryPackage = npxPackageFor(descriptor);
+        const retry = () =>
+          this.spawnAndInitialize(descriptor, attempt, action === "retry_longer" ? 2 : 1);
+        return retryPackage && retryPackage !== npmPackage
+          ? withNpxPackageLock(retryPackage, retry)
+          : retry();
+      }
+    });
+  }
+
   private async spawnAndInitialize(
     descriptor: AcpAgentDescriptor,
     attempt: SpawnAttempt,
+    /** Multiplies the handshake budget (a retry after a timeout gets more). */
+    timeoutScale = 1,
   ): Promise<LiveConnection> {
     if (descriptor.id === "antigravity-acp") {
       // First use downloads Google's server (~107 MiB). Bound the wait to the
@@ -371,6 +507,7 @@ export class ConnectionLifecycle {
       const text = buf.toString("utf8");
       stderrTail = `${stderrTail}${text}`.slice(-16_384);
     };
+    attempt.readStderr = () => stderrTail;
 
     child.stderr.on("data", (buf: Buffer) => {
       appendStderr(buf);
@@ -502,7 +639,9 @@ export class ConnectionLifecycle {
             version: this.deps.clientVersion,
           },
         }),
-        /\bnpx(?:\.cmd)?$/i.test(command) ? ACP_NPX_INIT_TIMEOUT_MS : ACP_SWITCH_PHASE_TIMEOUT_MS,
+        (/\bnpx(?:\.cmd)?$/i.test(command)
+          ? ACP_NPX_INIT_TIMEOUT_MS
+          : ACP_SWITCH_PHASE_TIMEOUT_MS) * timeoutScale,
         "agent/initialize",
       );
     } catch (err) {

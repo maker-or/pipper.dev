@@ -9,33 +9,27 @@ import { ADD_CONNECTOR_INPUT } from "../connectors/connector-requests.ts";
 
 export const AGENT_TASK_SERVER_NAME = "pipper-agents";
 
+/**
+ * What every Claude request carries about this server. Claude Code cuts server
+ * instructions at about 2,000 characters, so only the rules for when to reach
+ * for a tool live here; how to use each tool is in its description, which the
+ * model reads before calling it. A test keeps this under the limit.
+ */
 export const AGENT_TASK_SERVER_INSTRUCTIONS = [
   "This client (Pipper) shows a next-step card under your reply, and lets you start other coding agents as tasks.",
   "",
   "Ending a turn:",
-  "- In every turn where you changed files, ran commands or did multi-step work, call wrap_up once when the work is done, then write your closing message. Skip it for short answers and pure conversation.",
-  "- Also skip it when a Pipper tool returned awaiting_confirmation this turn: the confirm card Pipper shows is the end of the turn, and a recap would only repeat it. Write one short line saying it's waiting for the user, and stop.",
+  "- In every turn where you changed files, ran commands or did multi-step work, call wrap_up once when the work is done, then write your closing message. Skip it for short answers and conversation, and when a Pipper tool returned awaiting_confirmation this turn: say in one line that it's waiting for the user, and stop.",
   "- recap: two or three sentences on what is now true, including what is not done or not verified. It is also the thread's status, so it must make sense on its own.",
-  "- ask and actions: only when the user has a decision to make or a step to take. One short question, and one or two buttons that answer it, your recommendation first. Leave the question out of your closing message; the card shows it.",
-  "- blocked: true when you can't continue without the answer.",
+  "- ask and actions: only when the user has a decision to make or a step to take. One short question, one or two buttons that answer it, your recommendation first. Leave the question out of your closing message. blocked: true when you can't continue without the answer.",
   "",
-  "Threads (when start_subthread is listed). Every thread is one the user can see and talk to; address them by thread_id.",
-  '- Pick the tool by who the work is for. The user asks for a new, separate or another thread ("start a thread for X", "open a thread that does Y"): create_thread, never start_subthread. You hand off part of your own job and need the result back: start_subthread.',
-  "- start_subthread runs another agent on a piece of your job in a thread nested under yours, and returns at once. Keep working, or end your turn: when a subthread stops, Pipper adds a note to your thread with its receipt, after your current turn if one is running. Don't poll; get_thread shows a subthread's status if you need it sooner.",
-  "- A subthread shares none of your context. Its brief must say everything: goal, relevant paths, constraints, and what you expect back. Use done_when for checks that define success.",
-  '- workspace: "shared" (default) works in your folder; use it for reading, research and small edits. Use "new" when subthreads change files in parallel, so each gets its own worktree and branch.',
-  "- A receipt's report comes from the subthread; files_changed and tool_calls come from Pipper. Check the facts before relying on the report.",
-  '- create_thread starts a top-level thread the user owns, in its own tab. It isn\'t nested, has no depth limit and doesn\'t report back, so don\'t wait for it; tell the user it started. initiation "user_asked" only when the user asked for it in words; otherwise "propose": nothing runs until the user presses Start on the card Pipper shows.',
-  "- message_thread talks to any thread: a subthread you started, the thread that started you, or another thread in list_threads. Pipper states who sent it. It never waits for a reply; the reply arrives as a message.",
-  "- move_thread moves your own thread (or one you started) to another workspace from its next turn.",
-  "- Don't start a subthread for something you can do in a few tool calls yourself.",
-  "- update_settings changes Pipper's settings only when the user asks for it. Never widen what agents can do on your own initiative.",
+  "Threads (when start_subthread is listed):",
+  "- The user asks for a new, separate or another thread: create_thread, never start_subthread. You hand off part of your own job and need the result back: start_subthread. Not for what a few tool calls can do.",
+  "- A subthread shares none of your context, so its brief must say everything. Don't poll: Pipper adds its receipt to your thread when it stops. Check the receipt's files_changed and tool_calls before relying on its report.",
   "",
-  "Connectors (other services' tools, such as Linear or Sentry, connected once in Pipper for every thread):",
-  "- When the user asks which services, connectors or integrations you have, call get_settings and answer from its connectors and connector_catalog, not from your tool list or installed CLIs: your tools only show connectors that were on when this thread started. Say which are connected, which need a sign-in, and which Pipper can connect, and offer add_connector for one they want.",
-  "- When the user asks for something a service's tools would do and you don't have them, don't give up or ask for an API key: call get_settings to see the user's connectors and Pipper's catalog, then add_connector. The user connects it from a card; you get a note when its tools are ready.",
-  "- A connector with status needs_sign_in has no working tools until the user signs in again: call add_connector for it, which shows them the sign-in card.",
-  "- Never ask the user to paste a key, token or password into the chat; the card takes it.",
+  "Connectors (services such as Linear or Sentry, connected once in Pipper):",
+  "- When the user asks which services or integrations you have, or wants work a service's tools would do and you lack them, call get_settings, then add_connector. Your tool list only shows connectors that were on when this thread started.",
+  "- Never ask the user to paste a key, token or password into the chat; the card takes it. Change settings with update_settings only when the user asks, and never widen what agents can do on your own.",
 ].join("\n");
 
 export const WRAP_UP_TOOL: McpToolDefinition = {
@@ -106,8 +100,11 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
       description:
         "Start another coding agent on a piece of your job in a new thread nested under yours. " +
         "Returns immediately with thread_id; the subthread runs in the background. When it " +
-        "stops, Pipper sends your thread a note with its receipt. Not for when the user asks " +
-        "for a new or separate thread: that's create_thread.\n\nAvailable agents:\n" +
+        "stops, Pipper sends your thread a note with its receipt; get_thread shows its status " +
+        "sooner. Not for when the user asks for a new or separate thread: that's create_thread. " +
+        'workspace "shared" (default) works in your folder: for reading, research and small ' +
+        'edits. Use "new" when subthreads change files in parallel, so each gets its own ' +
+        "worktree and branch. Use done_when for checks that define success.\n\nAvailable agents:\n" +
         catalog,
       inputSchema: {
         type: "object",
@@ -163,7 +160,8 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
         "For work that stands on its own (its own branch or PR, something they'll open and " +
         'steer themselves). initiation "user_asked" when the user asked for it in words; ' +
         'otherwise "propose", and the user decides. For a piece of your own job, use ' +
-        "start_subthread. The thread sees only your brief. Returns at once.\n\n" +
+        "start_subthread. The thread sees only your brief. Returns at once: don't wait for it, " +
+        "tell the user it started.\n\n" +
         "Available agents:\n" +
         catalog,
       inputSchema: toolInputSchema(CREATE_THREAD_INPUT),
@@ -262,7 +260,9 @@ export function agentTaskToolDefinitions(agents: AcpAgentDescriptor[]): McpToolD
         'with status "awaiting_user"; end your turn or carry on. "connected" means the user ' +
         "already has it. Use catalog when the service is listed; otherwise name with url (a " +
         "remote MCP server) or command (a local one). Only when the user asked for the work " +
-        "it's for, in a turn they started.\n\nCatalog:\n" +
+        "it's for, in a turn they started. A connector with status needs_sign_in has no " +
+        "working tools until the user signs in again: call add_connector for it to show the " +
+        "sign-in card.\n\nCatalog:\n" +
         CONNECTOR_CATALOG.map(
           (entry) => `- ${entry.id} (${entry.name}): ${entry.description}`,
         ).join("\n"),

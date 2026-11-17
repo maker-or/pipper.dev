@@ -13,14 +13,15 @@ test("a project moves anywhere in the rail, and stays put at either end", () => 
   expect(moveItem(list, 9, 0)).toEqual(list);
 });
 
-test("a renamed project keeps its place and a new one joins the end", () => {
+test("a renamed project keeps its place and a new one goes to the top", () => {
   const list = [project("a"), project("b"), project("c")];
   expect(upsertProject(list, project("b", "renamed")).map((item) => item.name)).toEqual([
     "a",
     "renamed",
     "c",
   ]);
-  expect(upsertProject(list, project("d")).map((item) => item.id)).toEqual(["a", "b", "c", "d"]);
+  // The same place the saved order gives it, so a restart doesn't move it.
+  expect(upsertProject(list, project("d")).map((item) => item.id)).toEqual(["d", "a", "b", "c"]);
 });
 
 test("the rail fills its height with five or six tiles and scrolls the rest", () => {

@@ -156,6 +156,9 @@ import { isMonitorEnabled } from "./monitor/enabled.ts";
 import { emptyMonitorRecordedSession } from "./monitor/timeline.ts";
 import { buildMonitorInventory } from "./monitor/inventory.ts";
 import { probeAgentById } from "./agents/handshake-probe.ts";
+import { getAgentDescriptor, selectedDriverIds } from "./agents/registry.ts";
+import { startRecoveryProperties } from "./agents/start-recovery.ts";
+import { agentAnalyticsIdentity } from "./analytics-sanitize.ts";
 import {
   broadcastOpenTabsChanged,
   closeThreadTab,
@@ -170,7 +173,9 @@ import {
 } from "./open-tabs";
 import { isActivationSuperseded } from "./activation.ts";
 import { activateProjectSelection } from "./project-activation.ts";
+import { parseOpenFolderLink, projectForFolder } from "./open-folder-link.ts";
 import { checkGit, installGit, prependStandardPaths } from "./dependency-installer";
+import { shellPathReady } from "./shell-path.ts";
 import {
   captureAnalytics,
   captureAnalyticsException,
@@ -191,19 +196,10 @@ import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
 import {
-  INTRO_LAYOUT_SCRIPT,
-  LAUNCH_INTRO_VERSIONS,
-  launchIntroArgs,
-  macWindowCornerRadius,
-  introWindowLayout,
-  placeIntroLayout,
   resolveLaunchIntroHelperPath,
   startFirstLaunchIntro,
   startLaunchIntro,
-  type LaunchIntroCloseTarget,
   type LaunchIntroSession,
-  type MeasuredIntroPage,
-  type LaunchIntroVersion,
 } from "./launch-intro.ts";
 import type { RemoteAccessController } from "./remote-access.ts";
 import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
@@ -217,6 +213,9 @@ import type {
 
 // Initialize PATH prepend early for child process resolutions
 prependStandardPaths();
+// Then the user's login-shell PATH (nvm, Volta, fnm…), which a Finder/Dock
+// launch doesn't get. Agent launches wait for it.
+void shellPathReady();
 
 import { getPipperLibraryPath } from "./paths";
 import { LauncherUpdateManager } from "./launcher-update-manager";
@@ -863,9 +862,11 @@ async function consumePendingSiriRequests(): Promise<void> {
 }
 
 /**
- * Route a `pipper://siri/<requestId>` deep link (opened by the Swift
- * StartThreadIntent): focus the main window, consume the staged request, and
- * land the user on the new thread. Returns true when the URL was handled.
+ * Route a `pipper://` deep link. `pipper://open?path=<folder>` opens a folder
+ * as the active project (electron/open-folder-link.ts). `pipper://siri/<id>`
+ * (opened by the Swift StartThreadIntent) focuses the main window, consumes
+ * the staged request, and lands the user on the new thread. Returns true when
+ * the URL was handled.
  */
 async function handlePipperDeepLink(url: string): Promise<boolean> {
   let parsed: URL;
@@ -874,7 +875,28 @@ async function handlePipperDeepLink(url: string): Promise<boolean> {
   } catch {
     return false;
   }
-  if (parsed.protocol !== "pipper:" || !SIRI_ENABLED) return false;
+  if (parsed.protocol !== "pipper:") return false;
+  const folder = parseOpenFolderLink(parsed);
+  if (folder) {
+    if (!agentManager) {
+      // Cold launch: queued like the Siri links below.
+      if (!pendingDeepLinks.includes(url)) pendingDeepLinks.push(url);
+      return true;
+    }
+    if (!getAuthenticatedUserForLaunch()) {
+      console.warn("[Main] Ignored pipper://open: sign in is required before opening a project.");
+      return false;
+    }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+    const project = projectForFolder(folder, { listProjects, createProject });
+    await activateProjectAndAnnounce(project.id);
+    return true;
+  }
+  if (!SIRI_ENABLED) return false;
   const match = /^siri\/([A-Za-z0-9-]{1,128})\/?$/.exec(`${parsed.host}${parsed.pathname}`);
   if (!match?.[1]) return false;
   if (!agentManager) {
@@ -1216,6 +1238,28 @@ function requireAuthenticatedUserForLaunch() {
   const user = getAuthenticatedUserForLaunch();
   if (!user) throw new Error("Sign in is required before opening a project.");
   return user;
+}
+
+/** Make `projectId` the active project and tell every window, as a sidebar click does. */
+async function activateProjectAndAnnounce(projectId: string): Promise<void> {
+  const project = getProject(projectId);
+  if (!project) {
+    throw new Error(`Project not found: ${projectId}`);
+  }
+  try {
+    const { superseded } = await activateProjectSelection({
+      projectId,
+      getActiveProjectId,
+      setActiveProjectId,
+      activate: (id) => requireAgentManager().activateProject(id),
+    });
+    // A newer click took over; it announces its own project.
+    if (superseded) return;
+  } catch (err) {
+    console.error(`[Main] Failed to activate project ${projectId} in agent manager:`, err);
+    throw err;
+  }
+  broadcastToWindows("projects:activeChanged", projectId);
 }
 
 async function prepareBenchmarkLaunchState(): Promise<string | null> {
@@ -1644,8 +1688,8 @@ let launchIntro: LaunchIntroSession | null = null;
  */
 const introsEndedByWindow = new WeakSet<LaunchIntroSession>();
 
-/** Replays the native launch intro on demand (dock menu). No first-launch gating. */
-function replayLaunchIntro(version: LaunchIntroVersion): void {
+/** Replays the native launch intro on demand (dev Dock menu). No first-launch gating. */
+function replayLaunchIntro(): void {
   if (!LAUNCH_INTRO_ENABLED) return;
   const helperPath = resolveLaunchIntroHelperPath({
     isPackaged: app.isPackaged,
@@ -1660,7 +1704,7 @@ function replayLaunchIntro(version: LaunchIntroVersion): void {
   // A replay is the whole first launch: a fresh onboarding window loads
   // hidden behind the intro, which draws it and hands over to it, so it ends
   // on the first onboarding step whatever was open before.
-  const session = startLaunchIntro({ helperPath, args: launchIntroArgs(version) });
+  const session = startLaunchIntro({ helperPath });
   launchIntro = session;
   if (launchWindow && !launchWindow.isDestroyed()) launchWindow.destroy();
   createLaunchWindow("onboarding");
@@ -1673,80 +1717,6 @@ function replayLaunchIntro(version: LaunchIntroVersion): void {
     session.dismiss();
     if (launchWindow && !launchWindow.isDestroyed()) launchWindow.show();
   });
-}
-
-/** Reads the page's background at the top of the window as 0–255 RGB. */
-const PAGE_BACKGROUND_SCRIPT = `(() => {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  let el = document.elementFromPoint(innerWidth / 2, Math.min(24, innerHeight - 1));
-  for (; el && ctx; el = el.parentElement) {
-    ctx.clearRect(0, 0, 1, 1);
-    ctx.fillStyle = getComputedStyle(el).backgroundColor;
-    ctx.fillRect(0, 0, 1, 1);
-    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
-    if (a === 255) return [r, g, b];
-  }
-  return null;
-})()`;
-
-/**
- * Measures the hidden launch window until its onboarding picker has loaded
- * and holds still, then gives it to the intro to draw. Gives up quietly
- * after a few seconds: the intro then ends as before.
- */
-async function sendIntroLayout(
-  intro: LaunchIntroSession,
-  win: BrowserWindow | null,
-  playing: () => boolean,
-): Promise<void> {
-  let previous = "";
-  for (let attempt = 0; attempt < 30 && win && !win.isDestroyed() && playing(); attempt++) {
-    try {
-      const page = (await win.webContents.executeJavaScript(
-        INTRO_LAYOUT_SCRIPT,
-        true,
-      )) as MeasuredIntroPage;
-      const layout = placeIntroLayout({
-        page,
-        windowBounds: win.getBounds(),
-        contentBounds: win.getContentBounds(),
-        zoom: win.webContents.getZoomFactor(),
-        radius: macWindowCornerRadius(os.release()),
-      });
-      const key = layout ? JSON.stringify(layout) : "";
-      if (layout && key === previous) {
-        intro.drawWindow(layout);
-        return;
-      }
-      previous = key;
-    } catch (error) {
-      console.warn("[LaunchIntro] could not measure the launch window:", error);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-}
-
-/** Where the first-launch intro ends: the launch window's frame and colour. */
-async function launchIntroCloseTarget(win: BrowserWindow): Promise<LaunchIntroCloseTarget> {
-  let color: LaunchIntroCloseTarget["color"] = null;
-  try {
-    const read = await Promise.race([
-      win.webContents.executeJavaScript(PAGE_BACKGROUND_SCRIPT, true) as Promise<unknown>,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
-    ]);
-    if (
-      Array.isArray(read) &&
-      read.length === 3 &&
-      read.every((value) => typeof value === "number" && value >= 0 && value <= 255)
-    ) {
-      color = read as [number, number, number];
-    }
-  } catch (error) {
-    console.warn("[LaunchIntro] could not read the launch window's colour:", error);
-  }
-  return { ...win.getBounds(), radius: macWindowCornerRadius(os.release()), color };
 }
 
 function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void {
@@ -1779,15 +1749,6 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
   });
 
   launchWindow = created;
-  // The intro needs this window's frame early; the heading and cards follow
-  // once the page has loaded.
-  launchIntro?.drawWindow(
-    introWindowLayout(
-      created.getBounds(),
-      macWindowCornerRadius(os.release()),
-      created.getBackgroundColor(),
-    ),
-  );
 
   created.on("ready-to-show", () => {
     console.log("[Main] launchWindow ready-to-show");
@@ -1798,24 +1759,23 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
       return;
     }
     introsEndedByWindow.add(intro);
-    void sendIntroLayout(intro, created, () => launchIntro === intro);
-    // Shown under the overlay, which then draws its dark in to this
-    // window's frame and colour and hands over to it, so the intro ends as
-    // the window. A skipped or failed intro just fades.
-    void intro.finished.then(async (outcome) => {
+    const showUnderOverlay = () => {
+      if (created.isDestroyed()) return;
+      created.show();
+      app.focus({ steal: true });
+      created.focus();
+    };
+    // The intro ends with a wave from the middle that opens onto this
+    // window, so it must already be on screen, under the overlay, by then.
+    void intro.revealing.then((revealing) => {
+      if (revealing) showUnderOverlay();
+    });
+    // Once it's over (or skipped, or failed) the window is shown and the
+    // overlay fades: after a reveal nothing of it is left on screen.
+    void intro.finished.then(() => {
       launchIntro = null;
-      const win = created;
-      const target =
-        outcome === "complete" && win && !win.isDestroyed()
-          ? await launchIntroCloseTarget(win)
-          : null;
-      if (win && !win.isDestroyed()) {
-        win.show();
-        app.focus({ steal: true });
-        win.focus();
-      }
-      if (target && win && !win.isDestroyed()) intro.closeInto(target);
-      else intro.dismiss();
+      showUnderOverlay();
+      intro.dismiss();
     });
   });
 
@@ -2727,12 +2687,20 @@ function registerIpc(): void {
       const cleanStep = String(step ?? "").slice(0, 80);
       const cleanStatus = String(status ?? "").slice(0, 24);
       if (!ONBOARDING_STEPS.has(cleanStep) || !ONBOARDING_STATUSES.has(cleanStatus)) return;
+      // Which agents the user picked: driver ids only. Account ids carry the
+      // name the user typed, so they are never sent.
+      const selectedAgents =
+        cleanStep === "agent_pick_completed" ? selectedDriverIds(getSelectedAgentIds()) : null;
       captureAnalytics("onboarding_step", {
         windowType: "launch",
         properties: {
           step: cleanStep,
           status: cleanStatus,
           success: success ?? (cleanStatus !== "skipped" && cleanStatus !== "failed"),
+          ...(selectedAgents && {
+            selected_agents: selectedAgents,
+            selected_agent_count: selectedAgents.length,
+          }),
         },
       });
     },
@@ -2813,24 +2781,7 @@ function registerIpc(): void {
 
   ipcMain.handle("projects:setActive", async (_event, projectId: string) => {
     requireAuthenticatedUserForLaunch();
-    const project = getProject(projectId);
-    if (!project) {
-      throw new Error(`Project not found: ${projectId}`);
-    }
-    try {
-      const { superseded } = await activateProjectSelection({
-        projectId,
-        getActiveProjectId,
-        setActiveProjectId,
-        activate: (id) => requireAgentManager().activateProject(id),
-      });
-      // A newer click took over; it announces its own project.
-      if (superseded) return;
-    } catch (err) {
-      console.error(`[Main] Failed to activate project ${projectId} in agent manager:`, err);
-      throw err;
-    }
-    broadcastToWindows("projects:activeChanged", projectId);
+    await activateProjectAndAnnounce(projectId);
   });
 
   ipcMain.handle("threads:list", () => {
@@ -3110,7 +3061,16 @@ function registerIpc(): void {
     }),
   );
   ipcMain.handle("agent:probeAgent", async (_event, agentId: string) => {
-    const result = await probeAgentById(agentId, { clientVersion: app.getVersion() });
+    const result = await probeAgentById(agentId, {
+      clientVersion: app.getVersion(),
+      onRecovery: (report) =>
+        captureAnalytics("agent_start_recovery", {
+          properties: {
+            ...agentAnalyticsIdentity(agentId, getAgentDescriptor(agentId)?.name),
+            ...startRecoveryProperties(report, "readiness_check"),
+          },
+        }),
+    });
     if (result.status !== "ready") {
       console.warn(
         `[probe] ${agentId}: ${result.status}${result.message ? ` — ${result.message}` : ""}`,
@@ -3696,12 +3656,9 @@ app.whenReady().then(async () => {
     }
     app.dock?.setMenu(
       Menu.buildFromTemplate([
-        // Held back from release builds; see contracts/features.ts.
-        ...(LAUNCH_INTRO_ENABLED
-          ? LAUNCH_INTRO_VERSIONS.map((version) => ({
-              label: `Replay Launch Intro — Version ${version}`,
-              click: () => replayLaunchIntro(version),
-            }))
+        // For testing the intro in `bun run dev`; never in a shipped build.
+        ...(LAUNCH_INTRO_ENABLED && import.meta.env.DEV
+          ? [{ label: "Replay Launch Intro", click: () => replayLaunchIntro() }]
           : []),
         {
           label: "Show Onboarding",

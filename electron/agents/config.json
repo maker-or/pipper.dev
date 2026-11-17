@@ -45,21 +45,6 @@
       "detectCommands": ["claude-agent-acp"]
     },
     {
-      "id": "gemini-acp",
-      "name": "gemini-cli",
-      "displayName": "Gemini",
-      "description": "Gemini CLI in ACP mode (stdio JSON-RPC).",
-      "command": "gemini",
-      "args": ["--acp"],
-      "icon": "gemini",
-      "docsUrl": "https://geminicli.com/docs/cli/acp-mode/",
-      "authHint": "Sign in with your Google account on first run (or set GEMINI_API_KEY).",
-      "installHint": "npm install -g @google/gemini-cli  (or use npx on first launch)",
-      "installKind": "npx",
-      "npmPackage": "@google/gemini-cli",
-      "detectCommands": ["gemini"]
-    },
-    {
       "id": "copilot-acp",
       "name": "copilot-cli",
       "displayName": "Copilot",

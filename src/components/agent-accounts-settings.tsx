@@ -38,11 +38,31 @@ function statusView(result: AgentProbeResult | undefined, probing: boolean): Sta
       return { label: "Sign-in required", textClass: "text-amber-500", icon: CircleAlert };
     case "needs-install":
       return { label: "Not installed", textClass: "text-amber-500", icon: CircleAlert };
+    // The agent could not be launched or failed its handshake. This says
+    // nothing about the account's sign-in, so it is not labelled as one.
     case "error":
-      return { label: "Check failed", textClass: "text-destructive", icon: CircleX };
+      return { label: "Couldn't start", textClass: "text-destructive", icon: CircleX };
     default:
       return { label: "Unknown", textClass: "text-muted-foreground/70", icon: CircleDashed };
   }
+}
+
+/**
+ * The most telling line of a probe failure. Crash output is mostly stack
+ * trace, so prefer a thrown error's own line (`Error: …`), then any line
+ * naming an error, then the first line.
+ */
+function errorHeadline(message: string | undefined): string {
+  const lines = (message ?? "")
+    .split("\n")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return (
+    lines.find((line) => /^[A-Za-z]*Error: /.test(line)) ??
+    lines.find((line) => /\berror\b(?!\s*\()/i.test(line)) ??
+    lines[0] ??
+    "unknown error"
+  );
 }
 
 function StatusIcon({ result, probing }: { result?: AgentProbeResult; probing: boolean }) {
@@ -77,11 +97,28 @@ function AccountRow({
   onCheck: (id: string) => void;
 }) {
   const isDefault = instance.id === instance.driverId;
+  // A launch failure is not a sign-in problem; say what failed so the row
+  // doesn't read as "not connected".
+  const failure =
+    !probing && (result?.status === "error" || result?.status === "needs-install")
+      ? `${statusView(result, false).label}: ${errorHeadline(result.message)}`
+      : null;
   return (
-    <div className="group flex items-center gap-2 py-1 pl-[54px] pr-4">
-      <span className="truncate text-[13px] text-muted-foreground">{instance.displayName}</span>
-      <StatusIcon result={result} probing={probing} />
-      <div className="ml-auto flex items-center gap-1.5">
+    <div className="group flex items-center gap-3 py-1 pl-[54px] pr-4">
+      {/* Name and status on one line, the failure reason on its own line
+          below, so neither squeezes the other or the actions. */}
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="truncate text-[13px] text-muted-foreground">{instance.displayName}</span>
+          <StatusIcon result={result} probing={probing} />
+        </div>
+        {failure ? (
+          <span title={result?.message} className="truncate text-[12px] text-destructive">
+            {failure}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-1.5">
         <button
           type="button"
           aria-label={`Check ${instance.displayName} sign-in status`}
@@ -95,7 +132,7 @@ function AccountRow({
           <button
             type="button"
             onClick={() => onSignIn(instance.id)}
-            className="rounded-lg bg-surface-3 px-2.5 py-1 text-[12px] font-medium text-foreground hover:bg-surface-4"
+            className="whitespace-nowrap rounded-lg bg-surface-3 px-2.5 py-1 text-[12px] font-medium text-foreground hover:bg-surface-4"
           >
             Sign in
           </button>
@@ -189,8 +226,18 @@ export function AgentAccountsSettings() {
   const probedRef = useRef<Set<string>>(new Set());
   const pollTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const inFlight = useRef<Map<string, Promise<AgentProbeResult | null>>>(new Map());
-  /** Serializes probes so only one provider CLI is spawned at a time. */
-  const probeQueue = useRef<Promise<unknown>>(Promise.resolve());
+  const multiAccountSchemas = useMemo(
+    () => schemas.filter((schema) => schema.supportsMultipleAccounts),
+    [schemas],
+  );
+  // Only the accounts this page lists are probed. Probing launches each
+  // agent, so probing every instance would start CLIs the user never sees
+  // here (and the bundled mock agent) each time the window opens or regains
+  // focus.
+  const shownInstances = useMemo(() => {
+    const shownDrivers = new Set(multiAccountSchemas.map((schema) => schema.driverId));
+    return instances.filter((instance) => shownDrivers.has(instance.driverId));
+  }, [instances, multiAccountSchemas]);
 
   useEffect(() => {
     void load();
@@ -231,13 +278,7 @@ export function AgentAccountsSettings() {
         });
       }
     };
-    // Queue behind any in-flight probe: concurrent agent spawns race on shared
-    // resources (auth files, login ports) and produce spurious failures.
-    const promise = probeQueue.current.then(run, run);
-    probeQueue.current = promise.then(
-      () => undefined,
-      () => undefined,
-    );
+    const promise = run();
     inFlight.current.set(id, promise);
     void promise.finally(() => {
       if (inFlight.current.get(id) === promise) inFlight.current.delete(id);
@@ -286,32 +327,25 @@ export function AgentAccountsSettings() {
 
   // Probe each account once so its status is visible without manual action.
   useEffect(() => {
-    void (async () => {
-      for (const instance of instances) {
-        if (probedRef.current.has(instance.id)) continue;
-        probedRef.current.add(instance.id);
-        await check(instance.id);
-      }
-    })();
-  }, [instances, check]);
+    for (const instance of shownInstances) {
+      if (probedRef.current.has(instance.id)) continue;
+      probedRef.current.add(instance.id);
+      void check(instance.id);
+    }
+  }, [shownInstances, check]);
 
   // Re-check when the user comes back to the app — e.g. after finishing a
   // sign-in that was started outside Pipper's own "Sign in" button.
   useEffect(() => {
     const onFocus = () => {
-      for (const instance of instances) {
+      for (const instance of shownInstances) {
         if (probeResults[instance.id]?.status === "ready") continue;
         void check(instance.id);
       }
     };
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [instances, probeResults, check]);
-
-  const multiAccountSchemas = useMemo(
-    () => schemas.filter((schema) => schema.supportsMultipleAccounts),
-    [schemas],
-  );
+  }, [shownInstances, probeResults, check]);
 
   const handleRemove = async (id: string) => {
     stopPolling(id);

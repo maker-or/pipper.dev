@@ -10,11 +10,11 @@ export function moveItem<T>(items: readonly T[], from: number, to: number): T[] 
   return next;
 }
 
-/** A changed project replaces its entry where it is; a new one joins the end,
- *  where the main process put it in the saved order. */
+/** A changed project replaces its entry where it is; a new one goes to the
+ *  top, where the main process put it in the saved order (createProject). */
 export function upsertProject(projects: readonly Project[], project: Project): Project[] {
   const index = projects.findIndex((item) => item.id === project.id);
-  if (index === -1) return [...projects, project];
+  if (index === -1) return [project, ...projects];
   const next = [...projects];
   next[index] = project;
   return next;

@@ -155,11 +155,7 @@ export function AgentSelector({
 
   return (
     <div className={cn("flex flex-col gap-4", className)}>
-      {/* data-intro-outline: drawn by the first-launch intro before it hands
-          over to this window (electron/launch-intro.ts). */}
-      <h3 className="text-sm text-muted-foreground" data-intro-outline="text">
-        Choose agents
-      </h3>
+      <h3 className="text-sm text-muted-foreground">Choose agents</h3>
 
       <ScrollArea className="max-h-[420px]" viewportClassName="max-h-[420px] pr-2">
         {visibleAgents.length > 0 ? (
@@ -207,7 +203,6 @@ export function AgentSelector({
             type="button"
             size="md"
             data-pipper-id="agent-selector-continue"
-            data-intro-outline="button"
             className="shrink-0 sm:min-w-[140px]"
             disabled={!canContinue}
             onClick={async () => {
@@ -254,11 +249,11 @@ function AgentOption({
   );
 
   return (
-    <Card selected={selected} data-pipper-id={`agent-option-${agent.id}`} data-intro-outline="card">
+    <Card selected={selected} data-pipper-id={`agent-option-${agent.id}`}>
       {/* Inline anatomy: media leading, header center, footer trailing (Switch). */}
       <CardMedia icon={BrandIcon} />
       <CardHeader>
-        <CardTitle data-intro-outline="text">{agent.displayName}</CardTitle>
+        <CardTitle>{agent.displayName}</CardTitle>
       </CardHeader>
       <CardFooter>
         <Switch
@@ -269,7 +264,6 @@ function AgentOption({
           // switch root — Base UI renders it as a span too.
           className="px-0 py-0 gap-0 [&>span:last-of-type]:sr-only"
           data-pipper-id={`agent-option-switch-${agent.id}`}
-          data-intro-outline="toggle"
         />
       </CardFooter>
     </Card>
@@ -289,7 +283,6 @@ const SETUP_GUIDE_DOC_IDS: Record<string, string> = {
   "claude-agent-acp": "claude",
   "opencode-acp": "opencode",
   "grok-acp": "grok",
-  "gemini-acp": "gemini",
   "copilot-acp": "copilot",
   "antigravity-acp": "antigravity",
   "devin-acp": "devin",

@@ -154,7 +154,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
                     placeholder="Battery floor"
                     className="h-8 min-w-[92px] px-2 text-xs"
                   />
-                  <SelectContent>
+                  <SelectContent className="rounded-xl">
                     {[15, 20, 25, 30].map((value, index) => (
                       <SelectItem key={value} value={String(value)} index={index}>
                         {`${value}%`}
@@ -183,7 +183,7 @@ export function SleeplessOnboarding({ onComplete }: SleeplessOnboardingProps) {
                     placeholder="Maximum run"
                     className="h-8 min-w-[112px] px-2 text-xs"
                   />
-                  <SelectContent>
+                  <SelectContent className="rounded-xl">
                     {[
                       [60, "1 hour"],
                       [120, "2 hours"],

@@ -88,7 +88,8 @@ export class DesktopIdentity {
 
   credential(): string | null {
     if (this.memoryCredential) return this.memoryCredential;
-    if (!this.box?.available() || !existsSync(this.credentialPath)) return null;
+    // No file means nothing to decrypt: don't ask the keychain (a macOS prompt).
+    if (!existsSync(this.credentialPath) || !this.box?.available()) return null;
     try {
       this.memoryCredential = this.box.decrypt(readFileSync(this.credentialPath));
       return this.memoryCredential;

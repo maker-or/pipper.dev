@@ -12,8 +12,7 @@ import type * as acp from "@agentclientprotocol/sdk";
  * - `approvePrompts`: Pipper allows the harness's permission requests itself,
  *   for whatever its own setting still asks about.
  *
- * Mode ids come from each agent's `session/new` result (Gemini's from its
- * ACP source). Cursor and Grok take a launch flag instead, in their args in
+ * Mode ids come from each agent's `session/new` result. Cursor and Grok take a launch flag instead, in their args in
  * `registry.ts` and `config.json`: `agent --yolo acp` (Cursor's `--force`,
  * "run everything") and `grok agent --always-approve stdio`. Cursor's ACP
  * server still asks before every web search whatever its settings, so Pipper
@@ -29,7 +28,6 @@ const PROFILES: Record<string, FullAccessProfile> = {
   "codex-acp": { option: { configId: "mode", value: "agent-full-access" } },
   "devin-acp": { option: { configId: "mode", value: "bypass" } },
   "antigravity-acp": { option: { configId: "mode", value: "yolo" } },
-  "gemini-acp": { option: { configId: "mode", value: "yolo" } },
   // Copilot's `autopilot` mode also changes how long it runs; `allow_all` only
   // stops the prompts.
   "copilot-acp": { option: { configId: "allow_all", value: "on" } },

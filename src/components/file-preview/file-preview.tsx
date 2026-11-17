@@ -101,7 +101,7 @@ export function FilePreview({ workspaceKey }: { workspaceKey: string }) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-surface-1" data-pipper-id="file-preview">
+    <div className="flex h-full min-h-0 flex-col" data-pipper-id="file-preview">
       <PreviewHeader target={target} info={query.data ?? null} />
       <div className="min-h-0 flex-1 overflow-hidden">
         {query.isPending ? (

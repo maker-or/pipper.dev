@@ -1,5 +1,5 @@
-import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
@@ -186,6 +186,143 @@ describe("probeAgentHandshake", () => {
     const result = await probeAgentHandshake(nodeScriptDescriptor(script));
     expect(result.status).toBe("error");
     expect(result.message).toBeTruthy();
+  });
+
+  test("probes of accounts of one driver never run at the same time", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const log = join(dir, "log.txt");
+    // Logs when it starts and right before it answers session/new, after a
+    // delay long enough that two overlapping probes would interleave.
+    const script = writeScript(
+      dir,
+      "slow-agent.mjs",
+      `
+      import { appendFileSync } from "node:fs";
+      import { createInterface } from "node:readline";
+      const name = process.argv[2];
+      appendFileSync(${JSON.stringify(log)}, "start " + name + "\\n");
+      const rl = createInterface({ input: process.stdin });
+      rl.on("line", (line) => {
+        const msg = JSON.parse(line);
+        if (msg.method === "initialize") {
+          process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: 1, authMethods: [] } }) + "\\n");
+        } else if (msg.method === "session/new") {
+          setTimeout(() => {
+            appendFileSync(${JSON.stringify(log)}, "end " + name + "\\n");
+            process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { sessionId: "s" } }) + "\\n");
+          }, 200);
+        }
+      });
+      `,
+    );
+    const account = (id: string): AcpAgentDescriptor => ({
+      ...nodeScriptDescriptor(script),
+      id,
+      driverId: "slow-driver",
+      args: [script, id],
+    });
+
+    const results = await Promise.all([
+      probeAgentHandshake(account("slow-driver:a")),
+      probeAgentHandshake(account("slow-driver:b")),
+    ]);
+
+    expect(results.map((r) => r.status)).toEqual(["ready", "ready"]);
+    expect(readFileSync(log, "utf8").trim().split("\n")).toEqual([
+      "start slow-driver:a",
+      "end slow-driver:a",
+      "start slow-driver:b",
+      "end slow-driver:b",
+    ]);
+  });
+
+  test("a failed probe does not block the next probe of the same driver", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const crash = writeScript(dir, "crash.mjs", `process.exit(1);`);
+    const ok = writeScript(dir, "ok.mjs", scriptedAgentBody({}));
+    const first = probeAgentHandshake({
+      ...nodeScriptDescriptor(crash),
+      id: "same:a",
+      driverId: "same",
+    });
+    const second = probeAgentHandshake({
+      ...nodeScriptDescriptor(ok),
+      id: "same:b",
+      driverId: "same",
+    });
+    expect((await first).status).toBe("error");
+    expect((await second).status).toBe("ready");
+  });
+
+  test("the agent runs in the home directory, not the app's working directory", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const out = join(dir, "cwd.txt");
+    const script = writeScript(
+      dir,
+      "cwd-agent.mjs",
+      `
+      import { writeFileSync } from "node:fs";
+      writeFileSync(${JSON.stringify(out)}, process.cwd());
+      ${scriptedAgentBody({})}
+      `,
+    );
+
+    const result = await probeAgentHandshake(nodeScriptDescriptor(script));
+    expect(result.status).toBe("ready");
+    expect(realpathSync(readFileSync(out, "utf8"))).toBe(realpathSync(homedir()));
+  });
+
+  test("an agent that crashes on its first launch is retried and reported ready", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const marker = join(dir, "started");
+    const script = writeScript(
+      dir,
+      "flaky-agent.mjs",
+      `
+      import { existsSync, writeFileSync } from "node:fs";
+      if (!existsSync(${JSON.stringify(marker)})) {
+        writeFileSync(${JSON.stringify(marker)}, "1");
+        process.exit(1);
+      }
+      ${scriptedAgentBody({})}
+      `,
+    );
+
+    const reports: unknown[] = [];
+    const result = await probeAgentHandshake(nodeScriptDescriptor(script), {
+      onRecovery: (report) => reports.push(report),
+    });
+    expect(result.status).toBe("ready");
+    expect(reports).toEqual([
+      expect.objectContaining({
+        failureReason: "exited_early",
+        action: "retry",
+        outcome: "recovered",
+        retried: true,
+      }),
+    ]);
+  });
+
+  test("a sign-in problem is reported as is, without a retry", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "pipper-probe-"));
+    const launches = join(dir, "launches.txt");
+    const script = writeScript(
+      dir,
+      "auth-agent.mjs",
+      `
+      import { appendFileSync } from "node:fs";
+      appendFileSync(${JSON.stringify(launches)}, "x");
+      ${scriptedAgentBody({ sessionNewAuthRequired: true })}
+      `,
+    );
+
+    const reports: unknown[] = [];
+    const result = await probeAgentHandshake(nodeScriptDescriptor(script), {
+      onRecovery: (report) => reports.push(report),
+    });
+    expect(result.status).toBe("needs-auth");
+    expect(readFileSync(launches, "utf8")).toBe("x");
+    expect(reports).toEqual([]);
   });
 
   test("probeAgentById returns an error for an unknown agent id", async () => {

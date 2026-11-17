@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { homedir } from "node:os";
 import { antigravityRelease, installedAntigravityPath } from "./antigravity-official.ts";
 import { applyFullAccessEnv } from "./full-access.ts";
+import { applyToolSearchEnv } from "./tool-search.ts";
 import type { AcpAgentDescriptor } from "../../contracts/acp.ts";
 
 interface RegistryFile {
@@ -117,21 +118,6 @@ export const BUILTIN_ACP_AGENTS: AcpAgentDescriptor[] = [
     installKind: "npx",
     npmPackage: "@xai-official/grok",
     detectCommands: ["grok"],
-  },
-  {
-    id: "gemini-acp",
-    name: "gemini-cli",
-    displayName: "Gemini",
-    description: "Gemini CLI in ACP mode (stdio JSON-RPC).",
-    command: "gemini",
-    args: ["--acp"],
-    icon: "gemini",
-    docsUrl: "https://geminicli.com/docs/cli/acp-mode/",
-    authHint: "Sign in with your Google account on first run (or set GEMINI_API_KEY).",
-    installHint: "npm install -g @google/gemini-cli  (or use npx on first launch)",
-    installKind: "npx",
-    npmPackage: "@google/gemini-cli",
-    detectCommands: ["gemini"],
   },
   {
     id: "copilot-acp",
@@ -377,7 +363,7 @@ export function probeAgentAvailability(agent: AcpAgentDescriptor): AcpAgentDescr
 
   // Prefer a globally installed binary when listed in detectCommands.
   // `base.args` holds the flags needed to enter ACP mode (e.g. `["--acp"]` for
-  // Gemini, `[]` for adapters that speak ACP by default) — reused as-is here,
+  // Copilot, `[]` for adapters that speak ACP by default) — reused as-is here,
   // and prefixed with `-y <pkg>` below for the npx fallback.
   const detectList = base.detectCommands?.length ? base.detectCommands : [base.command];
   for (const cmd of detectList) {
@@ -465,6 +451,24 @@ export function getAgentDescriptor(agentId: string): AcpAgentDescriptor | null {
   return listRegisteredAgents().find((a) => a.id === agentId) ?? null;
 }
 
+/**
+ * The drivers behind a list of selected agent ids, for analytics. Account ids
+ * are `<driver>:<label>` with a label the user typed, so only the driver part
+ * is kept, and ids that aren't a known driver are dropped.
+ */
+export function selectedDriverIds(
+  selectedIds: readonly string[],
+  knownDriverIds: readonly string[] = listRegisteredAgents().map((agent) => agent.id),
+): string[] {
+  const known = new Set(knownDriverIds);
+  const out = new Set<string>();
+  for (const id of selectedIds) {
+    const driver = id.split(":")[0] ?? "";
+    if (known.has(driver)) out.add(driver);
+  }
+  return [...out].sort();
+}
+
 export function getDefaultAgentId(): string {
   const file = loadRegistryFile();
   const agents = listRegisteredAgents();
@@ -479,6 +483,25 @@ export function getDefaultAgentId(): string {
   return preferred?.id ?? "pipper-mock";
 }
 
+/**
+ * How to run a bundled Node script from this process. Inside Electron,
+ * `process.execPath` is the app binary itself (in a packaged build, e.g.
+ * "Pipper Code (Alpha)"): launching it without ELECTRON_RUN_AS_NODE starts a
+ * second app instance, which the single-instance handler answers by raising
+ * the main window. So run the app binary as Node instead, which also needs no
+ * `node` on PATH. Outside Electron (tests, scripts) the runtime is Node already.
+ */
+export function nodeRuntimeCommand(
+  env: Record<string, string>,
+  runtime: { execPath: string; electron?: string } = {
+    execPath: process.execPath,
+    electron: process.versions.electron,
+  },
+): { command: string; env: Record<string, string> } {
+  if (!runtime.electron) return { command: runtime.execPath, env };
+  return { command: runtime.execPath, env: { ...env, ELECTRON_RUN_AS_NODE: "1" } };
+}
+
 /** Resolve spawn command/args for process launch. */
 export function resolveAgentSpawn(agent: AcpAgentDescriptor): {
   command: string;
@@ -490,6 +513,7 @@ export function resolveAgentSpawn(agent: AcpAgentDescriptor): {
   // authenticate as the machine's default login instead of the chosen account.
   for (const name of agent.unsetEnv ?? []) delete env[name];
   applyFullAccessEnv(descriptorDriverId(agent), env);
+  applyToolSearchEnv(descriptorDriverId(agent), env);
   // `bun run --bun` prepends a temp dir whose `node` symlinks to bun. npx-based
   // agents are `#!/usr/bin/env node` scripts; run under bun, npm derives its
   // global prefix from the bun binary (~/.bun) and fails with ENOENT on
@@ -505,11 +529,7 @@ export function resolveAgentSpawn(agent: AcpAgentDescriptor): {
     const mockPath = join(registryDir, "mock-agent.mjs");
     const alt = join(process.cwd(), "electron/agents/mock-agent.mjs");
     const script = existsSync(mockPath) ? mockPath : alt;
-    return {
-      command: process.execPath.includes("Electron") ? "node" : process.execPath,
-      args: [script],
-      env,
-    };
+    return { ...nodeRuntimeCommand(env), args: [script] };
   }
 
   if (descriptorDriverId(agent) === "antigravity-acp") {

@@ -1,4 +1,5 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { homedir } from "node:os";
 import { signalProcessGroup, terminateChildProcess } from "./child-process.ts";
 
 /**
@@ -16,6 +17,8 @@ export interface ProviderSpawnOptions {
   env: NodeJS.ProcessEnv;
   /** Windows `.cmd` shims must run through the shell. */
   shell?: boolean;
+  /** Process cwd; defaults to the user's home directory. */
+  cwd?: string;
 }
 
 /** Spawn an ACP provider over stdio pipes and track it until it exits. */
@@ -27,6 +30,11 @@ export function spawnProviderProcess(
   const child = spawn(command, [...args], {
     stdio: ["pipe", "pipe", "pipe"],
     env: options.env,
+    // Never inherit the app's own cwd: in development that is this repo, whose
+    // package.json (devEngines: bun) makes `npx` refuse to launch npx-backed
+    // providers (EBADDEVENGINES). Workspaces reach the agent through ACP
+    // session cwd, never through the process cwd.
+    cwd: options.cwd ?? homedir(),
     ...(options.shell && { shell: true }),
     // Own process group (POSIX): terminating the provider also stops the CLIs
     // and servers it started. Providers talk over pipes, so losing the
