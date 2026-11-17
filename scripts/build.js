@@ -1,10 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import { loadEnv } from "vite";
 import { preparePtyHelpers } from "./prepare-pty.mjs";
+import { buildLaunchIntroHelper } from "./launch-intro-helper.mjs";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
 const loadedEnv = loadEnv("production", root, "");
@@ -24,7 +25,8 @@ function run(args) {
 
 /**
  * Features held back from release builds; see contracts/features.ts, which
- * reads the same variables in the app. Off unless set to "1" here or in .env.
+ * reads the same variables in the app. Off unless set to "1" here or in .env;
+ * the launch intro ships, on unless set to "0".
  * Resolved values are passed on to electron-vite so the app and this script
  * always agree.
  */
@@ -34,11 +36,13 @@ const FEATURE_ENV = {
   clerk: "VITE_PIPPER_CLERK",
   launchIntro: "VITE_PIPPER_LAUNCH_INTRO",
 };
+/** Shipped features: on unless their variable is "0". */
+const ON_BY_DEFAULT = new Set(["launchIntro"]);
 const features = Object.fromEntries(
-  Object.entries(FEATURE_ENV).map(([name, key]) => [
-    name,
-    firstNonEmpty(process.env[key], loadedEnv[key]) === "1",
-  ]),
+  Object.entries(FEATURE_ENV).map(([name, key]) => {
+    const value = firstNonEmpty(process.env[key], loadedEnv[key]);
+    return [name, ON_BY_DEFAULT.has(name) ? value !== "0" : value === "1"];
+  }),
 );
 for (const [name, key] of Object.entries(FEATURE_ENV)) {
   process.env[key] = features[name] ? "1" : "0";
@@ -106,27 +110,7 @@ function buildLaunchIntro() {
     console.log("[build] The launch intro is off; its helper is not built or packaged.");
     return;
   }
-  const args = [
-    "build",
-    "--package-path",
-    packageDir,
-    "--configuration",
-    "release",
-    "--arch",
-    "arm64",
-    "--product",
-    "pipper-launch-intro",
-  ];
-  runCommand("swift", args);
-  // The output directory depends on the SwiftPM build system; ask for it.
-  const binPath = spawnSync("swift", [...args, "--show-bin-path"], { encoding: "utf8" });
-  if (binPath.status !== 0) throw new Error("[build] could not locate the launch intro build");
-  const output = join(packageDir, "dist");
-  mkdirSync(output, { recursive: true });
-  copyFileSync(
-    join(binPath.stdout.trim(), "pipper-launch-intro"),
-    join(output, "pipper-launch-intro"),
-  );
+  buildLaunchIntroHelper({ root, required: true });
 }
 
 function buildPipperIntents() {

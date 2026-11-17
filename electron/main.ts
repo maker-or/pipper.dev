@@ -196,19 +196,10 @@ import type { AnalyticsEventName, AnalyticsProperties } from "./analytics-schema
 import { sanitizeErrorType } from "./analytics-sanitize";
 import { SleeplessController, resolveSleeplessHelperPath } from "./sleepless-controller.ts";
 import {
-  INTRO_LAYOUT_SCRIPT,
-  LAUNCH_INTRO_VERSIONS,
-  launchIntroArgs,
-  macWindowCornerRadius,
-  introWindowLayout,
-  placeIntroLayout,
   resolveLaunchIntroHelperPath,
   startFirstLaunchIntro,
   startLaunchIntro,
-  type LaunchIntroCloseTarget,
   type LaunchIntroSession,
-  type MeasuredIntroPage,
-  type LaunchIntroVersion,
 } from "./launch-intro.ts";
 import type { RemoteAccessController } from "./remote-access.ts";
 import { DesktopIdentity, withSignInParams, type SecretBox } from "./desktop-identity.ts";
@@ -1697,8 +1688,8 @@ let launchIntro: LaunchIntroSession | null = null;
  */
 const introsEndedByWindow = new WeakSet<LaunchIntroSession>();
 
-/** Replays the native launch intro on demand (dock menu). No first-launch gating. */
-function replayLaunchIntro(version: LaunchIntroVersion): void {
+/** Replays the native launch intro on demand (dev Dock menu). No first-launch gating. */
+function replayLaunchIntro(): void {
   if (!LAUNCH_INTRO_ENABLED) return;
   const helperPath = resolveLaunchIntroHelperPath({
     isPackaged: app.isPackaged,
@@ -1713,7 +1704,7 @@ function replayLaunchIntro(version: LaunchIntroVersion): void {
   // A replay is the whole first launch: a fresh onboarding window loads
   // hidden behind the intro, which draws it and hands over to it, so it ends
   // on the first onboarding step whatever was open before.
-  const session = startLaunchIntro({ helperPath, args: launchIntroArgs(version) });
+  const session = startLaunchIntro({ helperPath });
   launchIntro = session;
   if (launchWindow && !launchWindow.isDestroyed()) launchWindow.destroy();
   createLaunchWindow("onboarding");
@@ -1726,80 +1717,6 @@ function replayLaunchIntro(version: LaunchIntroVersion): void {
     session.dismiss();
     if (launchWindow && !launchWindow.isDestroyed()) launchWindow.show();
   });
-}
-
-/** Reads the page's background at the top of the window as 0–255 RGB. */
-const PAGE_BACKGROUND_SCRIPT = `(() => {
-  const canvas = document.createElement("canvas");
-  canvas.width = canvas.height = 1;
-  const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  let el = document.elementFromPoint(innerWidth / 2, Math.min(24, innerHeight - 1));
-  for (; el && ctx; el = el.parentElement) {
-    ctx.clearRect(0, 0, 1, 1);
-    ctx.fillStyle = getComputedStyle(el).backgroundColor;
-    ctx.fillRect(0, 0, 1, 1);
-    const [r, g, b, a] = ctx.getImageData(0, 0, 1, 1).data;
-    if (a === 255) return [r, g, b];
-  }
-  return null;
-})()`;
-
-/**
- * Measures the hidden launch window until its onboarding picker has loaded
- * and holds still, then gives it to the intro to draw. Gives up quietly
- * after a few seconds: the intro then ends as before.
- */
-async function sendIntroLayout(
-  intro: LaunchIntroSession,
-  win: BrowserWindow | null,
-  playing: () => boolean,
-): Promise<void> {
-  let previous = "";
-  for (let attempt = 0; attempt < 30 && win && !win.isDestroyed() && playing(); attempt++) {
-    try {
-      const page = (await win.webContents.executeJavaScript(
-        INTRO_LAYOUT_SCRIPT,
-        true,
-      )) as MeasuredIntroPage;
-      const layout = placeIntroLayout({
-        page,
-        windowBounds: win.getBounds(),
-        contentBounds: win.getContentBounds(),
-        zoom: win.webContents.getZoomFactor(),
-        radius: macWindowCornerRadius(os.release()),
-      });
-      const key = layout ? JSON.stringify(layout) : "";
-      if (layout && key === previous) {
-        intro.drawWindow(layout);
-        return;
-      }
-      previous = key;
-    } catch (error) {
-      console.warn("[LaunchIntro] could not measure the launch window:", error);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 250));
-  }
-}
-
-/** Where the first-launch intro ends: the launch window's frame and colour. */
-async function launchIntroCloseTarget(win: BrowserWindow): Promise<LaunchIntroCloseTarget> {
-  let color: LaunchIntroCloseTarget["color"] = null;
-  try {
-    const read = await Promise.race([
-      win.webContents.executeJavaScript(PAGE_BACKGROUND_SCRIPT, true) as Promise<unknown>,
-      new Promise<null>((resolve) => setTimeout(() => resolve(null), 500)),
-    ]);
-    if (
-      Array.isArray(read) &&
-      read.length === 3 &&
-      read.every((value) => typeof value === "number" && value >= 0 && value <= 255)
-    ) {
-      color = read as [number, number, number];
-    }
-  } catch (error) {
-    console.warn("[LaunchIntro] could not read the launch window's colour:", error);
-  }
-  return { ...win.getBounds(), radius: macWindowCornerRadius(os.release()), color };
 }
 
 function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void {
@@ -1832,15 +1749,6 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
   });
 
   launchWindow = created;
-  // The intro needs this window's frame early; the heading and cards follow
-  // once the page has loaded.
-  launchIntro?.drawWindow(
-    introWindowLayout(
-      created.getBounds(),
-      macWindowCornerRadius(os.release()),
-      created.getBackgroundColor(),
-    ),
-  );
 
   created.on("ready-to-show", () => {
     console.log("[Main] launchWindow ready-to-show");
@@ -1851,24 +1759,23 @@ function createLaunchWindow(stage: "list" | "add" | "onboarding" = "list"): void
       return;
     }
     introsEndedByWindow.add(intro);
-    void sendIntroLayout(intro, created, () => launchIntro === intro);
-    // Shown under the overlay, which then draws its dark in to this
-    // window's frame and colour and hands over to it, so the intro ends as
-    // the window. A skipped or failed intro just fades.
-    void intro.finished.then(async (outcome) => {
+    const showUnderOverlay = () => {
+      if (created.isDestroyed()) return;
+      created.show();
+      app.focus({ steal: true });
+      created.focus();
+    };
+    // The intro ends with a wave from the middle that opens onto this
+    // window, so it must already be on screen, under the overlay, by then.
+    void intro.revealing.then((revealing) => {
+      if (revealing) showUnderOverlay();
+    });
+    // Once it's over (or skipped, or failed) the window is shown and the
+    // overlay fades: after a reveal nothing of it is left on screen.
+    void intro.finished.then(() => {
       launchIntro = null;
-      const win = created;
-      const target =
-        outcome === "complete" && win && !win.isDestroyed()
-          ? await launchIntroCloseTarget(win)
-          : null;
-      if (win && !win.isDestroyed()) {
-        win.show();
-        app.focus({ steal: true });
-        win.focus();
-      }
-      if (target && win && !win.isDestroyed()) intro.closeInto(target);
-      else intro.dismiss();
+      showUnderOverlay();
+      intro.dismiss();
     });
   });
 
@@ -3749,12 +3656,9 @@ app.whenReady().then(async () => {
     }
     app.dock?.setMenu(
       Menu.buildFromTemplate([
-        // Held back from release builds; see contracts/features.ts.
-        ...(LAUNCH_INTRO_ENABLED
-          ? LAUNCH_INTRO_VERSIONS.map((version) => ({
-              label: `Replay Launch Intro — Version ${version}`,
-              click: () => replayLaunchIntro(version),
-            }))
+        // For testing the intro in `bun run dev`; never in a shipped build.
+        ...(LAUNCH_INTRO_ENABLED && import.meta.env.DEV
+          ? [{ label: "Replay Launch Intro", click: () => replayLaunchIntro() }]
           : []),
         {
           label: "Show Onboarding",

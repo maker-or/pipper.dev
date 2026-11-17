@@ -48,9 +48,9 @@ mac:
       to: MacOS/pipper-launch-intro
     - from: native/pipper-intents/dist/PipperIntents.appex
       to: Extensions/PipperIntents.appex
-  # pipper-launch-intro isn't listed: it is only packaged when the launch
-  # intro is on (VITE_PIPPER_LAUNCH_INTRO), a listed binary must exist, and
-  # signing finds and signs it anyway when it is there.
+  # pipper-launch-intro isn't listed: a listed binary must exist, and a build
+  # with VITE_PIPPER_LAUNCH_INTRO=0 leaves it out. Signing finds and signs it
+  # anyway when it is there.
   binaries:
     - Contents/MacOS/omni-sleeplessctl
     - Contents/Resources/sleepless/omni-sleeplessd
